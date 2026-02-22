@@ -78,56 +78,86 @@ async function sendOrEditTelegram(newMessage) {
 
 // ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ДЛЯ TWENTY ONE =====
 async function checkTables(page) {
-    // Для Twenty One используем правильный селектор
-    const games = await page.$$('.dashboard-champ__game');
-    console.log(`Найдено столов: ${games.length}`);
+    console.log('🔍 Начинаю поиск столов...');
+    
+    // Сохраним HTML для анализа
+    const html = await page.content();
+    console.log('Длина HTML:', html.length);
+    
+    // Попробуем найти ВСЕ возможные классы столов
+    const possibleSelectors = [
+        '.dashboard-champ__game',
+        '.dashboard-game',
+        '[class*="dashboard-game"]',
+        'li.dashboard-champ__game',
+        '.dashboard-champ-body .dashboard-game'
+    ];
+    
+    for (const selector of possibleSelectors) {
+        const elements = await page.$$(selector);
+        console.log(`Селектор "${selector}": найдено ${elements.length} элементов`);
+        
+        if (elements.length > 0) {
+            // Покажем первый элемент для примера
+            const html = await elements[0].evaluate(el => el.outerHTML);
+            console.log(`Пример первого элемента:\n${html.substring(0, 300)}...`);
+        }
+    }
+    
+    // Теперь пробуем найти активные столы
+    const games = await page.$$('.dashboard-game, .dashboard-champ__game');
+    console.log(`Всего кандидатов: ${games.length}`);
     
     let activeGames = [];
     
     for (let i = 0; i < games.length; i++) {
         const game = games[i];
         
-        // Проверяем наличие таймера (игра активна)
-        const hasTimer = await game.$('.dashboard-game-info__time') !== null;
+        // Проверяем разные варианты таймера
+        const timerSelectors = [
+            '.dashboard-game-info__time',
+            '[class*="game-info__time"]',
+            '.ui-game-timer'
+        ];
         
-        // Проверяем не завершена ли игра
+        let hasTimer = false;
+        for (const sel of timerSelectors) {
+            if (await game.$(sel)) {
+                hasTimer = true;
+                console.log(`✅ Стол ${i+1} имеет таймер (${sel})`);
+                break;
+            }
+        }
+        
+        if (!hasTimer) continue;
+        
+        // Проверяем не завершена ли
         const isFinished = await game.evaluate(el => {
-            const period = el.querySelector('.dashboard-game-info__period');
-            return period && period.textContent.includes('Игра завершена');
+            const text = el.textContent || '';
+            return text.includes('Игра завершена');
         });
         
-        if (hasTimer && !isFinished) {
+        if (!isFinished) {
             const link = await game.$('a[href*="/ru/live/twentyone/"]');
             if (link) {
                 const href = await link.getAttribute('href');
-                const gameNumber = await game.$eval('.dashboard-game-info__additional-info', 
-                    el => el.textContent.trim()
-                ).catch(() => '0');
-                
-                activeGames.push({ 
-                    index: i, 
-                    href, 
-                    number: gameNumber 
-                });
-                
-                console.log(`✅ Стол ${i+1}: номер ${gameNumber}`);
+                activeGames.push(href);
+                console.log(`🎯 Стол ${i+1} активен!`);
             }
         }
     }
     
-    // Берем ВТОРОЙ активный стол (индекс 1)
     if (activeGames.length >= 2) {
-        console.log(`🎯 Беру второй стол (номер ${activeGames[1].number})`);
-        return activeGames[1].href;
+        console.log(`👉 Беру второй стол`);
+        return activeGames[1];
     }
     
-    // Если меньше двух - берем первый
     if (activeGames.length === 1) {
-        console.log(`⚠️ Только один активный стол, беру его`);
-        return activeGames[0].href;
+        console.log(`👉 Только один стол, беру его`);
+        return activeGames[0];
     }
     
-    console.log('❌ Активных столов не найдено');
+    console.log('❌ Активных столов нет');
     return null;
 }
 
