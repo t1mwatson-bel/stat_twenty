@@ -2,9 +2,9 @@ const { chromium } = require('playwright');
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
-const TOKEN = '8596594907:AAHUQjk-ik3LGV7kI-4XhCn-fw1T-FHo6wU';
-const CHAT = '-1003179573402';
-const URL = 'https://1xlite-7636770.bar/ru/live/baccarat';
+const TOKEN = '8357635747:AAEn0aob4h7mqrbkSITlyd0iYLcprqeCSc4';
+const CHAT = '-1003477065559';
+const URL = 'https://1xlite-7636770.bar/ru/live/twentyone';
 const LAST_NUMBER_FILE = './last_number.txt';
 
 const bot = new TelegramBot(TOKEN, { polling: false });
@@ -19,15 +19,93 @@ if (fs.existsSync(LAST_NUMBER_FILE)) {
     console.log('Загружен последний номер:', lastGameNumber);
 }
 
-function formatCards(cards) {
-    return cards.join('');
+// Получение значения карты из класса
+async function getCardValue(cardElement) {
+    const classAttr = await cardElement.getAttribute('class');
+    const match = classAttr.match(/scoreboard-card-games-card--value-(\d+)/);
+    if (!match) return null;
+    
+    const value = parseInt(match[1]);
+    
+    // Маппинг чисел в реальные карты
+    if (value >= 6 && value <= 10) {
+        return { card: value.toString(), points: value };
+    } else if (value === 11) {
+        return { card: 'J', points: 2 };
+    } else if (value === 12) {
+        return { card: 'Q', points: 3 };
+    } else if (value === 13) {
+        return { card: 'K', points: 4 };
+    } else if (value === 14) {
+        return { card: 'A', points: 11 };
+    }
+    return null;
 }
 
-function determineTurn(playerCards, bankerCards) {
-    if (playerCards.length === 2 && bankerCards.length === 2) return 'player';
-    if (playerCards.length === 3 && bankerCards.length === 2) return 'banker';
-    if (playerCards.length === 2 && bankerCards.length === 3) return 'player';
-    return null;
+// Получение масти
+async function getSuit(cardElement) {
+    const classAttr = await cardElement.getAttribute('class');
+    const match = classAttr.match(/scoreboard-card-games-card--suit-(\d+)/);
+    if (match) {
+        const suitNum = parseInt(match[1]);
+        const suits = ['♠️', '♥️', '♣️', '♦️'];
+        return suits[suitNum] || '';
+    }
+    return '';
+}
+
+// Форматирование карт для вывода
+async function formatCards(cardElements) {
+    let result = '';
+    for (const card of cardElements) {
+        const value = await getCardValue(card);
+        const suit = await getSuit(card);
+        if (value) {
+            result += value.card + suit;
+        }
+    }
+    return result;
+}
+
+// Проверка, являются ли карты двумя тузами
+async function hasTwoAces(cardElements) {
+    if (cardElements.length !== 2) return false;
+    
+    let aceCount = 0;
+    for (const card of cardElements) {
+        const classAttr = await card.getAttribute('class');
+        const match = classAttr.match(/scoreboard-card-games-card--value-(\d+)/);
+        if (match && parseInt(match[1]) === 14) { // 14 = A
+            aceCount++;
+        }
+    }
+    return aceCount === 2;
+}
+
+// Получение карт и счета со стола
+async function getCards(page) {
+    // Блок игрока
+    const playerBlock = await page.$('.live-twenty-one-field__player');
+    const playerCards = playerBlock ? await playerBlock.$$('.live-twenty-one-cards__item') : [];
+    const playerScore = playerBlock ? await playerBlock.$eval('.live-twenty-one-field-score__label', el => el.textContent).catch(() => '0') : '0';
+
+    // Блок дилера
+    const dealerBlock = await page.$('.live-twenty-one-field__dealer');
+    const dealerCards = dealerBlock ? await dealerBlock.$$('.live-twenty-one-cards__item') : [];
+    const dealerScore = dealerBlock ? await dealerBlock.$eval('.live-twenty-one-field-score__label', el => el.textContent).catch(() => '0') : '0';
+
+    // Проверка на два туза
+    const playerTwoAces = await hasTwoAces(playerCards);
+    const dealerTwoAces = await hasTwoAces(dealerCards);
+
+    return { 
+        player: playerCards, 
+        banker: dealerCards, 
+        pScore: playerScore, 
+        bScore: dealerScore,
+        playerTwoAces,
+        dealerTwoAces
+    };
 }
 
 async function sendOrEditTelegram(newMessage) {
@@ -60,7 +138,7 @@ async function checkTables(page) {
         });
         
         if (hasTimer && !isFinished) {
-            const link = await game.$('a[href*="/ru/live/baccarat/"]');
+            const link = await game.$('a[href*="/ru/live/twentyone/"]');
             if (link) {
                 return await link.getAttribute('href');
             }
@@ -70,114 +148,100 @@ async function checkTables(page) {
     return null;
 }
 
-async function getCards(page) {
-    const playerBlock = await page.$('.baccarat-player:not(.baccarat-player--is-reversed) .baccarat-player__cards');
-    const player = playerBlock ? await playerBlock.$$eval('li.baccarat-player__card-box', cards => {
-        return cards.map(c => {
-            const rankEl = c.querySelector('.baccarat-card__rank');
-            if (!rankEl) return null;
-            const rank = rankEl.textContent.trim();
-            const suitIcon = c.querySelector('.baccarat-card__suit');
-            let suit = '';
-            if (suitIcon) {
-                if (suitIcon.className.includes('spades')) suit = '♠️';
-                else if (suitIcon.className.includes('hearts')) suit = '♥️';
-                else if (suitIcon.className.includes('clubs')) suit = '♣️';
-                else if (suitIcon.className.includes('diamonds')) suit = '♦️';
-            }
-            return rank + suit;
-        }).filter(c => c !== null).slice(0, 3);
-    }) : [];
-
-    const bankerBlock = await page.$('.baccarat-player--is-reversed .baccarat-player__cards');
-    const banker = bankerBlock ? await bankerBlock.$$eval('li.baccarat-player__card-box', cards => {
-        return cards.map(c => {
-            const rankEl = c.querySelector('.baccarat-card__rank');
-            if (!rankEl) return null;
-            const rank = rankEl.textContent.trim();
-            const suitIcon = c.querySelector('.baccarat-card__suit');
-            let suit = '';
-            if (suitIcon) {
-                if (suitIcon.className.includes('spades')) suit = '♠️';
-                else if (suitIcon.className.includes('hearts')) suit = '♥️';
-                else if (suitIcon.className.includes('clubs')) suit = '♣️';
-                else if (suitIcon.className.includes('diamonds')) suit = '♦️';
-            }
-            return rank + suit;
-        }).filter(c => c !== null).slice(0, 3);
-    }) : [];
-
-    const pScore = await page.$eval('.baccarat-player:not(.baccarat-player--is-reversed) .baccarat-player__number', el => el.textContent).catch(() => '0');
-    const bScore = await page.$eval('.baccarat-player--is-reversed .baccarat-player__number', el => el.textContent).catch(() => '0');
-
-    return { player, banker, pScore, bScore };
-}
-
 async function monitorGame(page, gameNumber) {
     let lastCards = { player: [], banker: [], pScore: '0', bScore: '0' };
     
     while (true) {
         const cards = await getCards(page);
         
-        // Проверка на завершение игры через селектор
+        // Проверка на завершение игры через новый селектор
         const isGameOver = await page.evaluate(() => {
-            const panel = document.querySelector('.market-grid__game-over-panel');
-            if (!panel) return false;
-            const caption = panel.querySelector('.ui-caption');
-            return caption && caption.textContent.includes('Игра завершена');
+            const el = document.querySelector('.live-twenty-one-table__footer .ui-game-timer__label');
+            return el && el.textContent.includes('Игра завершена');
         });
         
         if (isGameOver) {
-            // Сначала получаем карты и отправляем результат
+            // Получаем финальные карты и отправляем результат
             const cards = await getCards(page);
             
             if (cards.player.length > 0 || cards.banker.length > 0) {
                 console.log('Игра завершена, отправляю результат...');
                 
-                const total = parseInt(cards.pScore) + parseInt(cards.bScore);
-                const winner = cards.pScore > cards.bScore ? 'П1' : (cards.bScore > cards.pScore ? 'П2' : 'X');
-                const noDrawFlag = cards.player.length === 2 && cards.banker.length === 2 ? '#R ' : '';
+                const pScore = parseInt(cards.pScore);
+                const bScore = parseInt(cards.bScore);
+                const total = pScore + bScore;
+                
+                // Определяем победителя
+                let winner = 'X';
+                let winnerSymbol = '🔰';
+                if (pScore > bScore) {
+                    winner = 'П1';
+                    winnerSymbol = '✅';
+                }
+                if (bScore > pScore) {
+                    winner = 'П2';
+                    winnerSymbol = '✅';
+                }
+                
+                // Проверяем раннюю победу (2 карты у обоих)
+                const isEarly = cards.player.length === 2 && cards.banker.length === 2;
+                
+                // Проверяем наличие 21 очка
+                const has21 = pScore === 21 || bScore === 21;
+                
+                // Проверяем золотое очко (два туза)
+                const hasGolden = (pScore === 21 && cards.playerTwoAces) || (bScore === 21 && cards.bankerTwoAces);
+                
+                // Формируем хештеги
+                const tags = [];
+                if (isEarly) tags.push('#R');
+                if (has21) tags.push('#O');
+                if (hasGolden) tags.push('#G');
+                const tagsStr = tags.length > 0 ? ' ' + tags.join(' ') : '';
+                
+                const playerCardsStr = await formatCards(cards.player);
+                const bankerCardsStr = await formatCards(cards.banker);
                 
                 let message;
-                if (cards.pScore > cards.bScore) {
-                    message = `#N${gameNumber} ✅${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)}) ${noDrawFlag}#${winner} #T${total}`;
-                } else if (cards.bScore > cards.pScore) {
-                    message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ✅${cards.bScore} (${formatCards(cards.banker)}) ${noDrawFlag}#${winner} #T${total}`;
+                if (pScore > bScore) {
+                    // Победа игрока
+                    message = `#N${gameNumber}. ${winnerSymbol}${pScore}(${playerCardsStr}) - ${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #${winner}`;
+                } else if (bScore > pScore) {
+                    // Победа дилера
+                    message = `#N${gameNumber}. ${pScore}(${playerCardsStr}) - ${winnerSymbol}${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #${winner}`;
                 } else {
-                    message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) 🔰 ${cards.bScore} (${formatCards(cards.banker)}) ${noDrawFlag}#${winner} #T${total}`;
+                    // Ничья
+                    message = `#N${gameNumber}. ${pScore}(${playerCardsStr}) 🔰 ${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #X`;
                 }
                 
                 await sendOrEditTelegram(message);
             }
             
-            // Потом ждем 10 секунд и закрываем
+            // Ждем 10 секунд и закрываем
             console.log('Жду 10 секунд перед закрытием...');
             await page.waitForTimeout(10000);
             break;
         }
         
-        if (cards.player.length > 0 && cards.banker.length > 0) {
-            const turn = determineTurn(cards.player, cards.banker);
+        // Отправляем промежуточные обновления если карты изменились
+        const cardsChanged = 
+            JSON.stringify(cards.player.map(c => c.toString())) !== JSON.stringify(lastCards.player.map(c => c.toString())) ||
+            JSON.stringify(cards.banker.map(c => c.toString())) !== JSON.stringify(lastCards.banker.map(c => c.toString())) ||
+            cards.pScore !== lastCards.pScore ||
+            cards.bScore !== lastCards.bScore;
+        
+        if (cardsChanged && cards.player.length > 0 && cards.banker.length > 0) {
+            const playerCardsStr = await formatCards(cards.player);
+            const bankerCardsStr = await formatCards(cards.banker);
+            const message = `⏱№${gameNumber}. ${cards.pScore}(${playerCardsStr}) -${cards.bScore} (${bankerCardsStr})`;
             
-            let message;
-            if (turn === 'player') {
-                message = `⏱№${gameNumber} 👉${cards.pScore}(${formatCards(cards.player)}) -${cards.bScore} (${formatCards(cards.banker)})`;
-            } else if (turn === 'banker') {
-                message = `⏱№${gameNumber} ${cards.pScore}(${formatCards(cards.player)}) -👉${cards.bScore} (${formatCards(cards.banker)})`;
-            } else {
-                message = `⏱№${gameNumber} ${cards.pScore}(${formatCards(cards.player)}) -${cards.bScore} (${formatCards(cards.banker)})`;
-            }
-            
-            const cardsChanged = 
-                JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
-                JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
-                cards.pScore !== lastCards.pScore ||
-                cards.bScore !== lastCards.bScore;
-            
-            if (cardsChanged) {
-                await sendOrEditTelegram(message);
-                lastCards = { ...cards };
-            }
+            await sendOrEditTelegram(message);
+            lastCards = { 
+                player: [...cards.player], 
+                banker: [...cards.banker], 
+                pScore: cards.pScore, 
+                bScore: cards.bScore 
+            };
         }
         
         await page.waitForTimeout(2000);
@@ -195,6 +259,11 @@ async function run() {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
+        timeout = setTimeout(async () => {
+            console.log(`⏱ 2 минуты прошло, закрываю браузер от ${startTime.toLocaleTimeString()}`);
+            if (browser) await browser.close();
+        }, 120000);
+        
         await page.goto(URL);
         console.log('Проверяем все столы...');
         
@@ -209,12 +278,6 @@ async function run() {
         
         console.log('Нашли активный стол:', activeLink);
         
-        // Только теперь ставим таймер на 2 минуты
-        timeout = setTimeout(async () => {
-            console.log(`⏱ 2 минуты прошло, закрываю браузер`);
-            if (browser) await browser.close();
-        }, 120000);
-        
         await page.click(`a[href="${activeLink}"]`);
         await page.waitForTimeout(3000);
         
@@ -224,21 +287,11 @@ async function run() {
             return el ? el.textContent.trim() : null;
         });
         
-        // Если номера нет на сайте
         if (!gameNumber) {
             gameNumber = (parseInt(lastGameNumber) + 1).toString();
-            console.log('Номер не найден, присваиваем следующий:', gameNumber);
+            console.log('Номер не найден, используем следующий:', gameNumber);
         } else {
-            // Если номер найден, но он меньше или равен сохраненному — корректируем
-            const numFromSite = parseInt(gameNumber);
-            const numFromFile = parseInt(lastGameNumber);
-            
-            if (numFromSite <= numFromFile) {
-                console.log(`⚠️ Найден номер ${gameNumber}, но он уже был. Использую ${numFromFile + 1}`);
-                gameNumber = (numFromFile + 1).toString();
-            } else {
-                console.log('Найден номер стола:', gameNumber);
-            }
+            console.log('Найден номер стола:', gameNumber);
         }
         
         // Сохраняем номер
@@ -246,6 +299,7 @@ async function run() {
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
         console.log('Номер сохранен в файл');
         
+        // Ждем появления карт
         let attempts = 0;
         let cards = { player: [], banker: [] };
         while (attempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
@@ -289,8 +343,9 @@ function getDelayToNextGame() {
 
 // Синхронизированный запуск
 (async () => {
-    console.log('🤖 Бот запущен. Последний номер:', lastGameNumber);
+    console.log('🤖 Бот для 21 очко запущен. Последний номер:', lastGameNumber);
     console.log('🎯 Целевое время запуска: каждую минуту в :02 секунд');
+    console.log('🔍 Селектор завершения: .live-twenty-one-table__footer .ui-game-timer__label');
     
     // Синхронизация с ближайшей игрой
     const initialDelay = getDelayToNextGame();
@@ -301,8 +356,6 @@ function getDelayToNextGame() {
     await new Promise(resolve => setTimeout(resolve, initialDelay));
     
     console.log('✅ Синхронизировались! Запуск каждые 60 секунд');
-    console.log('⏱ Таймаут браузера: 2 минуты (после входа в стол)');
-    console.log('🔍 Селектор: .market-grid__game-over-panel');
     
     // Запускаем бесконечный цикл с интервалом 60 секунд
     while (true) {
