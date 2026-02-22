@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const TOKEN = '8357635747:AAEn0aob4h7mqrbkSITlyd0iYLcprqeCSc4';
 const CHAT = '-1003477065559';
-const URL = 'https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game';
+const URL = 'const URL = 'https://1xlite-7636770.bar/ru/live/twentyone';';
 const LAST_NUMBER_FILE = './last_number_twentyone.txt';
 
 const bot = new TelegramBot(TOKEN, { polling: false });
