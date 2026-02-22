@@ -76,8 +76,10 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
+// ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ДЛЯ TWENTY ONE =====
 async function checkTables(page) {
-    const games = await page.$$('li.dashboard-champ__game');
+    // Для Twenty One используем правильный селектор
+    const games = await page.$$('.dashboard-champ__game');
     console.log(`Найдено столов: ${games.length}`);
     
     let activeGames = [];
@@ -85,7 +87,7 @@ async function checkTables(page) {
     for (let i = 0; i < games.length; i++) {
         const game = games[i];
         
-        // Проверяем есть ли таймер (игра активна)
+        // Проверяем наличие таймера (игра активна)
         const hasTimer = await game.$('.dashboard-game-info__time') !== null;
         
         // Проверяем не завершена ли игра
@@ -94,7 +96,6 @@ async function checkTables(page) {
             return period && period.textContent.includes('Игра завершена');
         });
         
-        // Берем только активные незавершенные игры
         if (hasTimer && !isFinished) {
             const link = await game.$('a[href*="/ru/live/twentyone/"]');
             if (link) {
