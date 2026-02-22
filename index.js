@@ -2,8 +2,8 @@ const { chromium } = require('playwright');
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
-const TOKEN = '8596594907:AAHUQjk-ik3LGV7kI-4XhCn-fw1T-FHo6wU';
-const CHAT = '-1003179573402';
+const TOKEN = '8357635747:AAEn0aob4h7mqrbkSITlyd0iYLcprqeCSc4';
+const CHAT = '-1003477065559';
 const URL = 'https://1xlite-7636770.bar/ru/live/twentyone';
 const LAST_NUMBER_FILE = './last_number.txt';
 
