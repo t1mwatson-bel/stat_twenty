@@ -76,88 +76,57 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
-// ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ДЛЯ TWENTY ONE =====
+// ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ПОИСКА СТОЛОВ =====
 async function checkTables(page) {
-    console.log('🔍 Начинаю поиск столов...');
+    console.log('🔍 Ищем столы Twenty One...');
     
-    // Сохраним HTML для анализа
-    const html = await page.content();
-    console.log('Длина HTML:', html.length);
-    
-    // Попробуем найти ВСЕ возможные классы столов
-    const possibleSelectors = [
-        '.dashboard-champ__game',
-        '.dashboard-game',
-        '[class*="dashboard-game"]',
-        'li.dashboard-champ__game',
-        '.dashboard-champ-body .dashboard-game'
-    ];
-    
-    for (const selector of possibleSelectors) {
-        const elements = await page.$$(selector);
-        console.log(`Селектор "${selector}": найдено ${elements.length} элементов`);
-        
-        if (elements.length > 0) {
-            // Покажем первый элемент для примера
-            const html = await elements[0].evaluate(el => el.outerHTML);
-            console.log(`Пример первого элемента:\n${html.substring(0, 300)}...`);
-        }
-    }
-    
-    // Теперь пробуем найти активные столы
-    const games = await page.$$('.dashboard-game, .dashboard-champ__game');
-    console.log(`Всего кандидатов: ${games.length}`);
+    // Правильный селектор для Twenty One
+    const games = await page.$$('.dashboard-champ__game');
+    console.log(`Найдено столов: ${games.length}`);
     
     let activeGames = [];
     
     for (let i = 0; i < games.length; i++) {
         const game = games[i];
         
-        // Проверяем разные варианты таймера
-        const timerSelectors = [
-            '.dashboard-game-info__time',
-            '[class*="game-info__time"]',
-            '.ui-game-timer'
-        ];
+        // Проверяем наличие таймера (игра активна)
+        const hasTimer = await game.$('.dashboard-game-info__time') !== null;
         
-        let hasTimer = false;
-        for (const sel of timerSelectors) {
-            if (await game.$(sel)) {
-                hasTimer = true;
-                console.log(`✅ Стол ${i+1} имеет таймер (${sel})`);
-                break;
-            }
-        }
-        
-        if (!hasTimer) continue;
-        
-        // Проверяем не завершена ли
+        // Проверяем не завершена ли игра
         const isFinished = await game.evaluate(el => {
-            const text = el.textContent || '';
-            return text.includes('Игра завершена');
+            const period = el.querySelector('.dashboard-game-info__period');
+            return period && period.textContent.includes('Игра завершена');
         });
         
-        if (!isFinished) {
+        console.log(`Стол ${i+1}: таймер=${hasTimer}, завершена=${isFinished}`);
+        
+        if (hasTimer && !isFinished) {
             const link = await game.$('a[href*="/ru/live/twentyone/"]');
             if (link) {
                 const href = await link.getAttribute('href');
-                activeGames.push(href);
-                console.log(`🎯 Стол ${i+1} активен!`);
+                const gameNumber = await game.$eval('.dashboard-game-info__additional-info', 
+                    el => el.textContent.trim()
+                ).catch(() => '?');
+                
+                activeGames.push({ index: i, href, number: gameNumber });
+                console.log(`✅ Стол ${i+1} активен! Номер: ${gameNumber}`);
             }
         }
     }
     
+    // Берем ВТОРОЙ активный стол (индекс 1)
     if (activeGames.length >= 2) {
-        console.log(`👉 Беру второй стол`);
-        return activeGames[1];
+        console.log(`🎯 Беру второй стол (номер ${activeGames[1].number})`);
+        return activeGames[1].href;
     }
     
+    // Если меньше двух - берем первый
     if (activeGames.length === 1) {
-        console.log(`👉 Только один стол, беру его`);
-        return activeGames[0];
+        console.log(`⚠️ Только один активный стол, беру его (номер ${activeGames[0].number})`);
+        return activeGames[0].href;
     }
     
-    console.log('❌ Активных столов нет');
+    console.log('❌ Активных столов не найдено');
     return null;
 }
 
