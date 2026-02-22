@@ -19,124 +19,24 @@ if (fs.existsSync(LAST_NUMBER_FILE)) {
     console.log('Загружен последний номер:', lastGameNumber);
 }
 
-// Функция для расчета номера игры по времени (МСК, старт в 3:00, интервал 1 минута)
-function getGameNumberByTime() {
-    const now = new Date();
-    
-    // Конвертируем в МСК (UTC+3)
-    const mskTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-    
-    // Стартовое время сегодня в 3:00 МСК
-    const startTime = new Date(mskTime);
-    startTime.setHours(3, 0, 0, 0);
-    startTime.setSeconds(0);
-    startTime.setMilliseconds(0);
-    
-    // Если сейчас меньше 3:00 МСК, значит старт был вчера
-    if (mskTime < startTime) {
-        startTime.setDate(startTime.getDate() - 1);
-    }
-    
-    // Разница в минутах от старта
-    const diffMinutes = Math.floor((mskTime - startTime) / (60 * 1000));
-    
-    // Номер игры (первая игра в 3:00 = номер 1)
-    const gameNumber = diffMinutes + 1;
-    
-    console.log(`⏰ Текущее время МСК: ${mskTime.toLocaleTimeString()}.${mskTime.getMilliseconds()}`);
-    console.log(`📊 Минут от старта (3:00): ${diffMinutes}`);
-    console.log(`🎲 Номер игры: ${gameNumber}`);
-    
-    return gameNumber.toString();
+function formatCards(cards) {
+    return cards.join('');
 }
 
-// Получение значения карты из класса
-async function getCardValue(cardElement) {
-    const classAttr = await cardElement.getAttribute('class');
-    const match = classAttr.match(/scoreboard-card-games-card--value-(\d+)/);
-    if (!match) return null;
+// Определение победителя для Twenty One
+function determineWinner(playerScore, bankerScore) {
+    const p = parseInt(playerScore);
+    const b = parseInt(bankerScore);
     
-    const value = parseInt(match[1]);
+    // Если у игрока перебор (>21) - он проиграл
+    if (p > 21 && b <= 21) return 'П2';
+    if (b > 21 && p <= 21) return 'П1';
+    if (p > 21 && b > 21) return 'X'; // оба перебор - ничья
     
-    // Маппинг чисел в реальные карты
-    if (value >= 6 && value <= 10) {
-        return { card: value.toString(), points: value };
-    } else if (value === 11) {
-        return { card: 'J', points: 2 };
-    } else if (value === 12) {
-        return { card: 'Q', points: 3 };
-    } else if (value === 13) {
-        return { card: 'K', points: 4 };
-    } else if (value === 14) {
-        return { card: 'A', points: 11 };
-    }
-    return null;
-}
-
-// Получение масти
-async function getSuit(cardElement) {
-    const classAttr = await cardElement.getAttribute('class');
-    const match = classAttr.match(/scoreboard-card-games-card--suit-(\d+)/);
-    if (match) {
-        const suitNum = parseInt(match[1]);
-        const suits = ['♠️', '♥️', '♣️', '♦️'];
-        return suits[suitNum] || '';
-    }
-    return '';
-}
-
-// Форматирование карт для вывода
-async function formatCards(cardElements) {
-    let result = '';
-    for (const card of cardElements) {
-        const value = await getCardValue(card);
-        const suit = await getSuit(card);
-        if (value) {
-            result += value.card + suit;
-        }
-    }
-    return result;
-}
-
-// Проверка, являются ли карты двумя тузами
-async function hasTwoAces(cardElements) {
-    if (cardElements.length !== 2) return false;
-    
-    let aceCount = 0;
-    for (const card of cardElements) {
-        const classAttr = await card.getAttribute('class');
-        const match = classAttr.match(/scoreboard-card-games-card--value-(\d+)/);
-        if (match && parseInt(match[1]) === 14) { // 14 = A
-            aceCount++;
-        }
-    }
-    return aceCount === 2;
-}
-
-// Получение карт и счета со стола
-async function getCards(page) {
-    // Блок игрока
-    const playerBlock = await page.$('.live-twenty-one-field__player');
-    const playerCards = playerBlock ? await playerBlock.$$('.live-twenty-one-cards__item') : [];
-    const playerScore = playerBlock ? await playerBlock.$eval('.live-twenty-one-field-score__label', el => el.textContent).catch(() => '0') : '0';
-
-    // Блок дилера
-    const dealerBlock = await page.$('.live-twenty-one-field__dealer');
-    const dealerCards = dealerBlock ? await dealerBlock.$$('.live-twenty-one-cards__item') : [];
-    const dealerScore = dealerBlock ? await dealerBlock.$eval('.live-twenty-one-field-score__label', el => el.textContent).catch(() => '0') : '0';
-
-    // Проверка на два туза
-    const playerTwoAces = await hasTwoAces(playerCards);
-    const dealerTwoAces = await hasTwoAces(dealerCards);
-
-    return { 
-        player: playerCards, 
-        banker: dealerCards, 
-        pScore: playerScore, 
-        bScore: dealerScore,
-        playerTwoAces,
-        dealerTwoAces
-    };
+    // Обычное сравнение
+    if (p > b) return 'П1';
+    if (b > p) return 'П2';
+    return 'X';
 }
 
 async function sendOrEditTelegram(newMessage) {
@@ -158,40 +58,91 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
-// ИСПРАВЛЕНО: более надежные селекторы
-async function checkTables(page) {
-    // Пробуем разные селекторы
-    let games = await page.$$('li.dashboard-champ__game');
+// Функция для получения второго активного стола
+async function getSecondTableLink(page) {
+    const games = await page.$$('li.dashboard-champ__game');
+    const activeGames = [];
     
-    if (games.length === 0) {
-        games = await page.$$('li.dashboard-game');
-    }
-    
-    if (games.length === 0) {
-        games = await page.$$('.dashboard-champ-body__games li');
-    }
-    
-    console.log(`Найдено столов: ${games.length}`);
-    
-    // Даем странице время для полной загрузки
-    await page.waitForTimeout(2000);
-    
-    // Берем второй стол (индекс 1)
-    if (games.length >= 2) {
-        const game = games[1];
+    for (const game of games) {
+        const hasTimer = await game.$('.dashboard-game-info__time') !== null;
+        const isFinished = await game.evaluate(el => {
+            const period = el.querySelector('.dashboard-game-info__period');
+            return period && period.textContent.includes('Игра завершена');
+        });
         
-        // Получаем номер стола для лога
-        const gameNumber = await game.$eval('.dashboard-game-info__additional-info', el => el.textContent).catch(() => 'unknown');
-        console.log(`✅ Выбран второй стол: ${gameNumber}`);
-        
-        const link = await game.$('a[href*="/ru/live/twentyone/"]');
-        if (link) {
-            return await link.getAttribute('href');
+        // Сохраняем живые игры
+        if (hasTimer && !isFinished) {
+            const link = await game.$('a[href*="/ru/live/twentyone/"]');
+            if (link) {
+                const href = await link.getAttribute('href');
+                activeGames.push(href);
+            }
         }
     }
     
-    console.log('❌ Второй стол не найден');
+    // Возвращаем второй стол, если он есть
+    if (activeGames.length >= 2) {
+        console.log(`Найдено столов: ${activeGames.length}, берём второй`);
+        return activeGames[1];
+    } else if (activeGames.length === 1) {
+        console.log('Найден только один стол, берём его');
+        return activeGames[0];
+    }
+    
     return null;
+}
+
+async function getCards(page) {
+    // Данные игрока (первый)
+    const playerScore = await page.$eval('.live-twenty-one-field__player:first-child .live-twenty-one-field-score__label', 
+        el => el.textContent.trim()
+    ).catch(() => '0');
+
+    const playerCards = await page.$$eval('.live-twenty-one-field__player:first-child .live-twenty-one-cards__item', 
+        cards => cards.map(c => {
+            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
+            const suitMap = {
+                'suit-0': '♠️',
+                'suit-1': '♥️',
+                'suit-2': '♣️',
+                'suit-3': '♦️'
+            };
+            const suit = suitMap[suitClass] || '';
+            
+            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
+            let value = valueClass ? valueClass.split('-').pop() : '';
+            
+            const valueMap = {
+                '1': 'A', '2': '2', '3': '3', '4': '4', '5': '5',
+                '6': '6', '7': '7', '8': '8', '9': '9', '10': '10',
+                '11': 'J', '12': 'Q', '13': 'K'
+            };
+            value = valueMap[value] || value;
+            
+            return value + suit;
+        }).filter(c => c.length > 1)
+    ).catch(() => []);
+
+    // Данные дилера (второй)
+    const bankerScore = await page.$eval('.live-twenty-one-field__player:last-child .live-twenty-one-field-score__label', 
+        el => el.textContent.trim()
+    ).catch(() => '0');
+
+    const bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child .live-twenty-one-cards__item', 
+        cards => cards.map(c => {
+            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
+            const suit = suitMap[suitClass] || '';
+            
+            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
+            let value = valueClass ? valueClass.split('-').pop() : '';
+            
+            value = valueMap[value] || value;
+            
+            return value + suit;
+        }).filter(c => c.length > 1)
+    ).catch(() => []);
+
+    return { player: playerCards, banker: bankerCards, pScore: playerScore, bScore: bankerScore };
 }
 
 async function monitorGame(page, gameNumber) {
@@ -202,8 +153,8 @@ async function monitorGame(page, gameNumber) {
         
         // Проверка на завершение игры
         const isGameOver = await page.evaluate(() => {
-            const el = document.querySelector('.live-twenty-one-table__footer .ui-game-timer__label');
-            return el && el.textContent.includes('Игра завершена');
+            const timer = document.querySelector('.live-twenty-one-table-footer__timer .ui-game-timer__label');
+            return timer && timer.textContent.includes('Игра завершена');
         });
         
         if (isGameOver) {
@@ -212,75 +163,40 @@ async function monitorGame(page, gameNumber) {
             if (cards.player.length > 0 || cards.banker.length > 0) {
                 console.log('Игра завершена, отправляю результат...');
                 
-                const pScore = parseInt(cards.pScore);
-                const bScore = parseInt(cards.bScore);
-                const total = pScore + bScore;
-                
-                // Определяем победителя
-                let winner = 'X';
-                let winnerSymbol = '🔰';
-                if (pScore > bScore) {
-                    winner = 'П1';
-                    winnerSymbol = '✅';
-                }
-                if (bScore > pScore) {
-                    winner = 'П2';
-                    winnerSymbol = '✅';
-                }
-                
-                // Проверяем раннюю победу (2 карты у обоих)
-                const isEarly = cards.player.length === 2 && cards.banker.length === 2;
-                
-                // Проверяем наличие 21 очка
-                const has21 = pScore === 21 || bScore === 21;
-                
-                // Проверяем золотое очко (два туза)
-                const hasGolden = (pScore === 21 && cards.playerTwoAces) || (bScore === 21 && cards.bankerTwoAces);
-                
-                // Формируем хештеги
-                const tags = [];
-                if (isEarly) tags.push('#R');
-                if (has21) tags.push('#O');
-                if (hasGolden) tags.push('#G');
-                const tagsStr = tags.length > 0 ? ' ' + tags.join(' ') : '';
-                
-                const playerCardsStr = await formatCards(cards.player);
-                const bankerCardsStr = await formatCards(cards.banker);
+                const total = parseInt(cards.pScore) + parseInt(cards.bScore);
+                const winner = determineWinner(cards.pScore, cards.bScore);
                 
                 let message;
-                if (pScore > bScore) {
-                    message = `#N${gameNumber}. ${winnerSymbol}${pScore}(${playerCardsStr}) - ${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #${winner}`;
-                } else if (bScore > pScore) {
-                    message = `#N${gameNumber}. ${pScore}(${playerCardsStr}) - ${winnerSymbol}${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #${winner}`;
+                if (winner === 'П1') {
+                    message = `#N${gameNumber} ✅${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
+                } else if (winner === 'П2') {
+                    message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ✅${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
                 } else {
-                    message = `#N${gameNumber}. ${pScore}(${playerCardsStr}) 🔰 ${bScore}(${bankerCardsStr}) #T${total}${tagsStr} #X`;
+                    message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) 🔰 ${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
                 }
                 
                 await sendOrEditTelegram(message);
             }
             
-            console.log('Игра завершена, выхожу...');
+            console.log('Жду 10 секунд перед закрытием...');
+            await page.waitForTimeout(10000);
             break;
         }
         
-        const cardsChanged = 
-            JSON.stringify(cards.player.map(c => c.toString())) !== JSON.stringify(lastCards.player.map(c => c.toString())) ||
-            JSON.stringify(cards.banker.map(c => c.toString())) !== JSON.stringify(lastCards.banker.map(c => c.toString())) ||
-            cards.pScore !== lastCards.pScore ||
-            cards.bScore !== lastCards.bScore;
-        
-        if (cardsChanged && cards.player.length > 0 && cards.banker.length > 0) {
-            const playerCardsStr = await formatCards(cards.player);
-            const bankerCardsStr = await formatCards(cards.banker);
-            const message = `⏱№${gameNumber}. ${cards.pScore}(${playerCardsStr}) -${cards.bScore} (${bankerCardsStr})`;
+        if (cards.player.length > 0 && cards.banker.length > 0) {
+            // Для Twenty One показываем просто текущий счёт
+            const message = `⏱№${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)})`;
             
-            await sendOrEditTelegram(message);
-            lastCards = { 
-                player: [...cards.player], 
-                banker: [...cards.banker], 
-                pScore: cards.pScore, 
-                bScore: cards.bScore 
-            };
+            const cardsChanged = 
+                JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
+                JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
+                cards.pScore !== lastCards.pScore ||
+                cards.bScore !== lastCards.bScore;
+            
+            if (cardsChanged) {
+                await sendOrEditTelegram(message);
+                lastCards = { ...cards };
+            }
         }
         
         await page.waitForTimeout(2000);
@@ -298,68 +214,59 @@ async function run() {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
-        // Таймаут 3 минуты (180000 мс)
         timeout = setTimeout(async () => {
-            console.log(`⏱ 3 минуты прошло, закрываю браузер`);
+            console.log(`⏱ 2 минуты прошло, закрываю браузер`);
             if (browser) await browser.close();
-        }, 180000);
+        }, 120000);
         
         await page.goto(URL);
-        console.log('Проверяем второй стол...');
+        console.log('Ищем второй активный стол...');
         
-        // Даем странице время на загрузку
+        // Ждем появления столов
         await page.waitForTimeout(5000);
         
-        // Пробуем найти второй стол несколько раз
-        let activeLink = null;
-        let attempts = 0;
-        
-        while (!activeLink && attempts < 3) {
-            activeLink = await checkTables(page);
-            if (!activeLink) {
-                console.log(`Попытка ${attempts + 1}: второй стол не найден, пробуем снова через 2 секунды...`);
-                await page.waitForTimeout(2000);
-                attempts++;
-            }
-        }
+        const activeLink = await getSecondTableLink(page);
         
         if (!activeLink) {
-            console.log('Второй стол не найден после 3 попыток, закрываю браузер');
+            console.log('Не найдено активных столов');
             return;
         }
         
-        console.log('Заходим во второй стол:', activeLink);
-        
+        console.log('Заходим в стол:', activeLink);
         await page.click(`a[href="${activeLink}"]`);
         await page.waitForTimeout(5000);
         
-        // Получаем номер игры по времени
-        const gameNumber = getGameNumberByTime();
-        console.log('Номер игры по времени:', gameNumber);
+        // Получаем номер игры
+        let gameNumber = await page.evaluate(() => {
+            const el = document.querySelector('.dashboard-game-info__additional-info');
+            return el ? el.textContent.trim() : null;
+        });
         
-        // Сохраняем номер
+        if (!gameNumber) {
+            gameNumber = (parseInt(lastGameNumber) + 1).toString();
+            console.log('Номер не найден, присваиваю:', gameNumber);
+        } else {
+            console.log('Номер игры:', gameNumber);
+        }
+        
         lastGameNumber = gameNumber;
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
-        console.log('Номер сохранен в файл');
         
         // Ждем появления карт
-        let attempts2 = 0;
+        let attempts = 0;
         let cards = { player: [], banker: [] };
-        while (attempts2 < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
+        while (attempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
             await page.waitForTimeout(5000);
             cards = await getCards(page);
-            console.log(`Попытка ${attempts2 + 1}: карт игрока ${cards.player.length}, карт дилера ${cards.banker.length}`);
-            attempts2++;
+            attempts++;
         }
         
         if (cards.player.length > 0 && cards.banker.length > 0) {
             await monitorGame(page, gameNumber);
-        } else {
-            console.log('Не дождались карт');
         }
         
     } catch (e) {
-        console.log('Ошибка:', e.message);
+        console.log('❌ Ошибка:', e.message);
     } finally {
         if (timeout) clearTimeout(timeout);
         if (browser) {
@@ -370,7 +277,7 @@ async function run() {
     }
 }
 
-// Функция для расчета задержки до запуска браузера в :02 секунд
+// Синхронизация с :02 секунд как в баккаре
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
@@ -387,29 +294,22 @@ function getDelayToNextGame() {
     return (delaySeconds * 1000) - milliseconds;
 }
 
-// Синхронизированный запуск
+// Запуск
 (async () => {
-    console.log('🤖 Бот для 21 очко запущен');
-    console.log('🎯 Режим: ВСЕГДА ВТОРОЙ СТОЛ');
-    console.log('🎯 Время работы: 3 минуты');
-    console.log('🎯 Старт игр: 3:00 МСК, интервал 1 минута');
-    console.log('🎯 Запуск бота: каждую минуту в :02 секунд');
+    console.log('🤖 Бот Twenty One запущен');
+    console.log('🎯 Всегда берём второй стол в списке');
     
     const initialDelay = getDelayToNextGame();
-    const nextRunTime = new Date(Date.now() + initialDelay);
-    console.log(`⏱ Синхронизация: первый запуск через ${(initialDelay/1000).toFixed(3)} секунд`);
-    console.log(`⏱ Время первого запуска: ${nextRunTime.toLocaleTimeString()}.${nextRunTime.getMilliseconds()}`);
+    console.log(`⏱ Первый запуск через ${(initialDelay/1000).toFixed(3)} секунд`);
     
     await new Promise(resolve => setTimeout(resolve, initialDelay));
     
-    console.log('✅ Синхронизировались! Запуск каждые 60 секунд');
+    console.log('✅ Запуск каждые 60 секунд');
     
     while (true) {
         const now = new Date();
-        console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
-        
-        run(); // не ждем завершения
-        
+        console.log(`\n🚀 Запуск в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
+        run();
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
 })();
