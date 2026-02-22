@@ -12,11 +12,42 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 let lastMessageId = null;
 let lastMessageText = '';
 
-// Загружаем последний номер из файла
+// Загружаем последний номер из файла (теперь используется только для сверки)
 let lastGameNumber = '0';
 if (fs.existsSync(LAST_NUMBER_FILE)) {
     lastGameNumber = fs.readFileSync(LAST_NUMBER_FILE, 'utf8');
     console.log('Загружен последний номер:', lastGameNumber);
+}
+
+// Функция для расчета номера игры по времени (МСК, старт в 3:00, интервал 1 минута)
+function getGameNumberByTime() {
+    const now = new Date();
+    
+    // Конвертируем в МСК (UTC+3)
+    const mskTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+    
+    // Стартовое время сегодня в 3:00 МСК
+    const startTime = new Date(mskTime);
+    startTime.setHours(3, 0, 0, 0); // 3:00:00.000 МСК
+    startTime.setSeconds(0);
+    startTime.setMilliseconds(0);
+    
+    // Если сейчас меньше 3:00 МСК, значит старт был вчера
+    if (mskTime < startTime) {
+        startTime.setDate(startTime.getDate() - 1);
+    }
+    
+    // Разница в минутах от старта
+    const diffMinutes = Math.floor((mskTime - startTime) / (60 * 1000));
+    
+    // Номер игры (первая игра в 3:00 = номер 1)
+    const gameNumber = diffMinutes + 1;
+    
+    console.log(`⏰ Текущее время МСК: ${mskTime.toLocaleTimeString()}.${mskTime.getMilliseconds()}`);
+    console.log(`📊 Минут от старта (3:00): ${diffMinutes}`);
+    console.log(`🎲 Номер игры: ${gameNumber}`);
+    
+    return gameNumber.toString();
 }
 
 // Получение значения карты из класса
@@ -128,7 +159,7 @@ async function sendOrEditTelegram(newMessage) {
 }
 
 async function checkTables(page) {
-    // ИСПРАВЛЕННЫЙ СЕЛЕКТОР - теперь ищет все li с классом dashboard-game
+    // Ищем все столы
     const games = await page.$$('li.dashboard-game');
     
     console.log(`Найдено столов: ${games.length}`);
@@ -270,8 +301,9 @@ async function run() {
         console.log(`🟢 Браузер открыт в ${startTime.toLocaleTimeString()}.${startTime.getMilliseconds()}`);
         
         browser = await chromium.launch({ 
-            headless: false, // Временно включаем видимый режим для отладки
-            slowMo: 100 // Замедляем действия, чтобы видеть что происходит
+            headless: true, // Можно оставить true для продакшена
+            // headless: false, // Для отладки раскомментировать
+            // slowMo: 100 // Для отладки раскомментировать
         });
         const page = await browser.newPage();
         
@@ -307,20 +339,11 @@ async function run() {
         await page.click(`a[href="${activeLink}"]`);
         await page.waitForTimeout(5000);
         
-        // Получаем номер стола
-        let gameNumber = await page.evaluate(() => {
-            const el = document.querySelector('.dashboard-game-info__additional-info');
-            return el ? el.textContent.trim() : null;
-        });
+        // ПОЛУЧАЕМ НОМЕР ИГРЫ ПО ВРЕМЕНИ (а не со страницы)
+        const gameNumber = getGameNumberByTime();
+        console.log('Номер игры по времени:', gameNumber);
         
-        if (!gameNumber) {
-            gameNumber = (parseInt(lastGameNumber) + 1).toString();
-            console.log('Номер не найден, используем следующий:', gameNumber);
-        } else {
-            console.log('Найден номер стола:', gameNumber);
-        }
-        
-        // Сохраняем номер
+        // Сохраняем номер в файл (для истории)
         lastGameNumber = gameNumber;
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
         console.log('Номер сохранен в файл');
@@ -372,9 +395,9 @@ function getDelayToNextGame() {
 
 // Синхронизированный запуск
 (async () => {
-    console.log('🤖 Бот для 21 очко запущен. Последний номер:', lastGameNumber);
-    console.log('🎯 Целевое время запуска: каждую минуту в :02 секунд');
-    console.log('🔍 Селектор завершения: .live-twenty-one-table__footer .ui-game-timer__label');
+    console.log('🤖 Бот для 21 очко запущен');
+    console.log('🎯 Старт игр: 3:00 МСК, интервал 1 минута');
+    console.log('🎯 Запуск бота: каждую минуту в :02 секунд');
     console.log('🔍 Селектор столов: li.dashboard-game');
     
     // Синхронизация с ближайшей игрой
@@ -392,7 +415,7 @@ function getDelayToNextGame() {
         const now = new Date();
         console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
         
-        await run(); // ждем завершения для отладки
+        await run(); // ждем завершения
         
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
