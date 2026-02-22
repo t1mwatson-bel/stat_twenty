@@ -158,11 +158,23 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
-// ИЗМЕНЕНО: всегда берем второй стол
+// ИСПРАВЛЕНО: более надежные селекторы
 async function checkTables(page) {
-    const games = await page.$$('li.dashboard-game--theme-gray-100.dashboard-game.dashboard-champ__game');
+    // Пробуем разные селекторы
+    let games = await page.$$('li.dashboard-champ__game');
+    
+    if (games.length === 0) {
+        games = await page.$$('li.dashboard-game');
+    }
+    
+    if (games.length === 0) {
+        games = await page.$$('.dashboard-champ-body__games li');
+    }
     
     console.log(`Найдено столов: ${games.length}`);
+    
+    // Даем странице время для полной загрузки
+    await page.waitForTimeout(2000);
     
     // Берем второй стол (индекс 1)
     if (games.length >= 2) {
@@ -286,7 +298,7 @@ async function run() {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
-        // ИЗМЕНЕНО: таймаут 3 минуты (180000 мс)
+        // Таймаут 3 минуты (180000 мс)
         timeout = setTimeout(async () => {
             console.log(`⏱ 3 минуты прошло, закрываю браузер`);
             if (browser) await browser.close();
@@ -295,12 +307,24 @@ async function run() {
         await page.goto(URL);
         console.log('Проверяем второй стол...');
         
-        await page.waitForTimeout(3000); // Даем странице загрузиться
+        // Даем странице время на загрузку
+        await page.waitForTimeout(5000);
         
-        // ИЗМЕНЕНО: берем ссылку на второй стол, без цикла
-        const activeLink = await checkTables(page);
+        // Пробуем найти второй стол несколько раз
+        let activeLink = null;
+        let attempts = 0;
+        
+        while (!activeLink && attempts < 3) {
+            activeLink = await checkTables(page);
+            if (!activeLink) {
+                console.log(`Попытка ${attempts + 1}: второй стол не найден, пробуем снова через 2 секунды...`);
+                await page.waitForTimeout(2000);
+                attempts++;
+            }
+        }
+        
         if (!activeLink) {
-            console.log('Второй стол не найден, закрываю браузер');
+            console.log('Второй стол не найден после 3 попыток, закрываю браузер');
             return;
         }
         
@@ -319,13 +343,13 @@ async function run() {
         console.log('Номер сохранен в файл');
         
         // Ждем появления карт
-        let attempts = 0;
+        let attempts2 = 0;
         let cards = { player: [], banker: [] };
-        while (attempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
+        while (attempts2 < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
             await page.waitForTimeout(5000);
             cards = await getCards(page);
-            console.log(`Попытка ${attempts + 1}: карт игрока ${cards.player.length}, карт дилера ${cards.banker.length}`);
-            attempts++;
+            console.log(`Попытка ${attempts2 + 1}: карт игрока ${cards.player.length}, карт дилера ${cards.banker.length}`);
+            attempts2++;
         }
         
         if (cards.player.length > 0 && cards.banker.length > 0) {
@@ -370,7 +394,6 @@ function getDelayToNextGame() {
     console.log('🎯 Время работы: 3 минуты');
     console.log('🎯 Старт игр: 3:00 МСК, интервал 1 минута');
     console.log('🎯 Запуск бота: каждую минуту в :02 секунд');
-    console.log('🔍 Селектор столов: li.dashboard-game--theme-gray-100.dashboard-game.dashboard-champ__game');
     
     const initialDelay = getDelayToNextGame();
     const nextRunTime = new Date(Date.now() + initialDelay);
