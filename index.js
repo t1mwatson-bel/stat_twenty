@@ -43,6 +43,10 @@ function getGameNumberByTime() {
     // Номер игры (первая игра в 3:00 = номер 1)
     const gameNumber = diffMinutes + 1;
     
+    console.log(`⏰ Текущее время МСК: ${mskTime.toLocaleTimeString()}.${mskTime.getMilliseconds()}`);
+    console.log(`📊 Минут от старта (3:00): ${diffMinutes}`);
+    console.log(`🎲 Номер игры: ${gameNumber}`);
+    
     return gameNumber.toString();
 }
 
@@ -154,24 +158,27 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
+// ИЗМЕНЕНО: всегда берем второй стол
 async function checkTables(page) {
-    const games = await page.$$('li.dashboard-game');
+    const games = await page.$$('li.dashboard-game--theme-gray-100.dashboard-game.dashboard-champ__game');
     
-    for (const game of games) {
-        const hasTimer = await game.$('.dashboard-game-info__time') !== null;
-        const isFinished = await game.evaluate(el => {
-            const period = el.querySelector('.dashboard-game-info__period');
-            return period ? period.textContent.includes('Игра завершена') : false;
-        });
+    console.log(`Найдено столов: ${games.length}`);
+    
+    // Берем второй стол (индекс 1)
+    if (games.length >= 2) {
+        const game = games[1];
         
-        if (hasTimer && !isFinished) {
-            const link = await game.$('a[href*="/ru/live/twentyone/"]');
-            if (link) {
-                return await link.getAttribute('href');
-            }
+        // Получаем номер стола для лога
+        const gameNumber = await game.$eval('.dashboard-game-info__additional-info', el => el.textContent).catch(() => 'unknown');
+        console.log(`✅ Выбран второй стол: ${gameNumber}`);
+        
+        const link = await game.$('a[href*="/ru/live/twentyone/"]');
+        if (link) {
+            return await link.getAttribute('href');
         }
     }
     
+    console.log('❌ Второй стол не найден');
     return null;
 }
 
@@ -240,8 +247,7 @@ async function monitorGame(page, gameNumber) {
                 await sendOrEditTelegram(message);
             }
             
-            console.log('Жду 10 секунд перед закрытием...');
-            await page.waitForTimeout(10000);
+            console.log('Игра завершена, выхожу...');
             break;
         }
         
@@ -277,33 +283,33 @@ async function run() {
         const startTime = new Date();
         console.log(`🟢 Браузер открыт в ${startTime.toLocaleTimeString()}.${startTime.getMilliseconds()}`);
         
-        // ВАЖНО: headless: true как в рабочем коде баккары
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
+        // ИЗМЕНЕНО: таймаут 3 минуты (180000 мс)
         timeout = setTimeout(async () => {
-            console.log(`⏱ 2 минуты прошло, закрываю браузер от ${startTime.toLocaleTimeString()}`);
+            console.log(`⏱ 3 минуты прошло, закрываю браузер`);
             if (browser) await browser.close();
-        }, 120000);
+        }, 180000);
         
         await page.goto(URL);
-        console.log('Проверяем все столы...');
+        console.log('Проверяем второй стол...');
         
-        let activeLink = null;
-        while (!activeLink) {
-            activeLink = await checkTables(page);
-            if (!activeLink) {
-                console.log('Активных столов нет, ждем 5 секунд...');
-                await page.waitForTimeout(5000);
-            }
+        await page.waitForTimeout(3000); // Даем странице загрузиться
+        
+        // ИЗМЕНЕНО: берем ссылку на второй стол, без цикла
+        const activeLink = await checkTables(page);
+        if (!activeLink) {
+            console.log('Второй стол не найден, закрываю браузер');
+            return;
         }
         
-        console.log('Нашли активный стол:', activeLink);
+        console.log('Заходим во второй стол:', activeLink);
         
         await page.click(`a[href="${activeLink}"]`);
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
         
-        // Получаем номер игры по времени (не со страницы)
+        // Получаем номер игры по времени
         const gameNumber = getGameNumberByTime();
         console.log('Номер игры по времени:', gameNumber);
         
@@ -312,16 +318,20 @@ async function run() {
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
         console.log('Номер сохранен в файл');
         
+        // Ждем появления карт
         let attempts = 0;
         let cards = { player: [], banker: [] };
         while (attempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
             await page.waitForTimeout(5000);
             cards = await getCards(page);
+            console.log(`Попытка ${attempts + 1}: карт игрока ${cards.player.length}, карт дилера ${cards.banker.length}`);
             attempts++;
         }
         
         if (cards.player.length > 0 && cards.banker.length > 0) {
             await monitorGame(page, gameNumber);
+        } else {
+            console.log('Не дождались карт');
         }
         
     } catch (e) {
@@ -355,11 +365,12 @@ function getDelayToNextGame() {
 
 // Синхронизированный запуск
 (async () => {
-    console.log('🤖 Бот для 21 очко запущен. Последний номер:', lastGameNumber);
+    console.log('🤖 Бот для 21 очко запущен');
+    console.log('🎯 Режим: ВСЕГДА ВТОРОЙ СТОЛ');
+    console.log('🎯 Время работы: 3 минуты');
     console.log('🎯 Старт игр: 3:00 МСК, интервал 1 минута');
-    console.log('🎯 Целевое время запуска: каждую минуту в :02 секунд');
-    console.log('🔍 Селектор завершения: .live-twenty-one-table__footer .ui-game-timer__label');
-    console.log('🔍 Селектор столов: li.dashboard-game');
+    console.log('🎯 Запуск бота: каждую минуту в :02 секунд');
+    console.log('🔍 Селектор столов: li.dashboard-game--theme-gray-100.dashboard-game.dashboard-champ__game');
     
     const initialDelay = getDelayToNextGame();
     const nextRunTime = new Date(Date.now() + initialDelay);
@@ -374,7 +385,7 @@ function getDelayToNextGame() {
         const now = new Date();
         console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
         
-        run(); // не ждем завершения, как в баккаре
+        run(); // не ждем завершения
         
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
