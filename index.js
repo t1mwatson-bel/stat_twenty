@@ -128,19 +128,32 @@ async function sendOrEditTelegram(newMessage) {
 }
 
 async function checkTables(page) {
-    const games = await page.$$('li.dashboard-champ__game');
+    // ИСПРАВЛЕННЫЙ СЕЛЕКТОР - теперь ищет все li с классом dashboard-game
+    const games = await page.$$('li.dashboard-game');
+    
+    console.log(`Найдено столов: ${games.length}`);
     
     for (const game of games) {
+        // Проверяем наличие таймера (игра идет)
         const hasTimer = await game.$('.dashboard-game-info__time') !== null;
+        
+        // Проверяем, не завершена ли игра
         const isFinished = await game.evaluate(el => {
             const period = el.querySelector('.dashboard-game-info__period');
             return period ? period.textContent.includes('Игра завершена') : false;
         });
         
+        // Получаем номер стола для лога
+        const gameNumber = await game.$eval('.dashboard-game-info__additional-info', el => el.textContent).catch(() => 'unknown');
+        
+        console.log(`Стол ${gameNumber}: hasTimer=${hasTimer}, isFinished=${isFinished}`);
+        
         if (hasTimer && !isFinished) {
             const link = await game.$('a[href*="/ru/live/twentyone/"]');
             if (link) {
-                return await link.getAttribute('href');
+                const href = await link.getAttribute('href');
+                console.log(`✅ Выбран активный стол: ${gameNumber}, ссылка: ${href}`);
+                return href;
             }
         }
     }
@@ -256,7 +269,10 @@ async function run() {
         const startTime = new Date();
         console.log(`🟢 Браузер открыт в ${startTime.toLocaleTimeString()}.${startTime.getMilliseconds()}`);
         
-        browser = await chromium.launch({ headless: true });
+        browser = await chromium.launch({ 
+            headless: false, // Временно включаем видимый режим для отладки
+            slowMo: 100 // Замедляем действия, чтобы видеть что происходит
+        });
         const page = await browser.newPage();
         
         timeout = setTimeout(async () => {
@@ -267,19 +283,29 @@ async function run() {
         await page.goto(URL);
         console.log('Проверяем все столы...');
         
+        // Даем странице загрузиться
+        await page.waitForTimeout(5000);
+        
         let activeLink = null;
-        while (!activeLink) {
+        let attempts = 0;
+        while (!activeLink && attempts < 12) {
             activeLink = await checkTables(page);
             if (!activeLink) {
                 console.log('Активных столов нет, ждем 5 секунд...');
                 await page.waitForTimeout(5000);
+                attempts++;
             }
+        }
+        
+        if (!activeLink) {
+            console.log('Не удалось найти активный стол за 60 секунд');
+            return;
         }
         
         console.log('Нашли активный стол:', activeLink);
         
         await page.click(`a[href="${activeLink}"]`);
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
         
         // Получаем номер стола
         let gameNumber = await page.evaluate(() => {
@@ -300,16 +326,19 @@ async function run() {
         console.log('Номер сохранен в файл');
         
         // Ждем появления карт
-        let attempts = 0;
+        let attempts2 = 0;
         let cards = { player: [], banker: [] };
-        while (attempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
+        while (attempts2 < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
             await page.waitForTimeout(5000);
             cards = await getCards(page);
-            attempts++;
+            console.log(`Попытка ${attempts2 + 1}: карт игрока ${cards.player.length}, карт дилера ${cards.banker.length}`);
+            attempts2++;
         }
         
         if (cards.player.length > 0 && cards.banker.length > 0) {
             await monitorGame(page, gameNumber);
+        } else {
+            console.log('Не дождались карт');
         }
         
     } catch (e) {
@@ -346,6 +375,7 @@ function getDelayToNextGame() {
     console.log('🤖 Бот для 21 очко запущен. Последний номер:', lastGameNumber);
     console.log('🎯 Целевое время запуска: каждую минуту в :02 секунд');
     console.log('🔍 Селектор завершения: .live-twenty-one-table__footer .ui-game-timer__label');
+    console.log('🔍 Селектор столов: li.dashboard-game');
     
     // Синхронизация с ближайшей игрой
     const initialDelay = getDelayToNextGame();
@@ -362,7 +392,7 @@ function getDelayToNextGame() {
         const now = new Date();
         console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
         
-        run(); // не ждем завершения
+        await run(); // ждем завершения для отладки
         
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
