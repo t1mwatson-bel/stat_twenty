@@ -4,7 +4,7 @@ const fs = require('fs');
 
 const TOKEN = '8357635747:AAEn0aob4h7mqrbkSITlyd0iYLcprqeCSc4';
 const CHAT = '-1003477065559';
-const URL = 'https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game';
+const URL = 'https://1xlite-7636770.bar/ru/live/twentyone';
 const LAST_NUMBER_FILE = './last_number_twentyone.txt';
 
 const bot = new TelegramBot(TOKEN, { polling: false });
@@ -12,7 +12,7 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 let lastMessageId = null;
 let lastMessageText = '';
 
-// Загружаем последний номер из файла
+// Загружаем последний номер из файла (на всякий случай)
 let lastGameNumber = '0';
 if (fs.existsSync(LAST_NUMBER_FILE)) {
     lastGameNumber = fs.readFileSync(LAST_NUMBER_FILE, 'utf8');
@@ -57,6 +57,37 @@ function determineWinner(playerScore, bankerScore) {
     return 'X';
 }
 
+// ===== НУМЕРАЦИЯ ПО МОСКОВСКОМУ ВРЕМЕНИ 24/7 =====
+// 3:00 = #1, дальше каждая минута +1, круглосуточно
+function getGameNumberByTime() {
+    const now = new Date();
+    
+    // Переводим в московское время (UTC+3)
+    const mskTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+    
+    const currentHours = mskTime.getHours();
+    const currentMinutes = mskTime.getMinutes();
+    
+    // Начало отсчета: 3:00 МСК
+    const startHour = 3;
+    const startMinute = 0;
+    
+    // Считаем сколько минут прошло с 3:00
+    let minutesSinceStart;
+    
+    if (currentHours >= startHour) {
+        // Текущее время больше или равно 3:00 (3:00 - 23:59)
+        minutesSinceStart = (currentHours - startHour) * 60 + (currentMinutes - startMinute);
+    } else {
+        // Текущее время меньше 3:00 (0:00 - 2:59)
+        // Значит прошло (24 - 3 + currentHours) часов
+        minutesSinceStart = (24 - startHour + currentHours) * 60 + (currentMinutes - startMinute);
+    }
+    
+    // Номер игры = минуты с начала + 1
+    return minutesSinceStart + 1;
+}
+
 async function sendOrEditTelegram(newMessage) {
     if (!newMessage || newMessage === lastMessageText) return;
     
@@ -76,12 +107,12 @@ async function sendOrEditTelegram(newMessage) {
     }
 }
 
-// ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ПОИСКА СТОЛОВ =====
+// ===== УНИВЕРСАЛЬНЫЙ ПОИСК СТОЛОВ =====
 async function checkTables(page) {
     console.log('🔍 Ищем столы Twenty One...');
     
-    // Правильный селектор для Twenty One
-    const games = await page.$$('.dashboard-champ__game');
+    // Пробуем найти столы
+    const games = await page.$$('.dashboard-champ__game, .dashboard-game, li.dashboard-game');
     console.log(`Найдено столов: ${games.length}`);
     
     let activeGames = [];
@@ -89,7 +120,7 @@ async function checkTables(page) {
     for (let i = 0; i < games.length; i++) {
         const game = games[i];
         
-        // Проверяем наличие таймера (игра активна)
+        // Проверяем наличие таймера
         const hasTimer = await game.$('.dashboard-game-info__time') !== null;
         
         // Проверяем не завершена ли игра
@@ -97,8 +128,6 @@ async function checkTables(page) {
             const period = el.querySelector('.dashboard-game-info__period');
             return period && period.textContent.includes('Игра завершена');
         });
-        
-        console.log(`Стол ${i+1}: таймер=${hasTimer}, завершена=${isFinished}`);
         
         if (hasTimer && !isFinished) {
             const link = await game.$('a[href*="/ru/live/twentyone/"]');
@@ -114,13 +143,12 @@ async function checkTables(page) {
         }
     }
     
-    // Берем ВТОРОЙ активный стол (индекс 1)
+    // Берем ВТОРОЙ активный стол
     if (activeGames.length >= 2) {
         console.log(`🎯 Беру второй стол (номер ${activeGames[1].number})`);
         return activeGames[1].href;
     }
     
-    // Если меньше двух - берем первый
     if (activeGames.length === 1) {
         console.log(`⚠️ Только один активный стол, беру его (номер ${activeGames[0].number})`);
         return activeGames[0].href;
@@ -275,20 +303,12 @@ async function run() {
         await page.click(`a[href="${activeLink}"]`);
         await page.waitForTimeout(3000);
         
-        // Получаем номер игры
-        let gameNumber = await page.evaluate(() => {
-            const el = document.querySelector('.dashboard-game-info__additional-info');
-            return el ? el.textContent.trim() : null;
-        }).catch(() => null);
+        // ===== ПОЛУЧАЕМ НОМЕР ПО МОСКОВСКОМУ ВРЕМЕНИ 24/7 =====
+        let gameNumber = getGameNumberByTime();
+        console.log('🎰 Номер игры по времени (МСК):', gameNumber);
+        gameNumber = gameNumber.toString();
         
-        if (!gameNumber) {
-            gameNumber = (parseInt(lastGameNumber) + 1).toString();
-            console.log('⚠️ Номер не найден, присваиваю:', gameNumber);
-        } else {
-            console.log('🎰 Номер игры:', gameNumber);
-        }
-        
-        // Сохраняем номер
+        // Сохраняем номер в файл (на всякий случай)
         lastGameNumber = gameNumber;
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
         
@@ -317,7 +337,7 @@ async function run() {
     }
 }
 
-// Функция для расчета задержки до запуска
+// Функция для расчета задержки до запуска в :02 секунд
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
@@ -337,6 +357,7 @@ function getDelayToNextGame() {
 // Запуск
 (async () => {
     console.log('🤖 Бот Twenty One запущен');
+    console.log('🎯 Номера игр по МСК (3:00 = #1, 24/7)');
     console.log('🎯 Беру второй активный стол');
     
     const initialDelay = getDelayToNextGame();
