@@ -46,12 +46,9 @@ function determineWinner(playerScore, bankerScore) {
     const p = parseInt(playerScore);
     const b = parseInt(bankerScore);
     
-    // Проверка на перебор (>21)
     if (p > 21 && b <= 21) return 'П2';
     if (b > 21 && p <= 21) return 'П1';
-    if (p > 21 && b > 21) return 'X'; // оба перебор
-    
-    // Обычное сравнение
+    if (p > 21 && b > 21) return 'X';
     if (p > b) return 'П1';
     if (b > p) return 'П2';
     return 'X';
@@ -74,7 +71,6 @@ async function sendOrEditTelegram(newMessage) {
         console.log('✅ Сообщение отправлено/обновлено');
     } catch (e) {
         console.log('❌ TG error:', e.message);
-        // Если не получилось отредактировать - отправляем новое
         try {
             const msg = await bot.sendMessage(CHAT, newMessage);
             lastMessageId = msg.message_id;
@@ -98,10 +94,7 @@ async function checkTables(page) {
     for (let i = 0; i < games.length; i++) {
         const game = games[i];
         
-        // Проверяем наличие таймера (игра активна)
         const hasTimer = await game.$('.dashboard-game-info__time') !== null;
-        
-        // Проверяем не завершена ли игра
         const isFinished = await game.evaluate(el => {
             const period = el.querySelector('.dashboard-game-info__period');
             return period && period.textContent.includes('Игра завершена');
@@ -123,13 +116,11 @@ async function checkTables(page) {
         }
     }
     
-    // Берем ВТОРОЙ активный стол (индекс 1)
     if (activeGames.length >= 2) {
         console.log(`🎯 Беру второй стол (номер ${activeGames[1].number})`);
         return activeGames[1].href;
     }
     
-    // Если меньше двух - берем первый
     if (activeGames.length === 1) {
         console.log(`⚠️ Только один активный стол, беру его (номер ${activeGames[0].number})`);
         return activeGames[0].href;
@@ -143,39 +134,15 @@ async function checkTables(page) {
 async function getCards(page) {
     console.log('🔍 Получаю карты...');
     
-    // ===== СОХРАНЯЕМ HTML В ФАЙЛ =====
+    // СОХРАНЯЕМ HTML
     try {
         const html = await page.content();
-        const filePath = './debug_twentyone.html';
-        fs.writeFileSync(filePath, html);
-        console.log(`✅ HTML сохранен в ${filePath}`);
-        console.log(`📄 Размер файла: ${html.length} символов`);
+        fs.writeFileSync('./debug_twentyone.html', html);
+        console.log('✅ HTML сохранен');
     } catch (e) {
         console.log('❌ Ошибка сохранения HTML:', e.message);
     }
-    // ===== КОНЕЦ СОХРАНЕНИЯ =====
 
-    // Пробуем найти карты игрока
-    const playerCards = await page.$$eval('.live-twenty-one-cards__item', 
-        cards => cards.map(c => {
-            console.log('Найдена карта:', c.outerHTML);
-            return 'карта';
-        })
-    ).catch(() => []);
-    
-    console.log(`Найдено карт: ${playerCards.length}`);
-    
-    return {
-        player: [],
-        banker: [],
-        pScore: '0',
-        bScore: '0',
-        status: ''
-    };
-}
-    // ===== КОНЕЦ ОТЛАДКИ =====
-
-    // Данные игрока (первый игрок)
     const playerScore = await page.$eval('.live-twenty-one-field__player:first-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
@@ -193,7 +160,6 @@ async function getCards(page) {
         })
     ).catch(() => []);
     
-    // Данные дилера (второй игрок)
     const bankerScore = await page.$eval('.live-twenty-one-field__player:last-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
@@ -211,7 +177,6 @@ async function getCards(page) {
         })
     ).catch(() => []);
     
-    // Статус игры (чей ход или победа)
     const status = await page.$eval('.scoreboard-card-games-board-status', 
         el => el.textContent.trim()
     ).catch(() => '');
@@ -227,31 +192,26 @@ async function getCards(page) {
     };
 }
 
-// ===== МОНИТОРИНГ ИГРЫ (РЕАЛЬНОЕ ВРЕМЯ) =====
+// ===== МОНИТОРИНГ ИГРЫ =====
 async function monitorGame(page, gameNumber) {
     console.log(`🎮 Начинаю мониторинг игры #${gameNumber}`);
     
     let lastCards = { player: [], banker: [], pScore: '0', bScore: '0' };
     let messageSent = false;
-    let noChangeCount = 0;
     
     while (true) {
         const cards = await getCards(page);
-        
-        // Получаем статус игры
         const gameStatus = await page.$eval('.scoreboard-card-games-board-status', 
             el => el.textContent.trim()
         ).catch(() => '');
         
-        // Проверка завершения игры
         const isGameOver = await page.evaluate(() => {
             const timer = document.querySelector('.live-twenty-one-table-footer__timer .ui-game-timer__label');
             return timer && timer.textContent.includes('Игра завершена');
         });
         
-        // Если игра завершена или есть победа в статусе
         if (isGameOver || gameStatus.includes('Победа')) {
-            console.log('🏁 Игра завершена, отправляю результат...');
+            console.log('🏁 Игра завершена');
             
             const total = parseInt(cards.pScore) + parseInt(cards.bScore);
             const winner = determineWinner(cards.pScore, cards.bScore);
@@ -266,44 +226,28 @@ async function monitorGame(page, gameNumber) {
             }
             
             await sendOrEditTelegram(message);
-            console.log('✅ Результат отправлен');
-            
-            // Ждем 10 секунд и закрываем
             await page.waitForTimeout(10000);
             break;
         }
         
-        // Проверяем, изменились ли карты или счет
         const cardsChanged = 
             JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
             JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
             cards.pScore !== lastCards.pScore ||
             cards.bScore !== lastCards.bScore;
         
-        // Если изменилось - отправляем
         if (cardsChanged) {
-            // Определяем эмодзи для статуса
             let statusSymbol = '';
             if (gameStatus.includes('Ход игрока')) statusSymbol = '🎯';
             else if (gameStatus.includes('Ход дилера')) statusSymbol = '🎰';
             
             const message = `⏱№${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)}) ${statusSymbol}`;
             
-            console.log(`📤 Отправка: ${cards.pScore}-${cards.bScore} (карт: ${cards.player.length}/${cards.banker.length})`);
+            console.log(`📤 Отправка: ${cards.pScore}-${cards.bScore}`);
             await sendOrEditTelegram(message);
             
             lastCards = { ...cards };
             messageSent = true;
-            noChangeCount = 0;
-        } else {
-            noChangeCount++;
-            
-            // Если долго нет изменений (10 циклов = 20 секунд), но карты есть - форсируем отправку
-            if (noChangeCount > 10 && cards.player.length > 0 && !messageSent) {
-                const message = `⏱№${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)})`;
-                await sendOrEditTelegram(message);
-                messageSent = true;
-            }
         }
         
         await page.waitForTimeout(2000);
@@ -322,7 +266,6 @@ async function run() {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
-        // Таймаут 2 минуты
         timeout = setTimeout(async () => {
             console.log(`⏱ 2 минуты прошло, закрываю браузер`);
             if (browser) await browser.close();
@@ -331,7 +274,6 @@ async function run() {
         await page.goto(URL);
         console.log('Проверяем столы Twenty One...');
         
-        // Ищем активный стол
         let activeLink = null;
         let attempts = 0;
         while (!activeLink && attempts < 10) {
@@ -352,7 +294,6 @@ async function run() {
         await page.click(`a[href="${activeLink}"]`);
         await page.waitForTimeout(3000);
         
-        // Получаем номер игры
         let gameNumber = await page.evaluate(() => {
             const el = document.querySelector('.dashboard-game-info__additional-info');
             return el ? el.textContent.trim() : null;
@@ -365,12 +306,10 @@ async function run() {
             console.log('🎰 Номер игры:', gameNumber);
         }
         
-        // Сохраняем номер
         lastGameNumber = gameNumber;
         fs.writeFileSync(LAST_NUMBER_FILE, gameNumber);
         console.log('💾 Номер сохранен');
         
-        // Ждем появления карт
         let cardsAttempts = 0;
         let cards = { player: [], banker: [] };
         while (cardsAttempts < 12 && (cards.player.length === 0 || cards.banker.length === 0)) {
@@ -397,7 +336,7 @@ async function run() {
     }
 }
 
-// ===== ЗАДЕРЖКА ДЛЯ СИНХРОНИЗАЦИИ =====
+// ===== ЗАДЕРЖКА =====
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
