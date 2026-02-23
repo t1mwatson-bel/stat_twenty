@@ -2,32 +2,20 @@ import os
 import json
 import asyncio
 import logging
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from datetime import datetime
 
 # ----------------------------- НАСТРОЙКИ -----------------------------
 API_ID = 27496254
 API_HASH = '4042aeeec61e0b3635658747eb912a3d'
-SOURCE_CHANNEL = -1001424761216  # Канал-источник (ID как число)
-TARGET_CHANNEL = -1003477065559  # Канал-приёмник (ID как число)
-SESSION_FILE = 'my_account'  # Без @ — просто имя файла
+SOURCE_CHANNEL = -1001424761216  # Откуда брать
+TARGET_CHANNEL = -1003477065559  # Куда постить
+SESSION_FILE = 'my_account'
+CHECK_INTERVAL = 20  # Секунд между проверками
 # ---------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# === ПРОВЕРКА ФАЙЛА СЕССИИ ===
-session_path = f'{SESSION_FILE}.session'
-if not os.path.exists(session_path):
-    logger.error(f"❌ Файл сессии {session_path} не найден!")
-    logger.error("📁 Убедись, что файл my_account.session загружен")
-    exit(1)
-else:
-    size = os.path.getsize(session_path)
-    logger.info(f"✅ Файл сессии найден, размер: {size} байт")
-    if size < 100:
-        logger.error("❌ Файл сессии слишком мал — возможно, повреждён")
-        exit(1)
 
 message_map_file = 'message_map.json'
 
@@ -43,55 +31,64 @@ def save_message_map(message_map):
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
-@client.on(events.NewMessage(chats=SOURCE_CHANNEL))
-async def on_new_message(event):
-    """Новое сообщение в канале статистики"""
+async def check_new_messages():
+    """Периодически проверяет канал на новые сообщения"""
     message_map = load_message_map()
-    original_id = event.message.id
+    last_known_id = 0
     
-    try:
-        # Пересылаем в твой канал
-        sent = await client.send_message(TARGET_CHANNEL, event.message)
-        
-        # Сохраняем соответствие
-        message_map[str(original_id)] = sent.id
-        save_message_map(message_map)
-        
-        logger.info(f"✅ Новое: {original_id} -> {sent.id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при отправке: {e}")
-
-@client.on(events.MessageEdited(chats=SOURCE_CHANNEL))
-async def on_edit_message(event):
-    """Сообщение отредактировали"""
-    message_map = load_message_map()
-    original_id = event.message.id
+    # Если есть сохранённые сообщения, находим максимальный ID
+    if message_map:
+        try:
+            last_known_id = max(int(k) for k in message_map.keys())
+            logger.info(f"🔄 Последний известный ID: {last_known_id}")
+        except:
+            pass
     
-    if str(original_id) not in message_map:
-        return
-    
-    target_id = message_map[str(original_id)]
-    
-    try:
-        await client.edit_message(TARGET_CHANNEL, target_id, event.message.text)
-        logger.info(f"✏️ Отредактировано: {original_id} -> {target_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка при редактировании: {e}")
+    while True:
+        try:
+            # Получаем последние 5 сообщений из канала
+            messages = await client.get_messages(SOURCE_CHANNEL, limit=5)
+            
+            if messages:
+                # Проходим от старых к новым
+                for msg in reversed(messages):
+                    msg_id = msg.id
+                    
+                    # Если это новое сообщение (больше последнего сохранённого)
+                    if msg_id > last_known_id:
+                        logger.info(f"🔥 Найдено новое сообщение #{msg_id}")
+                        
+                        # Пересылаем в целевой канал
+                        sent = await client.send_message(TARGET_CHANNEL, msg)
+                        
+                        # Сохраняем соответствие
+                        message_map[str(msg_id)] = sent.id
+                        last_known_id = msg_id
+                        
+                        save_message_map(message_map)
+                        logger.info(f"✅ Переслано: {msg_id} -> {sent.id}")
+            
+            await asyncio.sleep(CHECK_INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при проверке: {e}")
+            await asyncio.sleep(30)
 
 async def main():
     """Запуск"""
-    logger.info("🚀 Запуск бота...")
+    logger.info("🚀 Запуск бота (режим Polling)...")
     
     await client.start()
     
     me = await client.get_me()
     logger.info(f"✅ Запущен как @{me.username or 'без username'}")
-    logger.info(f"👀 Слушаю канал: {SOURCE_CHANNEL}")
-    logger.info(f"📤 Отправляю в: {TARGET_CHANNEL}")
     
-    await client.run_until_disconnected()
+    # Принудительно получаем диалоги, чтобы "активировать" канал
+    await client.get_dialogs()
+    logger.info(f"👀 Начинаю следить за каналом: {SOURCE_CHANNEL}")
+    
+    # Запускаем бесконечную проверку
+    await check_new_messages()
 
 if __name__ == '__main__':
     try:
@@ -99,4 +96,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("🛑 Бот остановлен")
     except Exception as e:
-        logger.critical(f"💥 Критическая ошибка: {e}", exc_info=True)
+        logger.critical(f"💥 Критическая ошибка: {e}")
