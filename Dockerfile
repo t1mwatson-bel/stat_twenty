@@ -10,3 +10,11 @@ RUN npm install
 COPY . .
 
 CMD ["node", "index.js"]
+
+RUN apt-get update && apt-get install -y \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libgbm1 \
+    libasound2
