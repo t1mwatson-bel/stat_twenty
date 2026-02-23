@@ -31,13 +31,13 @@ function getCardValue(value) {
     return valueMap[value] || value;
 }
 
-// ИСПРАВЛЕННЫЙ МАППИНГ МАСТЕЙ ДЛЯ ОЧКА
+// МАППИНГ МАСТЕЙ ДЛЯ ОЧКА
 function getSuit(suitClass) {
     const suitMap = {
-        'suit-0': '♣️',  // было ♠️, стало ♣️
-        'suit-1': '♥️',  // оставляем
-        'suit-2': '♦️',  // было ♣️, стало ♦️
-        'suit-3': '♠️'   // было ♦️, стало ♠️
+        'suit-0': '♣️',
+        'suit-1': '♥️',
+        'suit-2': '♦️',
+        'suit-3': '♠️'
     };
     return suitMap[suitClass] || '';
 }
@@ -46,7 +46,6 @@ function determineWinner(playerScore, bankerScore) {
     const p = parseInt(playerScore);
     const b = parseInt(bankerScore);
     
-    // Кто выиграл
     if (p > 21 && b <= 21) return 'П2';
     if (b > 21 && p <= 21) return 'П1';
     if (p > 21 && b > 21) return 'X';
@@ -54,13 +53,6 @@ function determineWinner(playerScore, bankerScore) {
     if (b > p) return 'П2';
     return 'X';
 }
-
-// В monitorGame при завершении:
-let flags = [`#T${total}`];
-if (p > 21) flags.push('#O');
-if (b > 21) flags.push('#O'); // теперь два отдельных #O, если оба перебрали
-if (p === 21 || b === 21) flags.push('#G');
-flags.push(`#${winner}`);
 
 async function sendOrEditTelegram(newMessage) {
     if (!newMessage || newMessage === lastMessageText) return;
@@ -224,13 +216,15 @@ async function monitorGame(page, gameNumber) {
             const b = parseInt(cards.bScore);
             
             let winner = 'X';
-            if (p > 21 && b <= 21) winner = 'O';
-            else if (b > 21 && p <= 21) winner = 'O';
+            if (p > 21 && b <= 21) winner = 'П2';
+            else if (b > 21 && p <= 21) winner = 'П1';
+            else if (p > 21 && b > 21) winner = 'X';
             else if (p > b) winner = 'П1';
             else if (b > p) winner = 'П2';
             
             let flags = [`#T${total}`];
-            if (p > 21 || b > 21) flags.push('#O');
+            if (p > 21) flags.push('#O');
+            if (b > 21) flags.push('#O');
             if (p === 21 || b === 21) flags.push('#G');
             flags.push(`#${winner}`);
             
@@ -286,7 +280,6 @@ async function run() {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
-        // УВЕЛИЧИЛ ВРЕМЯ ЖИЗНИ ДО 70 СЕКУНД
         timeout = setTimeout(async () => {
             console.log(`⏱ 70 секунд прошло, закрываю браузер`);
             if (browser) await browser.close();
