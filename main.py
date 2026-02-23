@@ -6,7 +6,7 @@ from telethon import TelegramClient, events
 
 # ----------------------------- НАСТРОЙКИ -----------------------------
 # ВСЕ НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Railway -> Variables)
-API_ID = int(os.environ.get('27496254', 0))
+API_ID = int(os.environ.get('27496254'])
 API_HASH = os.environ.get('4042aeeec61e0b3635658747eb912a3d', '')
 PHONE_NUMBER = os.environ.get('+79205026567', '')  # Твой номер для входа
 SOURCE_CHANNEL = int(os.environ.get('-100123456789', 0))  # ID канала-источника (с минусом)
