@@ -14,11 +14,6 @@ TARGET_CHANNEL = os.environ.get('-1003477065559', '')  # @username твоего 
 SESSION_FILE = '@TimWat48'
 # ---------------------------------------------------------------------
 
-# Проверка наличия обязательных переменных
-if not all([API_ID, API_HASH, PHONE_NUMBER, SOURCE_CHANNEL, TARGET_CHANNEL]):
-    print("❌ Ошибка: Не все переменные окружения заданы!")
-    exit(1)
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
