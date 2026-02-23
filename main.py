@@ -5,13 +5,13 @@ import logging
 from telethon import TelegramClient, events
 
 # ----------------------------- НАСТРОЙКИ -----------------------------
-# ВСЕ НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Railway -> Variables)
-API_ID = int(os.environ.get('27496254'])
-API_HASH = os.environ.get('4042aeeec61e0b3635658747eb912a3d', '')
-PHONE_NUMBER = os.environ.get('+79205026567', '')  # Твой номер для входа
-SOURCE_CHANNEL = int(os.environ.get('-100123456789', 0))  # ID канала-источника (с минусом)
-TARGET_CHANNEL = os.environ.get('-1003477065559', '')  # @username твоего канала
-SESSION_FILE = '@TimWat48'
+# ВСЕ ЗНАЧЕНИЯ БЕРУТСЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ (Railway -> Variables)
+API_ID = int(os.environ['API_ID'])
+API_HASH = os.environ['API_HASH']
+PHONE_NUMBER = os.environ['PHONE_NUMBER']
+SOURCE_CHANNEL = int(os.environ['SOURCE_CHANNEL'])
+TARGET_CHANNEL = os.environ['TARGET_CHANNEL']
+SESSION_FILE = 'my_account'
 # ---------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
