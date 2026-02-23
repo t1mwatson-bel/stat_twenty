@@ -2,16 +2,15 @@ import os
 import json
 import asyncio
 import logging
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from datetime import datetime
 
 # ----------------------------- НАСТРОЙКИ -----------------------------
-API_ID = 27496254
-API_HASH = '4042aeeec61e0b3635658747eb912a3d'
-SOURCE_CHANNEL = -1001424761216  # Откуда брать
-TARGET_CHANNEL = -1003477065559  # Куда постить
+API_ID = 1234567  # Твой
+API_HASH = 'твой_api_hash'
+SOURCE_CHANNEL = -100123456789  # ID канала статистики (с минусом)
+TARGET_CHANNEL = '@tvoy_kanal'  # Куда постить
 SESSION_FILE = 'my_account'
-CHECK_INTERVAL = 20  # Секунд между проверками
 # ---------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,69 +30,56 @@ def save_message_map(message_map):
 
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
-async def check_new_messages():
-    """Периодически проверяет канал на новые сообщения"""
+@client.on(events.NewMessage(chats=SOURCE_CHANNEL))
+async def on_new_message(event):
+    """Новое сообщение — отправляем в свой канал"""
     message_map = load_message_map()
-    last_known_id = 0
+    original_id = event.message.id
     
-    # Если есть сохранённые сообщения, находим максимальный ID
-    if message_map:
-        try:
-            last_known_id = max(int(k) for k in message_map.keys())
-            logger.info(f"🔄 Последний известный ID: {last_known_id}")
-        except:
-            pass
+    try:
+        # Пересылаем
+        sent = await client.send_message(TARGET_CHANNEL, event.message)
+        
+        # Сохраняем связь
+        message_map[str(original_id)] = sent.id
+        save_message_map(message_map)
+        
+        logger.info(f"✅ Новое #{original_id} -> {sent.id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+
+@client.on(events.MessageEdited(chats=SOURCE_CHANNEL))
+async def on_edit_message(event):
+    """Сообщение изменили (добавили карту, флаги) — обновляем у себя"""
+    message_map = load_message_map()
+    original_id = event.message.id
     
-    while True:
-        try:
-            # Получаем последние 5 сообщений из канала
-            messages = await client.get_messages(SOURCE_CHANNEL, limit=5)
-            
-            if messages:
-                # Проходим от старых к новым
-                for msg in reversed(messages):
-                    msg_id = msg.id
-                    
-                    # Если это новое сообщение (больше последнего сохранённого)
-                    if msg_id > last_known_id:
-                        logger.info(f"🔥 Найдено новое сообщение #{msg_id}")
-                        
-                        # Пересылаем в целевой канал
-                        sent = await client.send_message(TARGET_CHANNEL, msg)
-                        
-                        # Сохраняем соответствие
-                        message_map[str(msg_id)] = sent.id
-                        last_known_id = msg_id
-                        
-                        save_message_map(message_map)
-                        logger.info(f"✅ Переслано: {msg_id} -> {sent.id}")
-            
-            await asyncio.sleep(CHECK_INTERVAL)
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при проверке: {e}")
-            await asyncio.sleep(30)
+    if str(original_id) not in message_map:
+        logger.warning(f"⚠️ Нет в маппинге: {original_id}")
+        return
+    
+    target_id = message_map[str(original_id)]
+    
+    try:
+        await client.edit_message(TARGET_CHANNEL, target_id, event.message.text)
+        logger.info(f"✏️ Обновлено #{original_id} -> {target_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка редактирования: {e}")
 
 async def main():
-    """Запуск"""
-    logger.info("🚀 Запуск бота (режим Polling)...")
-    
     await client.start()
-    
     me = await client.get_me()
-    logger.info(f"✅ Запущен как @{me.username or 'без username'}")
+    logger.info(f"✅ Запущен как @{me.username}")
+    logger.info(f"👀 Слушаю канал: {SOURCE_CHANNEL}")
+    logger.info(f"📤 Отправляю в: {TARGET_CHANNEL}")
+    logger.info(f"🔄 Редактирования: ВКЛЮЧЕНЫ")
     
-    # Принудительно получаем диалоги, чтобы "активировать" канал
-    await client.get_dialogs()
-    logger.info(f"👀 Начинаю следить за каналом: {SOURCE_CHANNEL}")
-    
-    # Запускаем бесконечную проверку
-    await check_new_messages()
+    await client.run_until_disconnected()
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 Бот остановлен")
-    except Exception as e:
-        logger.critical(f"💥 Критическая ошибка: {e}")
+        logger.info("🛑 Остановлено")
