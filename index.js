@@ -398,5 +398,4 @@ function getDelayToNextGame() {
         await run();
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
-})();    }
 })();
