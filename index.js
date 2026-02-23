@@ -46,6 +46,7 @@ function determineWinner(playerScore, bankerScore) {
     const p = parseInt(playerScore);
     const b = parseInt(bankerScore);
     
+    // Кто выиграл
     if (p > 21 && b <= 21) return 'П2';
     if (b > 21 && p <= 21) return 'П1';
     if (p > 21 && b > 21) return 'X';
@@ -53,6 +54,13 @@ function determineWinner(playerScore, bankerScore) {
     if (b > p) return 'П2';
     return 'X';
 }
+
+// В monitorGame при завершении:
+let flags = [`#T${total}`];
+if (p > 21) flags.push('#O');
+if (b > 21) flags.push('#O'); // теперь два отдельных #O, если оба перебрали
+if (p === 21 || b === 21) flags.push('#G');
+flags.push(`#${winner}`);
 
 async function sendOrEditTelegram(newMessage) {
     if (!newMessage || newMessage === lastMessageText) return;
