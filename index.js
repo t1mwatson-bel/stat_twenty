@@ -130,53 +130,53 @@ async function checkTables(page) {
     return null;
 }
 
-// ===== ПОЛУЧЕНИЕ КАРТ =====
+// ===== ТВОЯ ФУНКЦИЯ GETCARDS =====
 async function getCards(page) {
     console.log('🔍 Получаю карты...');
     
-    // СОХРАНЯЕМ HTML
-    try {
-        const html = await page.content();
-        fs.writeFileSync('./debug_twentyone.html', html);
-        console.log('✅ HTML сохранен');
-    } catch (e) {
-        console.log('❌ Ошибка сохранения HTML:', e.message);
-    }
-
+    // Данные игрока (первый игрок)
     const playerScore = await page.$eval('.live-twenty-one-field__player:first-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
     
-    const playerCards = await page.$$eval('.live-twenty-one-field__player:first-child .live-twenty-one-cards__item', 
+    const playerCards = await page.$$eval('.live-twenty-one-field__player:first-child .live-twenty-one-cards .scoreboard-card-games-card', 
         cards => cards.map(c => {
             const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
             const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
             
-            const suit = getSuit(suitClass);
+            const suitMap = { 'suit-0': '♠️', 'suit-1': '♥️', 'suit-2': '♣️', 'suit-3': '♦️' };
+            const suit = suitMap[suitClass] || '';
+            
+            const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
             let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
+            value = valueMap[value] || value;
             
             return value + suit;
         })
     ).catch(() => []);
     
+    // Данные дилера (второй игрок)
     const bankerScore = await page.$eval('.live-twenty-one-field__player:last-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
     
-    const bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child .live-twenty-one-cards__item', 
+    const bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child .live-twenty-one-cards .scoreboard-card-games-card', 
         cards => cards.map(c => {
             const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
             const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
             
-            const suit = getSuit(suitClass);
+            const suitMap = { 'suit-0': '♠️', 'suit-1': '♥️', 'suit-2': '♣️', 'suit-3': '♦️' };
+            const suit = suitMap[suitClass] || '';
+            
+            const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
             let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
+            value = valueMap[value] || value;
             
             return value + suit;
         })
     ).catch(() => []);
     
+    // Статус игры
     const status = await page.$eval('.scoreboard-card-games-board-status', 
         el => el.textContent.trim()
     ).catch(() => '');
@@ -202,18 +202,15 @@ async function monitorGame(page, gameNumber) {
     while (true) {
         const cards = await getCards(page);
         
-        // Получаем статус (чей ход)
         const gameStatus = await page.$eval('.scoreboard-card-games-board-status', 
             el => el.textContent.trim()
         ).catch(() => '');
         
-        // Проверка завершения
         const isGameOver = await page.evaluate(() => {
             const timer = document.querySelector('.live-twenty-one-table-footer__timer .ui-game-timer__label');
             return timer && timer.textContent.includes('Игра завершена');
         });
         
-        // ЕСЛИ ИГРА ЗАВЕРШЕНА
         if (isGameOver || gameStatus.includes('Победа')) {
             console.log('🏁 Игра завершена');
             
@@ -221,14 +218,12 @@ async function monitorGame(page, gameNumber) {
             const p = parseInt(cards.pScore);
             const b = parseInt(cards.bScore);
             
-            // Определяем победителя
             let winner = 'X';
             if (p > 21 && b <= 21) winner = 'O';
             else if (b > 21 && p <= 21) winner = 'O';
             else if (p > b) winner = 'П1';
             else if (b > p) winner = 'П2';
             
-            // Флаги
             let flags = [`#T${total}`];
             if (p > 21 || b > 21) flags.push('#O');
             if (p === 21 || b === 21) flags.push('#G');
@@ -241,7 +236,6 @@ async function monitorGame(page, gameNumber) {
             break;
         }
         
-        // ЕСЛИ ИГРА ИДЕТ - проверяем кто ходит
         const cardsChanged = 
             JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
             JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
@@ -249,20 +243,16 @@ async function monitorGame(page, gameNumber) {
             cards.bScore !== lastCards.bScore;
         
         if (cardsChanged) {
-            // Определяем стрелку
             let arrow = '';
             if (gameStatus.includes('Ход игрока')) arrow = '▶';
             else if (gameStatus.includes('Ход дилера')) arrow = '◀';
             
             let message;
             if (arrow === '▶') {
-                // Стрелка у игрока
                 message = `⏰#N${gameNumber}. ▶ ${cards.pScore}(${formatCards(cards.player)}) - ${cards.bScore}(${formatCards(cards.banker)})`;
             } else if (arrow === '◀') {
-                // Стрелка у дилера
                 message = `⏰#N${gameNumber}. ${cards.pScore}(${formatCards(cards.player)}) - ▶ ${cards.bScore}(${formatCards(cards.banker)})`;
             } else {
-                // Без стрелки
                 message = `⏰#N${gameNumber}. ${cards.pScore}(${formatCards(cards.player)}) - ${cards.bScore}(${formatCards(cards.banker)})`;
             }
             
