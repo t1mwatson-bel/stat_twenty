@@ -141,6 +141,19 @@ async function checkTables(page) {
 
 // ===== ПОЛУЧЕНИЕ КАРТ =====
 async function getCards(page) {
+    // ===== ОТЛАДКА: сохраняем HTML один раз =====
+    if (!global.savedHtml) {
+        try {
+            const html = await page.content();
+            fs.writeFileSync('debug_twentyone.html', html);
+            console.log('💾 HTML сохранен в debug_twentyone.html для анализа');
+            global.savedHtml = true;
+        } catch (e) {
+            console.log('❌ Не удалось сохранить HTML:', e.message);
+        }
+    }
+    // ===== КОНЕЦ ОТЛАДКИ =====
+
     // Данные игрока (первый игрок)
     const playerScore = await page.$eval('.live-twenty-one-field__player:first-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
