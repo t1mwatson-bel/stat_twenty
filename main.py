@@ -6,11 +6,11 @@ from telethon import TelegramClient, events
 from datetime import datetime
 
 # ----------------------------- НАСТРОЙКИ -----------------------------
-API_ID = 1234567  # Твой
-API_HASH = 'твой_api_hash'
+API_ID = 27496254  # Твой
+API_HASH = '4042aeeec61e0b3635658747eb912a3d'
 SOURCE_CHANNEL = -100123456789  # ID канала статистики (с минусом)
-TARGET_CHANNEL = '@tvoy_kanal'  # Куда постить
-SESSION_FILE = 'my_account'
+TARGET_CHANNEL = '-1003477065559'  # Куда постить
+SESSION_FILE = '@TimWat48'
 # ---------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
