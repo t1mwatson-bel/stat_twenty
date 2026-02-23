@@ -88,4 +88,4 @@ if __name__ == '__main__':
         logger.info("🛑 Бот остановлен вручную")
     except Exception as e:
         logger.critical(f"💥 Критическая ошибка: {e}")
-        logger.info("🛑 Остановка")        logger.critical(f"💥 Критическая ошибка: {e}")        logger.info("🛑 Остановлено")
+        logger.info("🛑 Остановка")
