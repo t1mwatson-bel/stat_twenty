@@ -31,11 +31,10 @@ function getCardValue(value) {
     return valueMap[value] || value;
 }
 
-// СТАРЫЙ МАППИНГ (неправильный, но работал)
 function getSuit(suitClass) {
     const suitMap = {
         'suit-0': '♠️',
-        'suit-1': '♥️',
+        'suit-1': '♥️', 
         'suit-2': '♣️',
         'suit-3': '♦️'
     };
@@ -134,7 +133,7 @@ async function checkTables(page) {
     return null;
 }
 
-// ===== ПОЛУЧЕНИЕ КАРТ =====
+// ===== УНИВЕРСАЛЬНАЯ ПОЛУЧЕНИЕ КАРТ =====
 async function getCards(page) {
     console.log('🔍 Получаю карты...');
     
@@ -146,33 +145,62 @@ async function getCards(page) {
         el => el.textContent.trim()
     ).catch(() => '0');
     
+    // Пробуем все варианты селекторов карт
+    let playerCards = [];
+    let bankerCards = [];
+    
+    const cardSelectors = [
+        '.live-twenty-one-cards .scoreboard-card-games-card',
+        '.live-twenty-one-cards__item',
+        '.scoreboard-card-games-card',
+        '.live-twenty-one-field__player .live-twenty-one-cards .scoreboard-card-games-card'
+    ];
+    
     // Карты игрока
-    const playerCards = await page.$$eval('.live-twenty-one-field__player:first-child .live-twenty-one-cards .scoreboard-card-games-card', 
-        cards => cards.map(c => {
-            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
-            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
-            
-            const suit = getSuit(suitClass);
-            let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
-            
-            return value + suit;
-        })
-    ).catch(() => []);
+    for (const selector of cardSelectors) {
+        try {
+            playerCards = await page.$$eval('.live-twenty-one-field__player:first-child ' + selector, 
+                cards => cards.map(c => {
+                    const classList = c.className;
+                    const suitMatch = classList.match(/suit-(\d)/);
+                    const valueMatch = classList.match(/value-(\d+)/);
+                    
+                    const suitMap = { '0': '♠️', '1': '♥️', '2': '♣️', '3': '♦️' };
+                    const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+                    
+                    const suit = suitMap[suitMatch?.[1]] || '';
+                    let value = valueMatch?.[1] || '';
+                    value = valueMap[value] || value;
+                    
+                    return value + suit;
+                })
+            );
+            if (playerCards.length > 0) break;
+        } catch (e) {}
+    }
     
     // Карты дилера
-    const bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child .live-twenty-one-cards .scoreboard-card-games-card', 
-        cards => cards.map(c => {
-            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
-            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
-            
-            const suit = getSuit(suitClass);
-            let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
-            
-            return value + suit;
-        })
-    ).catch(() => []);
+    for (const selector of cardSelectors) {
+        try {
+            bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child ' + selector, 
+                cards => cards.map(c => {
+                    const classList = c.className;
+                    const suitMatch = classList.match(/suit-(\d)/);
+                    const valueMatch = classList.match(/value-(\d+)/);
+                    
+                    const suitMap = { '0': '♠️', '1': '♥️', '2': '♣️', '3': '♦️' };
+                    const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+                    
+                    const suit = suitMap[suitMatch?.[1]] || '';
+                    let value = valueMatch?.[1] || '';
+                    value = valueMap[value] || value;
+                    
+                    return value + suit;
+                })
+            );
+            if (bankerCards.length > 0) break;
+        } catch (e) {}
+    }
     
     const status = await page.$eval('.scoreboard-card-games-board-status', 
         el => el.textContent.trim()
@@ -216,15 +244,13 @@ async function monitorGame(page, gameNumber) {
             const b = parseInt(cards.bScore);
             
             let winner = 'X';
-            if (p > 21 && b <= 21) winner = 'П2';
-            else if (b > 21 && p <= 21) winner = 'П1';
-            else if (p > 21 && b > 21) winner = 'X';
+            if (p > 21 && b <= 21) winner = 'O';
+            else if (b > 21 && p <= 21) winner = 'O';
             else if (p > b) winner = 'П1';
             else if (b > p) winner = 'П2';
             
             let flags = [`#T${total}`];
-            if (p > 21) flags.push('#O');
-            if (b > 21) flags.push('#O');
+            if (p > 21 || b > 21) flags.push('#O');
             if (p === 21 || b === 21) flags.push('#G');
             flags.push(`#${winner}`);
             
@@ -235,7 +261,7 @@ async function monitorGame(page, gameNumber) {
             break;
         }
         
-        // Отправляем при любом изменении
+        // Отправляем при любом изменении счета или количества карт
         const cardsChanged = 
             cards.pScore !== lastCards.pScore ||
             cards.bScore !== lastCards.bScore ||
@@ -281,9 +307,9 @@ async function run() {
         const page = await browser.newPage();
         
         timeout = setTimeout(async () => {
-            console.log(`⏱ 70 секунд прошло, закрываю браузер`);
+            console.log(`⏱ 1 минута прошла, закрываю браузер`);
             if (browser) await browser.close();
-        }, 70000);
+        }, 60000);
         
         await page.goto(URL);
         console.log('Проверяем столы Twenty One...');
@@ -352,7 +378,7 @@ async function run() {
     }
 }
 
-// ===== ЗАДЕРЖКА ДО :02 =====
+// ===== ЗАДЕРЖКА =====
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
@@ -373,7 +399,7 @@ function getDelayToNextGame() {
 (async () => {
     console.log('🤖 Бот Twenty One запущен');
     console.log('🎯 Беру ПЕРВЫЙ активный стол');
-    console.log('⏱ Время жизни браузера: 70 секунд');
+    console.log('⏱ Время жизни браузера: 1 минута');
     console.log('⏱ Запуск в :02 каждой минуты');
     
     const initialDelay = getDelayToNextGame();
