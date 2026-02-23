@@ -141,17 +141,38 @@ async function checkTables(page) {
 
 // ===== ПОЛУЧЕНИЕ КАРТ =====
 async function getCards(page) {
-    // ===== ОТЛАДКА: сохраняем HTML один раз =====
-    if (!global.savedHtml) {
-        try {
-            const html = await page.content();
-            fs.writeFileSync('debug_twentyone.html', html);
-            console.log('💾 HTML сохранен в debug_twentyone.html для анализа');
-            global.savedHtml = true;
-        } catch (e) {
-            console.log('❌ Не удалось сохранить HTML:', e.message);
-        }
+    console.log('🔍 Получаю карты...');
+    
+    // ===== СОХРАНЯЕМ HTML В ФАЙЛ =====
+    try {
+        const html = await page.content();
+        const filePath = './debug_twentyone.html';
+        fs.writeFileSync(filePath, html);
+        console.log(`✅ HTML сохранен в ${filePath}`);
+        console.log(`📄 Размер файла: ${html.length} символов`);
+    } catch (e) {
+        console.log('❌ Ошибка сохранения HTML:', e.message);
     }
+    // ===== КОНЕЦ СОХРАНЕНИЯ =====
+
+    // Пробуем найти карты игрока
+    const playerCards = await page.$$eval('.live-twenty-one-cards__item', 
+        cards => cards.map(c => {
+            console.log('Найдена карта:', c.outerHTML);
+            return 'карта';
+        })
+    ).catch(() => []);
+    
+    console.log(`Найдено карт: ${playerCards.length}`);
+    
+    return {
+        player: [],
+        banker: [],
+        pScore: '0',
+        bScore: '0',
+        status: ''
+    };
+}
     // ===== КОНЕЦ ОТЛАДКИ =====
 
     // Данные игрока (первый игрок)
