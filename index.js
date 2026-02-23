@@ -194,42 +194,54 @@ async function getCards(page) {
 
 // ===== МОНИТОРИНГ ИГРЫ =====
 async function monitorGame(page, gameNumber) {
-    console.log(`🎮 Начинаю мониторинг игры #${gameNumber}`);
+    console.log(`🎮 Мониторинг игры #${gameNumber}`);
     
     let lastCards = { player: [], banker: [], pScore: '0', bScore: '0' };
-    let messageSent = false;
+    let lastMessageText = '';
     
     while (true) {
         const cards = await getCards(page);
+        
+        // Получаем статус (чей ход)
         const gameStatus = await page.$eval('.scoreboard-card-games-board-status', 
             el => el.textContent.trim()
         ).catch(() => '');
         
+        // Проверка завершения
         const isGameOver = await page.evaluate(() => {
             const timer = document.querySelector('.live-twenty-one-table-footer__timer .ui-game-timer__label');
             return timer && timer.textContent.includes('Игра завершена');
         });
         
+        // ЕСЛИ ИГРА ЗАВЕРШЕНА
         if (isGameOver || gameStatus.includes('Победа')) {
             console.log('🏁 Игра завершена');
             
             const total = parseInt(cards.pScore) + parseInt(cards.bScore);
-            const winner = determineWinner(cards.pScore, cards.bScore);
+            const p = parseInt(cards.pScore);
+            const b = parseInt(cards.bScore);
             
-            let message;
-            if (winner === 'П1') {
-                message = `#N${gameNumber} ✅${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
-            } else if (winner === 'П2') {
-                message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ✅${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
-            } else {
-                message = `#N${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) 🔰 ${cards.bScore} (${formatCards(cards.banker)}) #${winner} #T${total}`;
-            }
+            // Определяем победителя
+            let winner = 'X';
+            if (p > 21 && b <= 21) winner = 'O';
+            else if (b > 21 && p <= 21) winner = 'O';
+            else if (p > b) winner = 'П1';
+            else if (b > p) winner = 'П2';
+            
+            // Флаги
+            let flags = [`#T${total}`];
+            if (p > 21 || b > 21) flags.push('#O');
+            if (p === 21 || b === 21) flags.push('#G');
+            flags.push(`#${winner}`);
+            
+            const message = `#N${gameNumber}. ${cards.pScore}(${formatCards(cards.player)}) - ${cards.bScore}(${formatCards(cards.banker)}) ${flags.join(' ')}`;
             
             await sendOrEditTelegram(message);
             await page.waitForTimeout(10000);
             break;
         }
         
+        // ЕСЛИ ИГРА ИДЕТ - проверяем кто ходит
         const cardsChanged = 
             JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
             JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
@@ -237,17 +249,29 @@ async function monitorGame(page, gameNumber) {
             cards.bScore !== lastCards.bScore;
         
         if (cardsChanged) {
-            let statusSymbol = '';
-            if (gameStatus.includes('Ход игрока')) statusSymbol = '🎯';
-            else if (gameStatus.includes('Ход дилера')) statusSymbol = '🎰';
+            // Определяем стрелку
+            let arrow = '';
+            if (gameStatus.includes('Ход игрока')) arrow = '▶';
+            else if (gameStatus.includes('Ход дилера')) arrow = '◀';
             
-            const message = `⏱№${gameNumber} ${cards.pScore} (${formatCards(cards.player)}) - ${cards.bScore} (${formatCards(cards.banker)}) ${statusSymbol}`;
+            let message;
+            if (arrow === '▶') {
+                // Стрелка у игрока
+                message = `⏰#N${gameNumber}. ▶ ${cards.pScore}(${formatCards(cards.player)}) - ${cards.bScore}(${formatCards(cards.banker)})`;
+            } else if (arrow === '◀') {
+                // Стрелка у дилера
+                message = `⏰#N${gameNumber}. ${cards.pScore}(${formatCards(cards.player)}) - ▶ ${cards.bScore}(${formatCards(cards.banker)})`;
+            } else {
+                // Без стрелки
+                message = `⏰#N${gameNumber}. ${cards.pScore}(${formatCards(cards.player)}) - ${cards.bScore}(${formatCards(cards.banker)})`;
+            }
             
-            console.log(`📤 Отправка: ${cards.pScore}-${cards.bScore}`);
-            await sendOrEditTelegram(message);
-            
-            lastCards = { ...cards };
-            messageSent = true;
+            if (message !== lastMessageText) {
+                console.log(`📤 Отправка: ${message}`);
+                await sendOrEditTelegram(message);
+                lastMessageText = message;
+                lastCards = { ...cards };
+            }
         }
         
         await page.waitForTimeout(2000);
