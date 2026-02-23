@@ -12,7 +12,6 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 let lastMessageId = null;
 let lastMessageText = '';
 
-// Загружаем последний номер из файла
 let lastGameNumber = '0';
 if (fs.existsSync(LAST_NUMBER_FILE)) {
     lastGameNumber = fs.readFileSync(LAST_NUMBER_FILE, 'utf8');
@@ -103,7 +102,6 @@ async function checkTables(page) {
         console.log(`Стол ${i+1}: таймер=${hasTimer}, завершена=${isFinished}`);
         
         if (hasTimer && !isFinished) {
-            // Ищем ссылку именно на игру (с -player-dealer)
             const links = await game.$$('a[href*="/ru/live/twentyone/"]');
             let foundLink = null;
             
@@ -126,7 +124,6 @@ async function checkTables(page) {
         }
     }
     
-    // Берем ПЕРВЫЙ активный стол (для очка)
     if (activeGames.length > 0) {
         console.log(`🎯 Беру первый стол (номер ${activeGames[0].number})`);
         return activeGames[0].href;
@@ -136,52 +133,80 @@ async function checkTables(page) {
     return null;
 }
 
-// ===== ПОЛУЧЕНИЕ КАРТ =====
+// ===== УНИВЕРСАЛЬНАЯ ПОЛУЧЕНИЕ КАРТ =====
 async function getCards(page) {
     console.log('🔍 Получаю карты...');
     
-    // Данные игрока (первый игрок)
     const playerScore = await page.$eval('.live-twenty-one-field__player:first-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
     
-    const playerCards = await page.$$eval('.live-twenty-one-field__player:first-child .live-twenty-one-cards .scoreboard-card-games-card', 
-        cards => cards.map(c => {
-            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
-            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
-            
-            const suit = getSuit(suitClass);
-            let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
-            
-            return value + suit;
-        })
-    ).catch(() => []);
-    
-    // Данные дилера (второй игрок)
     const bankerScore = await page.$eval('.live-twenty-one-field__player:last-child .live-twenty-one-field-score__label', 
         el => el.textContent.trim()
     ).catch(() => '0');
     
-    const bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child .live-twenty-one-cards .scoreboard-card-games-card', 
-        cards => cards.map(c => {
-            const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
-            const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
-            
-            const suit = getSuit(suitClass);
-            let value = valueClass ? valueClass.split('-').pop() : '';
-            value = getCardValue(value);
-            
-            return value + suit;
-        })
-    ).catch(() => []);
+    // Пробуем все варианты селекторов карт
+    let playerCards = [];
+    let bankerCards = [];
     
-    // Статус игры
+    const cardSelectors = [
+        '.live-twenty-one-cards .scoreboard-card-games-card',
+        '.live-twenty-one-cards__item',
+        '.scoreboard-card-games-card',
+        '.live-twenty-one-field__player .live-twenty-one-cards .scoreboard-card-games-card'
+    ];
+    
+    // Карты игрока
+    for (const selector of cardSelectors) {
+        try {
+            playerCards = await page.$$eval('.live-twenty-one-field__player:first-child ' + selector, 
+                cards => cards.map(c => {
+                    const classList = c.className;
+                    const suitMatch = classList.match(/suit-(\d)/);
+                    const valueMatch = classList.match(/value-(\d+)/);
+                    
+                    const suitMap = { '0': '♠️', '1': '♥️', '2': '♣️', '3': '♦️' };
+                    const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+                    
+                    const suit = suitMap[suitMatch?.[1]] || '';
+                    let value = valueMatch?.[1] || '';
+                    value = valueMap[value] || value;
+                    
+                    return value + suit;
+                })
+            );
+            if (playerCards.length > 0) break;
+        } catch (e) {}
+    }
+    
+    // Карты дилера
+    for (const selector of cardSelectors) {
+        try {
+            bankerCards = await page.$$eval('.live-twenty-one-field__player:last-child ' + selector, 
+                cards => cards.map(c => {
+                    const classList = c.className;
+                    const suitMatch = classList.match(/suit-(\d)/);
+                    const valueMatch = classList.match(/value-(\d+)/);
+                    
+                    const suitMap = { '0': '♠️', '1': '♥️', '2': '♣️', '3': '♦️' };
+                    const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+                    
+                    const suit = suitMap[suitMatch?.[1]] || '';
+                    let value = valueMatch?.[1] || '';
+                    value = valueMap[value] || value;
+                    
+                    return value + suit;
+                })
+            );
+            if (bankerCards.length > 0) break;
+        } catch (e) {}
+    }
+    
     const status = await page.$eval('.scoreboard-card-games-board-status', 
         el => el.textContent.trim()
     ).catch(() => '');
     
-    console.log(`📊 Счет: ${playerScore}:${bankerScore}, Карты: ${playerCards.length}/${bankerCards.length}`);
+    console.log(`📊 Счет: ${playerScore}:${bankerScore}, Карты игрока: ${playerCards.length}, Карты дилера: ${bankerCards.length}`);
     
     return {
         player: playerCards,
@@ -236,11 +261,12 @@ async function monitorGame(page, gameNumber) {
             break;
         }
         
+        // Отправляем при любом изменении счета или количества карт
         const cardsChanged = 
-            JSON.stringify(cards.player) !== JSON.stringify(lastCards.player) ||
-            JSON.stringify(cards.banker) !== JSON.stringify(lastCards.banker) ||
             cards.pScore !== lastCards.pScore ||
-            cards.bScore !== lastCards.bScore;
+            cards.bScore !== lastCards.bScore ||
+            cards.player.length !== lastCards.player.length ||
+            cards.banker.length !== lastCards.banker.length;
         
         if (cardsChanged) {
             let arrow = '';
@@ -335,7 +361,8 @@ async function run() {
         if (cards.player.length > 0 || cards.banker.length > 0) {
             await monitorGame(page, gameNumber);
         } else {
-            console.log('⚠️ Карты не появились за 12 попыток');
+            console.log('⚠️ Карты не появились за 12 попыток, но пробуем мониторинг');
+            await monitorGame(page, gameNumber);
         }
         
     } catch (e) {
@@ -351,7 +378,7 @@ async function run() {
     }
 }
 
-// ===== ЗАДЕРЖКА ДО СЛЕДУЮЩЕЙ СЕКУНДЫ :02 =====
+// ===== ЗАДЕРЖКА =====
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
@@ -387,7 +414,7 @@ function getDelayToNextGame() {
         const now = new Date();
         console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
         
-        run(); // не ждем завершения
+        run();
         
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
