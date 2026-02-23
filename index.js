@@ -31,13 +31,13 @@ function getCardValue(value) {
     return valueMap[value] || value;
 }
 
-// МАППИНГ МАСТЕЙ ДЛЯ ОЧКА
+// СТАРЫЙ МАППИНГ (неправильный, но работал)
 function getSuit(suitClass) {
     const suitMap = {
-        'suit-0': '♣️',
+        'suit-0': '♠️',
         'suit-1': '♥️',
-        'suit-2': '♦️',
-        'suit-3': '♠️'
+        'suit-2': '♣️',
+        'suit-3': '♦️'
     };
     return suitMap[suitClass] || '';
 }
