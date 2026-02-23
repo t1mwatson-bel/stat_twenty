@@ -103,26 +103,32 @@ async function checkTables(page) {
         console.log(`Стол ${i+1}: таймер=${hasTimer}, завершена=${isFinished}`);
         
         if (hasTimer && !isFinished) {
-            const link = await game.$('a[href*="/ru/live/twentyone/"]');
-            if (link) {
+            // Ищем ссылку именно на игру (с -player-dealer)
+            const links = await game.$$('a[href*="/ru/live/twentyone/"]');
+            let foundLink = null;
+            
+            for (const link of links) {
                 const href = await link.getAttribute('href');
+                if (href.includes('-player-dealer')) {
+                    foundLink = href;
+                    break;
+                }
+            }
+            
+            if (foundLink) {
                 const gameNumber = await game.$eval('.dashboard-game-info__additional-info', 
                     el => el.textContent.trim()
                 ).catch(() => '?');
                 
-                activeGames.push({ index: i, href, number: gameNumber });
+                activeGames.push({ index: i, href: foundLink, number: gameNumber });
                 console.log(`✅ Стол ${i+1} активен! Номер: ${gameNumber}`);
             }
         }
     }
     
-    if (activeGames.length >= 2) {
-        console.log(`🎯 Беру второй стол (номер ${activeGames[1].number})`);
-        return activeGames[1].href;
-    }
-    
-    if (activeGames.length === 1) {
-        console.log(`⚠️ Только один активный стол, беру его (номер ${activeGames[0].number})`);
+    // Берем ПЕРВЫЙ активный стол (для очка)
+    if (activeGames.length > 0) {
+        console.log(`🎯 Беру первый стол (номер ${activeGames[0].number})`);
         return activeGames[0].href;
     }
     
@@ -130,7 +136,7 @@ async function checkTables(page) {
     return null;
 }
 
-// ===== ТВОЯ ФУНКЦИЯ GETCARDS =====
+// ===== ПОЛУЧЕНИЕ КАРТ =====
 async function getCards(page) {
     console.log('🔍 Получаю карты...');
     
@@ -144,12 +150,9 @@ async function getCards(page) {
             const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
             const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
             
-            const suitMap = { 'suit-0': '♠️', 'suit-1': '♥️', 'suit-2': '♣️', 'suit-3': '♦️' };
-            const suit = suitMap[suitClass] || '';
-            
-            const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+            const suit = getSuit(suitClass);
             let value = valueClass ? valueClass.split('-').pop() : '';
-            value = valueMap[value] || value;
+            value = getCardValue(value);
             
             return value + suit;
         })
@@ -165,12 +168,9 @@ async function getCards(page) {
             const suitClass = Array.from(c.classList).find(cls => cls.includes('suit-'));
             const valueClass = Array.from(c.classList).find(cls => cls.includes('value-'));
             
-            const suitMap = { 'suit-0': '♠️', 'suit-1': '♥️', 'suit-2': '♣️', 'suit-3': '♦️' };
-            const suit = suitMap[suitClass] || '';
-            
-            const valueMap = { '1': 'A', '11': 'J', '12': 'Q', '13': 'K', '14': 'A' };
+            const suit = getSuit(suitClass);
             let value = valueClass ? valueClass.split('-').pop() : '';
-            value = valueMap[value] || value;
+            value = getCardValue(value);
             
             return value + suit;
         })
@@ -272,18 +272,18 @@ async function monitorGame(page, gameNumber) {
 async function run() {
     let browser;
     let timeout;
+    const startTime = Date.now();
     
     try {
-        const startTime = new Date();
-        console.log(`\n🟢 Браузер открыт в ${startTime.toLocaleTimeString()}.${startTime.getMilliseconds()}`);
+        console.log(`\n🟢 Браузер открыт в ${new Date().toLocaleTimeString()}.${new Date().getMilliseconds()}`);
         
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         
         timeout = setTimeout(async () => {
-            console.log(`⏱ 2 минуты прошло, закрываю браузер`);
+            console.log(`⏱ 1 минута прошла, закрываю браузер`);
             if (browser) await browser.close();
-        }, 120000);
+        }, 60000);
         
         await page.goto(URL);
         console.log('Проверяем столы Twenty One...');
@@ -344,13 +344,14 @@ async function run() {
         if (timeout) clearTimeout(timeout);
         if (browser) {
             await browser.close();
+            console.log(`🔴 Браузер закрыт в ${new Date().toLocaleTimeString()}.${new Date().getMilliseconds()}, прожил ${(Date.now() - startTime)/1000} сек`);
             lastMessageId = null;
             lastMessageText = '';
         }
     }
 }
 
-// ===== ЗАДЕРЖКА =====
+// ===== ЗАДЕРЖКА ДО СЛЕДУЮЩЕЙ СЕКУНДЫ :02 =====
 function getDelayToNextGame() {
     const now = new Date();
     const seconds = now.getSeconds();
@@ -370,19 +371,24 @@ function getDelayToNextGame() {
 // ===== ЗАПУСК =====
 (async () => {
     console.log('🤖 Бот Twenty One запущен');
-    console.log('🎯 Беру второй активный стол');
-    console.log('📱 Отправка в реальном времени');
+    console.log('🎯 Беру ПЕРВЫЙ активный стол');
+    console.log('⏱ Время жизни браузера: 1 минута');
+    console.log('⏱ Запуск в :02 каждой минуты');
     
     const initialDelay = getDelayToNextGame();
+    const nextRunTime = new Date(Date.now() + initialDelay);
     console.log(`⏱ Первый запуск через ${(initialDelay/1000).toFixed(3)} секунд`);
+    console.log(`⏱ Время первого запуска: ${nextRunTime.toLocaleTimeString()}.${nextRunTime.getMilliseconds()}`);
     
     await new Promise(resolve => setTimeout(resolve, initialDelay));
-    console.log('✅ Запуск каждые 60 секунд');
+    console.log('✅ Синхронизировались! Запуск каждые 60 секунд');
     
     while (true) {
         const now = new Date();
-        console.log(`\n🚀 Запуск в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
-        await run();
+        console.log(`\n🚀 Запуск браузера в ${now.toLocaleTimeString()}.${now.getMilliseconds()}`);
+        
+        run(); // не ждем завершения
+        
         await new Promise(resolve => setTimeout(resolve, 60000));
     }
 })();
