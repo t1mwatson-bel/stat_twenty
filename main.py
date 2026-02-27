@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import logging
-import re
 import os
 import sys
 import json
@@ -8,16 +7,10 @@ import asyncio
 from datetime import datetime, time, timedelta
 from collections import defaultdict, deque
 from telegram import Update
-from telegram.ext import (
-    Application,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import random
 import pytz
 import aiohttp
-from bs4 import BeautifulSoup
 import hashlib
 
 # ======== НАСТРОЙКА ЛОГИРОВАНИЯ ========
@@ -44,17 +37,194 @@ LEAGUES = {
     'france': 7,      # Ligue 1
 }
 
+# ======== УПРАВЛЕНИЕ БАНКОМ ========
+class BankManager:
+    def __init__(self, initial_balance=10000):
+        self.initial_balance = initial_balance
+        self.balance = initial_balance
+        self.bets_history = []
+        self.stats = {
+            'total_bets': 0,
+            'wins': 0,
+            'losses': 0,
+            'total_profit': 0,
+            'max_win_streak': 0,
+            'max_loss_streak': 0,
+            'current_streak': 0,
+            'streak_type': None
+        }
+        self.load_bank()
+    
+    def load_bank(self):
+        """Загружает состояние банка"""
+        try:
+            if os.path.exists('bank_data.json'):
+                with open('bank_data.json', 'r') as f:
+                    data = json.load(f)
+                    self.balance = data.get('balance', self.initial_balance)
+                    self.bets_history = data.get('history', [])
+                    self.stats = data.get('stats', self.stats)
+                    logger.info(f"💰 Банк загружен: {self.balance}")
+        except:
+            pass
+    
+    def save_bank(self):
+        """Сохраняет состояние банка"""
+        try:
+            data = {
+                'balance': self.balance,
+                'history': self.bets_history[-100:],  # последние 100 ставок
+                'stats': self.stats
+            }
+            with open('bank_data.json', 'w') as f:
+                json.dump(data, f, indent=2)
+        except:
+            pass
+    
+    def calculate_stake(self, confidence, odds=None):
+        """Рассчитывает размер ставки по Келли"""
+        # Без коэффициентов ставим фиксированный процент
+        base_stake = self.balance * 0.02  # базовый 2%
+        
+        # Корректируем по уверенности
+        confidence_mult = confidence / 50  # 50% = 1x, 100% = 2x
+        stake = base_stake * min(confidence_mult, 2.0)
+        
+        # Максимум 5% от банка
+        stake = min(stake, self.balance * 0.05)
+        
+        # Минимум 100 (чтобы ставки были)
+        stake = max(stake, 100)
+        
+        return int(stake)
+    
+    def place_bet(self, prediction):
+        """Размещает ставку"""
+        stake = self.calculate_stake(prediction['confidence'], prediction.get('odds'))
+        
+        # Проверяем хватит ли денег
+        if stake > self.balance:
+            stake = self.balance
+            if stake < 100:
+                return None, "❌ Недостаточно средств"
+        
+        bet = {
+            'id': prediction['id'],
+            'match': prediction['match'],
+            'type': prediction['type'],
+            'value': prediction['value'],
+            'confidence': prediction['confidence'],
+            'odds': prediction.get('odds', None),
+            'stake': stake,
+            'balance_before': self.balance,
+            'status': 'pending',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        self.bets_history.append(bet)
+        self.stats['total_bets'] += 1
+        
+        return bet, None
+    
+    def settle_bet(self, bet_id, won):
+        """Расчёт по ставке"""
+        for bet in self.bets_history:
+            if bet['id'] == bet_id and bet['status'] == 'pending':
+                if won:
+                    # Выигрыш
+                    profit = bet['stake'] * (bet['odds'] - 1) if bet['odds'] else bet['stake']
+                    self.balance += profit
+                    bet['profit'] = profit
+                    bet['status'] = 'win'
+                    
+                    self.stats['wins'] += 1
+                    self.stats['total_profit'] += profit
+                    
+                    # Серии
+                    if self.stats['streak_type'] == 'win':
+                        self.stats['current_streak'] += 1
+                    else:
+                        self.stats['streak_type'] = 'win'
+                        self.stats['current_streak'] = 1
+                    
+                    self.stats['max_win_streak'] = max(
+                        self.stats['max_win_streak'], 
+                        self.stats['current_streak']
+                    )
+                    
+                else:
+                    # Проигрыш
+                    self.balance -= bet['stake']
+                    bet['profit'] = -bet['stake']
+                    bet['status'] = 'loss'
+                    
+                    self.stats['losses'] += 1
+                    self.stats['total_profit'] -= bet['stake']
+                    
+                    # Серии
+                    if self.stats['streak_type'] == 'loss':
+                        self.stats['current_streak'] += 1
+                    else:
+                        self.stats['streak_type'] = 'loss'
+                        self.stats['current_streak'] = 1
+                    
+                    self.stats['max_loss_streak'] = max(
+                        self.stats['max_loss_streak'], 
+                        self.stats['current_streak']
+                    )
+                
+                bet['balance_after'] = self.balance
+                self.save_bank()
+                return bet
+        
+        return None
+    
+    def can_bet(self):
+        """Проверяет можно ли ставить"""
+        # Стоп-лосс при просадке 50%
+        drawdown = (self.initial_balance - self.balance) / self.initial_balance
+        if drawdown > 0.5:
+            return False, f"❌ Стоп-лосс: просадка {drawdown:.1%}"
+        
+        # Минимум для ставки
+        if self.balance < 1000:
+            return False, f"❌ Мало денег: {self.balance}"
+        
+        # Если проиграли 3 подряд - снижаем риски
+        if self.stats['streak_type'] == 'loss' and self.stats['current_streak'] >= 3:
+            return True, f"⚠️ Серия поражений {self.stats['current_streak']}, ставки 50%"
+        
+        return True, "✅ Можно ставить"
+    
+    def get_stats(self):
+        """Возвращает статистику"""
+        roi = (self.stats['total_profit'] / self.initial_balance) * 100
+        win_rate = (self.stats['wins'] / max(1, self.stats['total_bets'])) * 100
+        
+        return {
+            'balance': self.balance,
+            'profit': self.stats['total_profit'],
+            'roi': roi,
+            'total_bets': self.stats['total_bets'],
+            'wins': self.stats['wins'],
+            'losses': self.stats['losses'],
+            'win_rate': win_rate,
+            'current_streak': self.stats['current_streak'],
+            'streak_type': self.stats['streak_type'],
+            'max_win_streak': self.stats['max_win_streak'],
+            'max_loss_streak': self.stats['max_loss_streak']
+        }
+
 # ======== ФУТБОЛЬНЫЙ БОТ ========
 class FootballBot:
     def __init__(self):
-        self.matches = {}  # текущие матчи
-        self.history = deque(maxlen=2000)  # история матчей
-        self.memory = self.load_memory()  # память паттернов
+        self.bank = BankManager(initial_balance=10000)
+        self.matches = {}
+        self.history = deque(maxlen=2000)
+        self.memory = self.load_memory()
         self.active_predictions = []
         self.prediction_counter = 0
-        self.stats = {'total': 0, 'success': 0}
         self.session = None
-        self.last_update = datetime.now()
         
     def load_memory(self):
         try:
@@ -64,8 +234,7 @@ class FootballBot:
         except:
             pass
         return {
-            'patterns': {},  # найденные паттерны
-            'situations': {},  # конкретные ситуации
+            'patterns': {},
             'league_stats': defaultdict(lambda: {'total':0, 'goals':0})
         }
     
@@ -82,8 +251,17 @@ class FootballBot:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
     
+    async def get_upcoming_matches(self):
+        """Получает предстоящие матчи на сегодня"""
+        await self.init_session()
+        matches = []
+        
+        # TODO: добавить API для прематча
+        # Пока заглушка
+        return matches
+    
     async def get_live_matches(self):
-        """Получает список live-матчей из топ-5 лиг"""
+        """Получает live-матчи"""
         await self.init_session()
         matches = []
         
@@ -93,7 +271,6 @@ class FootballBot:
                 async with self.session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Парсим матчи
                         for event in data.get('events', []):
                             match = {
                                 'id': event['id'],
@@ -103,6 +280,7 @@ class FootballBot:
                                 'minute': event.get('time', {}).get('current', 0),
                                 'score_home': event['homeScore']['current'],
                                 'score_away': event['awayScore']['current'],
+                                'status': 'live'
                             }
                             matches.append(match)
             except Exception as e:
@@ -111,7 +289,7 @@ class FootballBot:
         return matches
     
     async def get_match_stats(self, match_id):
-        """Получает детальную статистику матча"""
+        """Получает статистику матча"""
         await self.init_session()
         try:
             url = f"https://www.sofascore.com/api/v1/event/{match_id}/statistics"
@@ -123,8 +301,21 @@ class FootballBot:
             pass
         return None
     
+    async def get_match_odds(self, match_id):
+        """Получает коэффициенты на матч"""
+        await self.init_session()
+        try:
+            url = f"https://www.sofascore.com/api/v1/event/{match_id}/odds"
+            async with self.session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return self.parse_odds(data)
+        except:
+            pass
+        return None
+    
     def parse_statistics(self, data):
-        """Парсит статистику из ответа API"""
+        """Парсит статистику"""
         stats = {
             'possession_home': 0,
             'possession_away': 0,
@@ -140,8 +331,8 @@ class FootballBot:
                 for item in group.get('statisticsItems', []):
                     name = item.get('name', '').lower()
                     if 'possession' in name:
-                        stats['possession_home'] = item.get('home', '0').replace('%', '')
-                        stats['possession_away'] = item.get('away', '0').replace('%', '')
+                        stats['possession_home'] = float(item.get('home', '0').replace('%', ''))
+                        stats['possession_away'] = float(item.get('away', '0').replace('%', ''))
                     elif 'total shots' in name:
                         stats['shots_total'] = int(item.get('home', 0)) + int(item.get('away', 0))
                     elif 'shots on target' in name:
@@ -154,8 +345,49 @@ class FootballBot:
         
         return stats
     
-    def analyze_match(self, match, stats):
-        """Анализирует матч на предмет "будет ли еще гол" """
+    def parse_odds(self, data):
+        """Парсит коэффициенты"""
+        odds = {}
+        for market in data.get('markets', []):
+            if market.get('name') == 'Total Goals Over/Under':
+                for choice in market.get('choices', []):
+                    name = choice.get('name', '')
+                    if 'Over' in name:
+                        odds['total_over'] = float(choice.get('fractional', 2.0))
+                    elif 'Under' in name:
+                        odds['total_under'] = float(choice.get('fractional', 2.0))
+        return odds
+    
+    def analyze_prematch(self, match, stats, odds):
+        """Анализ матча до начала"""
+        if not stats or not odds:
+            return None
+        
+        signals = []
+        
+        # 1. Сравниваем с букмекером
+        if odds.get('total_over', 2) < 1.8:
+            signals.append(0.2)  # букмекеры верят в тотал
+        
+        # 2. Статистика лиги
+        league_stats = self.memory['league_stats'].get(match['league'], {})
+        if league_stats.get('avg_goals', 2.5) > 2.5:
+            signals.append(0.1)
+        
+        if not signals:
+            return None
+        
+        confidence = min(0.9, 0.5 + sum(signals))
+        
+        return {
+            'type': 'prematch',
+            'value': 'total_over',
+            'confidence': int(confidence * 100),
+            'odds': odds.get('total_over', 2.0)
+        }
+    
+    def analyze_live(self, match, stats):
+        """Анализ live-матча"""
         if not stats:
             return None
         
@@ -164,188 +396,222 @@ class FootballBot:
         score_away = match['score_away']
         total_score = score_home + score_away
         
-        # Не анализируем первые 30 минут и последние 5
         if minute < 30 or minute > 85:
             return None
         
-        # Считаем признаки
         signals = []
         
-        # 1. xG (ожидаемые голы) - если сильно больше текущего счета
+        # 1. xG
         xg_total = stats['xg_home'] + stats['xg_away']
         if xg_total > total_score + 1.0:
-            signals.append(0.3)  # небольшой сигнал
+            signals.append(0.3)
         
-        # 2. Удары в створ
+        # 2. Удары
         if stats['shots_ontarget'] > total_score * 3:
             signals.append(0.2)
         
-        # 3. Владение одной команды > 65%
+        # 3. Владение
         if stats['possession_home'] > 65 or stats['possession_away'] > 65:
             signals.append(0.15)
         
-        # 4. Много угловых
+        # 4. Угловые
         if stats['corners'] > 8:
             signals.append(0.1)
-        
-        # 5. Недавние голы (будем отслеживать через историю)
-        # TODO: добавить проверку
         
         if not signals:
             return None
         
-        # Общая уверенность
         confidence = min(0.9, sum(signals))
         
         return {
-            'confidence': confidence,
+            'type': 'live',
+            'value': 'goal',
+            'confidence': int(confidence * 100),
             'minute': minute,
-            'score': f"{score_home}:{score_away}",
-            'stats': stats
+            'score': f"{score_home}:{score_away}"
         }
     
-    def get_situation_hash(self, match, analysis):
-        """Создает хэш ситуации для обучения"""
-        context = f"{match['league']}_{match['minute']//10}_{analysis['score']}"
-        return hashlib.md5(context.encode()).hexdigest()
-    
     async def check_matches(self, context):
-        """Основной цикл проверки матчей"""
-        logger.info("🔍 Проверка live-матчей...")
+        """Основной цикл проверки"""
+        logger.info("🔍 Проверка матчей...")
         
-        # Получаем текущие матчи
+        # Получаем live-матчи
         live_matches = await self.get_live_matches()
         
         for match in live_matches:
             match_id = match['id']
             
-            # Получаем статистику
+            # Получаем статистику и коэффициенты
             stats = await self.get_match_stats(match_id)
+            odds = await self.get_match_odds(match_id)
+            
             if not stats:
                 continue
             
             # Анализируем
-            analysis = self.analyze_match(match, stats)
+            if match['status'] == 'live':
+                analysis = self.analyze_live(match, stats)
+            else:
+                analysis = self.analyze_prematch(match, stats, odds)
             
-            if analysis and analysis['confidence'] > 0.6:
-                # Проверяем не было ли уже прогноза на этот матч
+            if analysis and analysis['confidence'] > 60:
+                # Проверяем не было ли прогноза
                 if match_id in self.matches:
                     continue
                 
-                # Запоминаем что смотрели этот матч
-                self.matches[match_id] = {
-                    'minute': match['minute'],
-                    'score': analysis['score']
-                }
+                self.matches[match_id] = match
                 
-                # Создаем прогноз
+                # Создаём прогноз
                 await self.create_prediction(match, analysis, context)
-            
-            # Обучаемся на завершенных матчах
-            if match['minute'] > 90 and match_id in self.matches:
-                # Проверяем был ли еще гол после прогноза
-                # TODO: добавить проверку
-                pass
         
         # Чистим старые матчи
-        current_minute = datetime.now().minute
+        current_time = datetime.now()
         self.matches = {k: v for k, v in self.matches.items() 
-                       if current_minute - v['minute'] < 30}
+                       if (current_time - datetime.fromisoformat(str(v.get('time', current_time)))).seconds < 7200}
     
     async def create_prediction(self, match, analysis, context):
-        """Создает и отправляет прогноз"""
+        """Создаёт и отправляет прогноз со ставкой"""
         self.prediction_counter += 1
         pid = self.prediction_counter
         
-        confidence = int(analysis['confidence'] * 100)
+        # Проверяем можно ли ставить
+        can_bet, bet_status = self.bank.can_bet()
         
-        # Определяем эмодзи уверенности
-        if confidence > 80:
+        prediction = {
+            'id': pid,
+            'match': f"{match['home']} - {match['away']}",
+            'type': analysis['type'],
+            'value': analysis['value'],
+            'confidence': analysis['confidence'],
+            'odds': analysis.get('odds')
+        }
+        
+        # Размещаем ставку
+        bet, error = self.bank.place_bet(prediction)
+        if error:
+            logger.warning(f"⚠️ Ставка не размещена: {error}")
+            return
+        
+        # Статистика банка
+        bank_stats = self.bank.get_stats()
+        
+        # Эмодзи уверенности
+        if analysis['confidence'] > 80:
             conf_emoji = "🔥"
-        elif confidence > 70:
+        elif analysis['confidence'] > 70:
             conf_emoji = "⚡"
-        elif confidence > 60:
+        elif analysis['confidence'] > 60:
             conf_emoji = "📊"
         else:
             conf_emoji = "🤔"
         
+        # Предупреждение о серии
+        streak_warning = ""
+        if bank_stats['streak_type'] == 'loss' and bank_stats['current_streak'] >= 2:
+            streak_warning = f"\n⚠️ Серия поражений: {bank_stats['current_streak']}"
+        
+        # Формируем сообщение
         message = (
-            f"⚽ *ПРОГНОЗ НА ГОЛ #{pid}*\n"
+            f"⚽ *ПРОГНОЗ #{pid}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🆚 *{match['home']}* {match['score_home']}:{match['score_away']} *{match['away']}*\n"
-            f"⏱ {match['minute']}' минута\n"
-            f"🏆 {match['league'].title()}\n\n"
-            f"📊 *Статистика:*\n"
-            f"• Владение: {analysis['stats']['possession_home']}% / {analysis['stats']['possession_away']}%\n"
-            f"• xG: {analysis['stats']['xg_home']:.2f} / {analysis['stats']['xg_away']:.2f}\n"
-            f"• Удары в створ: {analysis['stats']['shots_ontarget']}\n"
-            f"• Угловые: {analysis['stats']['corners']}\n\n"
-            f"📈 *Уверенность: {conf_emoji} {confidence}%*\n"
-            f"💬 *Ждем еще гол в этом матче!*\n\n"
+            f"🆚 *{match['home']}* {match.get('score_home', '?')}:{match.get('score_away', '?')} *{match['away']}*\n"
+            f"🏆 {match['league'].title()}\n"
+            f"⏱ {'LIVE' if analysis['type']=='live' else 'ПРЕМАТЧ'}\n\n"
+            f"🎯 *ПРОГНОЗ:* "
+        )
+        
+        if analysis['value'] == 'total_over':
+            message += f"Тотал БОЛЬШЕ 2.5"
+        elif analysis['value'] == 'goal':
+            message += f"Будет еще гол"
+        
+        message += (
+            f"\n📈 *Уверенность:* {conf_emoji} {analysis['confidence']}%\n"
+            f"💰 *Ставка:* {bet['stake']}₽ ({bet['stake']/self.bank.balance*100:.1f}% от банка)\n"
+            f"💳 *Баланс:* {self.bank.balance}₽\n"
+            f"{streak_warning}\n"
+            f"📊 *Статистика:* {bank_stats['wins']}/{bank_stats['total_bets']} "
+            f"({bank_stats['win_rate']:.1f}%) | ROI: {bank_stats['roi']:+.1f}%\n\n"
             f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
         )
         
         try:
-            await context.bot.send_message(
+            sent = await context.bot.send_message(
                 chat_id=OUTPUT_CHANNEL_ID,
                 text=message,
                 parse_mode='Markdown'
             )
-            logger.info(f"📤 Прогноз #{pid} на матч {match['home']} - {match['away']}")
             
+            # Сохраняем прогноз
             self.active_predictions.append({
                 'id': pid,
                 'match_id': match['id'],
-                'minute': match['minute'],
-                'score': analysis['score'],
-                'confidence': confidence,
-                'status': 'pending'
+                'bet_id': bet['id'],
+                'msg_id': sent.message_id,
+                'status': 'pending',
+                'analysis': analysis
             })
             
-            self.stats['total'] += 1
+            logger.info(f"📤 Прогноз #{pid} на матч {match['home']} - {match['away']}")
             
         except Exception as e:
-            logger.error(f"Ошибка отправки прогноза: {e}")
+            logger.error(f"Ошибка отправки: {e}")
+    
+    async def check_results(self, context):
+        """Проверяет результаты ставок"""
+        # TODO: добавить проверку результатов матчей
+        pass
 
 # ======== ИНИЦИАЛИЗАЦИЯ ========
 bot = None
 
 async def start_monitoring(context: ContextTypes.DEFAULT_TYPE):
-    """Запускает мониторинг матчей"""
+    """Запускает мониторинг"""
     global bot
     if not bot:
         bot = FootballBot()
     
     await bot.check_matches(context)
 
-async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневная статистика"""
+async def check_results_job(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет результаты"""
     if bot:
-        total = bot.stats['total']
-        success = bot.stats['success']
-        percent = int(success / max(1, total) * 100) if total > 0 else 0
+        await bot.check_results(context)
+
+async def daily_report(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневный отчёт"""
+    if bot:
+        stats = bot.bank.get_stats()
+        
+        message = (
+            f"📊 *ИТОГИ ДНЯ*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 Баланс: {stats['balance']}₽\n"
+            f"📈 Профит: {stats['profit']:+.0f}₽ ({stats['roi']:+.1f}%)\n"
+            f"🎯 Ставок: {stats['total_bets']}\n"
+            f"✅ Зашло: {stats['wins']}\n"
+            f"❌ Не зашло: {stats['losses']}\n"
+            f"📊 Винрейт: {stats['win_rate']:.1f}%\n\n"
+            f"🔥 Макс. серия побед: {stats['max_win_streak']}\n"
+            f"❄️ Макс. серия поражений: {stats['max_loss_streak']}"
+        )
         
         await context.bot.send_message(
             chat_id=OUTPUT_CHANNEL_ID,
-            text=(
-                f"📊 *ФУТБОЛЬНАЯ СТАТИСТИКА*\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📈 Всего прогнозов: {total}\n"
-                f"✅ Зашло: {success}\n"
-                f"📊 Процент: {percent}%\n"
-                f"🧠 Паттернов: {len(bot.memory.get('patterns', {}))}"
-            ),
+            text=message,
             parse_mode='Markdown'
         )
 
 # ======== MAIN ========
 def main():
     print("\n" + "="*60)
-    print("⚽ ФУТБОЛЬНЫЙ БОТ v1.0")
+    print("⚽ ФУТБОЛЬНЫЙ БОТ v2.0")
     print("="*60)
-    print("✅ Топ-5 лиг: Англия, Испания, Италия, Германия, Франция")
-    print("✅ Прогноз: 'будет ли еще гол'")
-    print("✅ Самообучение на истории")
+    print("✅ LIVE-прогнозы на гол")
+    print("✅ ПРЕМАТЧ-прогнозы на тотал")
+    print("💰 Управление банком")
+    print("📊 Статистика и ROI")
+    print("🔥 Анализ коэффициентов")
     print("="*60)
     
     app = Application.builder().token(TOKEN).build()
@@ -354,9 +620,12 @@ def main():
     if job_queue:
         # Проверяем матчи каждую минуту
         job_queue.run_repeating(start_monitoring, interval=60, first=10)
-        job_queue.run_daily(daily_stats, time=time(23, 59, 0))
+        # Проверяем результаты каждые 5 минут
+        job_queue.run_repeating(check_results_job, interval=300, first=30)
+        # Отчёт раз в день
+        job_queue.run_daily(daily_report, time=time(23, 59, 0))
     
-    logger.info("🚀 Бот запущен и следит за футболом")
+    logger.info("🚀 Бот запущен")
     
     try:
         app.run_polling()
