@@ -29,6 +29,26 @@ if not TOKEN or not OUTPUT_CHANNEL_ID:
     logger.error("❌ Не все переменные окружения заданы!")
     sys.exit(1)
 
+# ======== ЖЁСТКИЙ СБРОС ВЕБХУКА ========
+def force_reset_webhook():
+    """Принудительно сбрасывает вебхук перед запуском"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=true"
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('ok'):
+                logger.info("✅ Вебхук принудительно сброшен")
+            else:
+                logger.warning(f"⚠️ Ошибка сброса вебхука: {data}")
+        else:
+            logger.warning(f"⚠️ HTTP ошибка при сбросе вебхука: {response.status_code}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сбросе вебхука: {e}")
+
+# Вызываем сброс сразу при старте
+force_reset_webhook()
+
 # Топ-5 лиг (ID для Sofascore)
 LEAGUES = {
     'england': 17,    # Premier League
