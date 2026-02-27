@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import asyncio
+import requests  # добавили requests
 from datetime import datetime, time, timedelta
 from collections import defaultdict, deque
 from telegram import Update
