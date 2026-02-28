@@ -88,7 +88,7 @@ class BlackjackBot:
         
         try:
             # URL страницы с 21 (вставь свой)
-            url = "https://nb-bet.com/ru/live/twentyone"
+            url = "https://1xlite-6997737.bar/ru/live/twentyone/2092323-21-classics"
             
             async with self.session.get(url) as resp:
                 if resp.status == 200:
