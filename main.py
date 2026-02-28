@@ -83,49 +83,48 @@ class BlackjackBot:
     
     async def get_live_games(self):
         """Парсит live-столы 21 с сайта"""
-    
-    await self.init_session()
-    games = []
-    
-    try:
-        url = "https://1xlite-6997737.bar/ru/live/twentyone/2092323-21-classics"
+        await self.init_session()
+        games = []
         
-        # Нормальные заголовки, как у браузера
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
+        try:
+            url = "https://1xlite-6997737.bar/ru/live/twentyone/2092323-21-classics"
+            
+            # Нормальные заголовки, как у браузера
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            async with self.session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    
+                    # Сохраняем HTML для отладки (первые 1000 символов)
+                    logger.info(f"HTML получен, длина: {len(html)}")
+                    logger.debug(f"Первые 500 символов: {html[:500]}")
+                    
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Попробуем найти столы по разным классам
+                    tables = soup.find_all('div', class_=re.compile('live-twenty-one|game-table|scoreboard'))
+                    logger.info(f"Найдено возможных столов: {len(tables)}")
+                    
+                    for table in tables:
+                        game = self.parse_game(table)
+                        if game:
+                            games.append(game)
+                    
+                    logger.info(f"📊 Распарсено столов: {len(games)}")
+                else:
+                    logger.error(f"❌ Ошибка загрузки страницы: {resp.status}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга: {e}")
         
-        async with self.session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                html = await resp.text()
-                
-                # Сохраняем HTML для отладки (первые 1000 символов)
-                logger.info(f"HTML получен, длина: {len(html)}")
-                logger.debug(f"Первые 500 символов: {html[:500]}")
-                
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Попробуем найти столы по разным классам
-                tables = soup.find_all('div', class_=re.compile('live-twenty-one|game-table|scoreboard'))
-                logger.info(f"Найдено возможных столов: {len(tables)}")
-                
-                for table in tables:
-                    game = self.parse_game(table)
-                    if game:
-                        games.append(game)
-                
-                logger.info(f"📊 Распарсено столов: {len(games)}")
-            else:
-                logger.error(f"❌ Ошибка загрузки страницы: {resp.status}")
-                
-    except Exception as e:
-        logger.error(f"❌ Ошибка парсинга: {e}")
-    
-    return games
+        return games
     
     def parse_game(self, table):
         """Парсит одну раздачу"""
