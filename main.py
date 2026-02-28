@@ -258,32 +258,32 @@ class FootballBot:
         return matches
     
     async def get_live_matches(self):
-        """Получает live-матчи топ-5 лиг"""
-        await self.init_session()
-        matches = []
-        
-        for league_name, league_id in LEAGUES.items():
-            try:
-                url = f"https://www.sofascore.com/api/v1/event/{league_id}/live"
-                async with self.session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for event in data.get('events', []):
-                            match = {
-                                'id': event['id'],
-                                'home': event['homeTeam']['name'],
-                                'away': event['awayTeam']['name'],
-                                'league': league_name,
-                                'minute': event.get('time', {}).get('current', 0),
-                                'score_home': event['homeScore']['current'],
-                                'score_away': event['awayScore']['current'],
-                                'status': 'live'
-                            }
-                            matches.append(match)
-            except Exception as e:
-                logger.error(f"Ошибка получения live-матчей для {league_name}: {e}")
-        
-        return matches
+    """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
+    await self.init_session()
+    matches = []
+    
+    try:
+        url = "https://www.sofascore.com/api/v1/sport/football/events/live"
+        async with self.session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                for event in data.get('events', []):
+                    match = {
+                        'id': event['id'],
+                        'home': event['homeTeam']['name'],
+                        'away': event['awayTeam']['name'],
+                        'league': event.get('tournament', {}).get('name', 'Unknown'),
+                        'minute': event.get('time', {}).get('current', 0),
+                        'score_home': event['homeScore']['current'],
+                        'score_away': event['awayScore']['current'],
+                        'status': 'live'
+                    }
+                    matches.append(match)
+    except Exception as e:
+        logger.error(f"Ошибка получения live-матчей: {e}")
+    
+    logger.info(f"📊 Найдено live-матчей: {len(matches)}")
+    return matches
     
     async def get_match_stats(self, match_id):
         """Получает статистику матча"""
