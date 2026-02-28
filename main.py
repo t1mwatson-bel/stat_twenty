@@ -89,7 +89,6 @@ class BlackjackBot:
         try:
             url = "https://1xlite-6997737.bar/ru/live/twentyone/2092323-21-classics"
             
-            # Нормальные заголовки, как у браузера
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -102,15 +101,13 @@ class BlackjackBot:
                 if resp.status == 200:
                     html = await resp.text()
                     
-                    # Сохраняем HTML для отладки (первые 1000 символов)
                     logger.info(f"HTML получен, длина: {len(html)}")
-                    logger.debug(f"Первые 500 символов: {html[:500]}")
                     
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Попробуем найти столы по разным классам
-                    tables = soup.find_all('div', class_=re.compile('live-twenty-one|game-table|scoreboard'))
-                    logger.info(f"Найдено возможных столов: {len(tables)}")
+                    # Ищем все столы по новому классу
+                    tables = soup.find_all('div', class_='scoreboard-card-games-board')
+                    logger.info(f"Найдено столов: {len(tables)}")
                     
                     for table in tables:
                         game = self.parse_game(table)
@@ -129,16 +126,32 @@ class BlackjackBot:
     def parse_game(self, table):
         """Парсит одну раздачу"""
         try:
-            # Статус игры
-            status_elem = table.find('span', class_='ui-game-timer__label')
-            status = status_elem.text.strip() if status_elem else "Идет"
+            # Ищем блок с таблицей внутри стола
+            table_block = table.find('div', class_='scoreboard-card-game-board table')
+            if not table_block:
+                return None
             
-            # Результат (если есть)
-            result_elem = table.find('span', class_='scoreboard-card-games-board-status')
-            result = result_elem.text.strip() if result_elem else None
+            # Статус игры (в подвале)
+            footer = table_block.find('div', class_='live-twenty-one-table-footer')
+            status = "Идет"
+            if footer:
+                status_elem = footer.find('span', class_='ui-game-timer__label')
+                status = status_elem.text.strip() if status_elem else "Идет"
             
-            # Поиск блоков игрока и дилера
-            players = table.find_all('div', class_='live-twenty-one-field__player')
+            # Заголовок (результат)
+            head = table_block.find('div', class_='live-twenty-one-table-head')
+            result = None
+            if head:
+                result_elem = head.find('span', class_='scoreboard-card-games-board-status')
+                result = result_elem.text.strip() if result_elem else None
+            
+            # Поле с картами
+            field = table_block.find('div', class_='live-twenty-one-field')
+            if not field:
+                return None
+            
+            # Ищем игроков
+            players = field.find_all('div', class_='live-twenty-one-field-player')
             if len(players) < 2:
                 return None
             
@@ -146,32 +159,40 @@ class BlackjackBot:
             dealer_block = players[1]
             
             # Очки игрока
-            player_score_elem = player_block.find('span', class_='live-twenty-one-field-score__label')
-            player_score = int(player_score_elem.text) if player_score_elem else 0
+            player_score_elem = player_block.find('div', class_='live-twenty-one-field-score')
+            player_score = 0
+            if player_score_elem:
+                score_label = player_score_elem.find('span', class_='live-twenty-one-field-score__label')
+                player_score = int(score_label.text) if score_label else 0
             
             # Очки дилера
-            dealer_score_elem = dealer_block.find('span', class_='live-twenty-one-field-score__label')
-            dealer_score = int(dealer_score_elem.text) if dealer_score_elem else 0
+            dealer_score_elem = dealer_block.find('div', class_='live-twenty-one-field-score')
+            dealer_score = 0
+            if dealer_score_elem:
+                score_label = dealer_score_elem.find('span', class_='live-twenty-one-field-score__label')
+                dealer_score = int(score_label.text) if score_label else 0
             
             # Карты игрока
             player_cards = []
-            player_card_elems = player_block.find_all('div', class_='scoreboard-card-games-card')
-            
-            for card in player_card_elems:
-                card_info = self.parse_card(card)
-                if card_info:
-                    player_cards.append(card_info)
+            player_cards_block = player_block.find('div', class_='live-twenty-one-cards')
+            if player_cards_block:
+                player_card_elems = player_cards_block.find_all('div', class_='scoreboard-card-games-card')
+                for card in player_card_elems:
+                    card_info = self.parse_card(card)
+                    if card_info:
+                        player_cards.append(card_info)
             
             # Карты дилера
             dealer_cards = []
-            dealer_card_elems = dealer_block.find_all('div', class_='scoreboard-card-games-card')
+            dealer_cards_block = dealer_block.find('div', class_='live-twenty-one-cards')
+            if dealer_cards_block:
+                dealer_card_elems = dealer_cards_block.find_all('div', class_='scoreboard-card-games-card')
+                for card in dealer_card_elems:
+                    card_info = self.parse_card(card)
+                    if card_info:
+                        dealer_cards.append(card_info)
             
-            for card in dealer_card_elems:
-                card_info = self.parse_card(card)
-                if card_info:
-                    dealer_cards.append(card_info)
-            
-            # Определяем победителя, если игра завершена
+            # Определяем победителя
             winner = None
             if status == "Игра завершена" and result:
                 if "Победа игрока" in result:
