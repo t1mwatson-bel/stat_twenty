@@ -82,7 +82,7 @@ class BlackjackBot:
             })
     
     async def get_live_games(self):
-    """Парсит live-столы 21 с сайта"""
+        """Парсит live-столы 21 с сайта"""
     await self.init_session()
     games = []
     
