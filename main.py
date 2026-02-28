@@ -258,7 +258,7 @@ class FootballBot:
         return matches
     
     async def get_live_matches(self):
-    """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
+        """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
     await self.init_session()
     matches = []
     
