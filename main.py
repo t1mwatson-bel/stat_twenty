@@ -29,13 +29,14 @@ if not TOKEN or not OUTPUT_CHANNEL_ID:
     logger.error("❌ Не все переменные окружения заданы!")
     sys.exit(1)
 
-# Топ-5 лиг (только для прематча)
+# Топ-5 лиг (ID для MyScore)
+# ID можно посмотреть в URL матча на myscore.ru
 PREMATCH_LEAGUES = {
-    'england': 17,    # Premier League
-    'spain': 8,       # La Liga
-    'italy': 11,      # Serie A
-    'germany': 10,    # Bundesliga
-    'france': 7,      # Ligue 1
+    'england': 'england/premier-league',
+    'spain': 'spain/laliga',
+    'italy': 'italy/serie-a',
+    'germany': 'germany/bundesliga',
+    'france': 'france/ligue-1',
 }
 
 # ======== УПРАВЛЕНИЕ БАНКОМ ========
@@ -193,7 +194,7 @@ class BankManager:
             'max_loss_streak': self.stats['max_loss_streak']
         }
 
-# ======== ФУТБОЛЬНЫЙ БОТ ========
+# ======== ФУТБОЛЬНЫЙ БОТ (MYSCORE) ========
 class FootballBot:
     def __init__(self):
         self.bank = BankManager(initial_balance=10000)
@@ -226,72 +227,77 @@ class FootballBot:
     async def init_session(self):
         if not self.session:
             self.session = aiohttp.ClientSession(headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
             })
     
-    # ===== LIVE - ВСЕ МАТЧИ МИРА =====
+    # ===== LIVE - ВСЕ МАТЧИ МИРА через MyScore =====
     async def get_live_matches(self):
-        """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
+        """Получает ВСЕ live-матчи через MyScore"""
         await self.init_session()
         matches = []
         
         try:
-            url = "https://www.sofascore.com/api/v1/sport/football/events/live"
+            # MyScore API для live матчей
+            url = "https://api.myscore.ru/v1/live/football"
             async with self.session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    
                     for event in data.get('events', []):
                         match = {
                             'id': event['id'],
-                            'home': event['homeTeam']['name'],
-                            'away': event['awayTeam']['name'],
-                            'league': event.get('tournament', {}).get('name', 'Unknown'),
+                            'home': event['home']['name'],
+                            'away': event['away']['name'],
+                            'league': event['tournament']['name'],
                             'minute': event.get('time', {}).get('current', 0),
-                            'score_home': event['homeScore']['current'],
-                            'score_away': event['awayScore']['current'],
+                            'score_home': event['scores']['home'],
+                            'score_away': event['scores']['away'],
                             'status': 'live'
                         }
                         matches.append(match)
+                else:
+                    logger.error(f"Ошибка MyScore API: {resp.status}")
+                    
         except Exception as e:
             logger.error(f"Ошибка получения live-матчей: {e}")
         
         logger.info(f"📊 Найдено live-матчей: {len(matches)}")
         return matches
     
-    # ===== ПРЕМАТЧ - ТОЛЬКО ТОП-5 ЛИГ =====
+    # ===== ПРЕМАТЧ - ТОЛЬКО ТОП-5 ЛИГ через MyScore =====
     async def get_upcoming_matches(self):
-        """Получает предстоящие матчи топ-5 лиг"""
+        """Получает предстоящие матчи топ-5 лиг через MyScore"""
         await self.init_session()
         matches = []
         today = datetime.now().strftime('%Y-%m-%d')
         
-        for league_name, league_id in PREMATCH_LEAGUES.items():
+        for league_name, league_path in PREMATCH_LEAGUES.items():
             try:
-                url = f"https://www.sofascore.com/api/v1/event/{league_id}/date/{today}"
+                url = f"https://api.myscore.ru/v1/fixtures/{league_path}/{today}"
                 async with self.session.get(url) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for event in data.get('events', []):
-                            if event['status']['type'] == 'notstarted':
-                                match = {
-                                    'id': event['id'],
-                                    'home': event['homeTeam']['name'],
-                                    'away': event['awayTeam']['name'],
-                                    'league': league_name,
-                                    'start_time': event['startTimestamp'],
-                                    'status': 'upcoming'
-                                }
-                                matches.append(match)
+                            match = {
+                                'id': event['id'],
+                                'home': event['home']['name'],
+                                'away': event['away']['name'],
+                                'league': league_name,
+                                'start_time': event['timestamp'],
+                                'status': 'upcoming'
+                            }
+                            matches.append(match)
             except Exception as e:
                 logger.error(f"Ошибка получения прематча для {league_name}: {e}")
         
         return matches
     
     async def get_match_stats(self, match_id):
-        """Получает статистику матча"""
+        """Получает статистику матча через MyScore"""
         await self.init_session()
         try:
-            url = f"https://www.sofascore.com/api/v1/event/{match_id}/statistics"
+            url = f"https://api.myscore.ru/v1/match/{match_id}/statistics"
             async with self.session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -301,10 +307,10 @@ class FootballBot:
         return None
     
     async def get_match_odds(self, match_id):
-        """Получает коэффициенты на матч"""
+        """Получает коэффициенты через MyScore"""
         await self.init_session()
         try:
-            url = f"https://www.sofascore.com/api/v1/event/{match_id}/odds"
+            url = f"https://api.myscore.ru/v1/match/{match_id}/odds"
             async with self.session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -314,6 +320,7 @@ class FootballBot:
         return None
     
     def parse_statistics(self, data):
+        """Парсит статистику из формата MyScore"""
         stats = {
             'possession_home': 0,
             'possession_away': 0,
@@ -324,35 +331,32 @@ class FootballBot:
             'xg_away': 0,
         }
         
-        for period in data.get('statistics', []):
-            for group in period.get('groups', []):
-                for item in group.get('statisticsItems', []):
-                    name = item.get('name', '').lower()
-                    if 'possession' in name:
-                        stats['possession_home'] = float(item.get('home', '0').replace('%', ''))
-                        stats['possession_away'] = float(item.get('away', '0').replace('%', ''))
-                    elif 'total shots' in name:
-                        stats['shots_total'] = int(item.get('home', 0)) + int(item.get('away', 0))
-                    elif 'shots on target' in name:
-                        stats['shots_ontarget'] = int(item.get('home', 0)) + int(item.get('away', 0))
-                    elif 'corner' in name:
-                        stats['corners'] = int(item.get('home', 0)) + int(item.get('away', 0))
-                    elif 'xg' in name:
-                        stats['xg_home'] = float(item.get('home', 0))
-                        stats['xg_away'] = float(item.get('away', 0))
+        for stat in data.get('statistics', []):
+            if 'ball_possession' in stat:
+                stats['possession_home'] = stat['home']
+                stats['possession_away'] = stat['away']
+            elif 'total_shots' in stat:
+                stats['shots_total'] = stat['home'] + stat['away']
+            elif 'shots_on_target' in stat:
+                stats['shots_ontarget'] = stat['home'] + stat['away']
+            elif 'corners' in stat:
+                stats['corners'] = stat['home'] + stat['away']
+            elif 'expected_goals' in stat:
+                stats['xg_home'] = stat['home']
+                stats['xg_away'] = stat['away']
         
         return stats
     
     def parse_odds(self, data):
+        """Парсит коэффициенты из формата MyScore"""
         odds = {}
         for market in data.get('markets', []):
-            if market.get('name') == 'Total Goals Over/Under':
-                for choice in market.get('choices', []):
-                    name = choice.get('name', '')
-                    if 'Over' in name:
-                        odds['total_over'] = float(choice.get('fractional', 2.0))
-                    elif 'Under' in name:
-                        odds['total_under'] = float(choice.get('fractional', 2.0))
+            if market['name'] == 'Total Over/Under 2.5':
+                for outcome in market['outcomes']:
+                    if outcome['type'] == 'over':
+                        odds['total_over'] = outcome['value']
+                    elif outcome['type'] == 'under':
+                        odds['total_under'] = outcome['value']
         return odds
     
     def analyze_match(self, match, stats, odds, is_live):
@@ -613,10 +617,10 @@ force_reset_webhook()
 # ======== MAIN ========
 def main():
     print("\n" + "="*60)
-    print("⚽ ФУТБОЛЬНЫЙ БОТ v3.0")
+    print("⚽ ФУТБОЛЬНЫЙ БОТ v3.0 (MyScore)")
     print("="*60)
-    print("🌍 LIVE: все матчи мира")
-    print("🏆 ПРЕМАТЧ: топ-5 лиг (Англия, Испания, Италия, Германия, Франция)")
+    print("🌍 LIVE: все матчи мира через MyScore")
+    print("🏆 ПРЕМАТЧ: топ-5 лиг")
     print("⚡ LIVE: прогноз на +1 гол")
     print("📊 ПРЕМАТЧ: тотал БОЛЬШЕ 2.5")
     print("💰 Управление банком")
