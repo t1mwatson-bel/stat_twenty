@@ -29,8 +29,8 @@ if not TOKEN or not OUTPUT_CHANNEL_ID:
     logger.error("❌ Не все переменные окружения заданы!")
     sys.exit(1)
 
-# Топ-5 лиг (ID для Sofascore)
-LEAGUES = {
+# Топ-5 лиг (только для прематча)
+PREMATCH_LEAGUES = {
     'england': 17,    # Premier League
     'spain': 8,       # La Liga
     'italy': 11,      # Serie A
@@ -229,13 +229,43 @@ class FootballBot:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             })
     
+    # ===== LIVE - ВСЕ МАТЧИ МИРА =====
+    async def get_live_matches(self):
+        """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
+        await self.init_session()
+        matches = []
+        
+        try:
+            url = "https://www.sofascore.com/api/v1/sport/football/events/live"
+            async with self.session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for event in data.get('events', []):
+                        match = {
+                            'id': event['id'],
+                            'home': event['homeTeam']['name'],
+                            'away': event['awayTeam']['name'],
+                            'league': event.get('tournament', {}).get('name', 'Unknown'),
+                            'minute': event.get('time', {}).get('current', 0),
+                            'score_home': event['homeScore']['current'],
+                            'score_away': event['awayScore']['current'],
+                            'status': 'live'
+                        }
+                        matches.append(match)
+        except Exception as e:
+            logger.error(f"Ошибка получения live-матчей: {e}")
+        
+        logger.info(f"📊 Найдено live-матчей: {len(matches)}")
+        return matches
+    
+    # ===== ПРЕМАТЧ - ТОЛЬКО ТОП-5 ЛИГ =====
     async def get_upcoming_matches(self):
         """Получает предстоящие матчи топ-5 лиг"""
         await self.init_session()
         matches = []
         today = datetime.now().strftime('%Y-%m-%d')
         
-        for league_name, league_id in LEAGUES.items():
+        for league_name, league_id in PREMATCH_LEAGUES.items():
             try:
                 url = f"https://www.sofascore.com/api/v1/event/{league_id}/date/{today}"
                 async with self.session.get(url) as resp:
@@ -256,34 +286,6 @@ class FootballBot:
                 logger.error(f"Ошибка получения прематча для {league_name}: {e}")
         
         return matches
-    
-    async def get_live_matches(self):
-        """Получает ВСЕ live-матчи с Sofascore (все лиги мира)"""
-    await self.init_session()
-    matches = []
-    
-    try:
-        url = "https://www.sofascore.com/api/v1/sport/football/events/live"
-        async with self.session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                for event in data.get('events', []):
-                    match = {
-                        'id': event['id'],
-                        'home': event['homeTeam']['name'],
-                        'away': event['awayTeam']['name'],
-                        'league': event.get('tournament', {}).get('name', 'Unknown'),
-                        'minute': event.get('time', {}).get('current', 0),
-                        'score_home': event['homeScore']['current'],
-                        'score_away': event['awayScore']['current'],
-                        'status': 'live'
-                    }
-                    matches.append(match)
-    except Exception as e:
-        logger.error(f"Ошибка получения live-матчей: {e}")
-    
-    logger.info(f"📊 Найдено live-матчей: {len(matches)}")
-    return matches
     
     async def get_match_stats(self, match_id):
         """Получает статистику матча"""
@@ -428,12 +430,12 @@ class FootballBot:
         """Основной цикл проверки"""
         logger.info("🔍 Проверка матчей...")
         
-        # Получаем live-матчи
+        # Получаем live-матчи (ВСЕ)
         live_matches = await self.get_live_matches()
         for match in live_matches:
             await self.process_match(match, context, is_live=True)
         
-        # Получаем предстоящие матчи
+        # Получаем предстоящие матчи (ТОП-5)
         upcoming_matches = await self.get_upcoming_matches()
         for match in upcoming_matches:
             await self.process_match(match, context, is_live=False)
@@ -501,7 +503,7 @@ class FootballBot:
                 f"⚽ *LIVE ПРОГНОЗ #{pid}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"🆚 *{match['home']}* {match['score_home']}:{match['score_away']} *{match['away']}*\n"
-                f"🏆 {match['league'].title()}\n"
+                f"🏆 {match['league']}\n"
                 f"⏱ {match['minute']}' минута\n\n"
                 f"🎯 *{analysis['text']}*\n"
                 f"📈 *Уверенность:* {conf_emoji} {analysis['confidence']}%\n"
@@ -613,7 +615,8 @@ def main():
     print("\n" + "="*60)
     print("⚽ ФУТБОЛЬНЫЙ БОТ v3.0")
     print("="*60)
-    print("✅ Топ-5 лиг: Англия, Испания, Италия, Германия, Франция")
+    print("🌍 LIVE: все матчи мира")
+    print("🏆 ПРЕМАТЧ: топ-5 лиг (Англия, Испания, Италия, Германия, Франция)")
     print("⚡ LIVE: прогноз на +1 гол")
     print("📊 ПРЕМАТЧ: тотал БОЛЬШЕ 2.5")
     print("💰 Управление банком")
