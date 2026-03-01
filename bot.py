@@ -282,6 +282,8 @@ def monitor_table(table_url, table_id):
     t_num = get_t_number(table_id)
     game_active = True
     cards_appeared = False
+    crash_count = 0
+    max_crashes = 3
 
     # Получаем сохраненный msg_id если есть
     with lock:
@@ -302,13 +304,16 @@ def monitor_table(table_url, table_id):
         driver.get(table_url)
         time.sleep(3)
 
-        while game_active:
+        while game_active and crash_count < max_crashes:
             try:
                 state = get_state(driver)
                 
                 if not state:
                     time.sleep(1)
                     continue
+                
+                # Сброс счетчика крашей при успешном получении состояния
+                crash_count = 0
                 
                 if not cards_appeared:
                     if state['p_cards'] or state['d_cards']:
@@ -362,8 +367,10 @@ def monitor_table(table_url, table_id):
                 time.sleep(2)
 
             except WebDriverException as e:
-                logging.error(f"Драйвер упал для стола {table_id}: {e}")
-                break
+                crash_count += 1
+                logging.error(f"Драйвер упал для стола {table_id} (попытка {crash_count}/{max_crashes}): {e}")
+                time.sleep(3)
+                continue
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
                 time.sleep(2)
