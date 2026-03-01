@@ -49,7 +49,7 @@ active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
 table_drivers = {}  # {table_id: driver}
 last_messages = {}  # {table_id: last_message_text}
-next_table_index = 0  # Счетчик для последовательного выбора столов
+table_counter = 0   # Счетчик для последовательного выбора столов
 lock = threading.Lock()
 
 class GameData:
@@ -320,16 +320,19 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
     return None
 
 def get_next_table(driver):
-    """Получить следующий стол по порядку (начиная с самого старого)"""
-    global next_table_index
+    """Получить следующий стол по порядку (циклически)"""
+    global table_counter
     
     try:
-        WebDriverWait(driver, 10).until(
+        # Ждем загрузки столов
+        WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
         )
         
-        time.sleep(2)
+        # Даем время на полную загрузку
+        time.sleep(3)
         
+        # Получаем все столы
         tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
         logging.info(f"Найдено столов: {len(tables)}")
         
@@ -337,32 +340,47 @@ def get_next_table(driver):
             logging.warning("Нет доступных столов")
             return None, None
         
-        # Если next_table_index выходит за пределы, начинаем сначала
-        if next_table_index >= len(tables):
-            next_table_index = 0
-            logging.info("Сброс индекса столов, начинаем сначала")
+        # Пробуем найти валидный стол (с ID)
+        valid_tables = []
+        for table in tables:
+            try:
+                id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
+                if id_element and id_element.text.strip():
+                    valid_tables.append(table)
+            except:
+                continue
         
-        # Берем следующий стол по порядку
-        table = tables[next_table_index]
-        next_table_index += 1
-        
-        try:
-            id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
-            table_id = id_element.text.strip()
-            
-            link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
-            href = link_element.get_attribute('href')
-            
-            match = re.search(r'(\d+)$', table_id)
-            numeric_id = match.group(1) if match else table_id
-            
-            logging.info(f"Выбран следующий стол: ID {table_id} (индекс {next_table_index-1})")
-            return href, numeric_id
-            
-        except Exception as e:
-            logging.error(f"Ошибка при получении данных стола: {e}")
+        if not valid_tables:
+            logging.warning("Нет валидных столов с ID")
             return None, None
-            
+        
+        logging.info(f"Валидных столов: {len(valid_tables)}")
+        
+        # Если счетчик вышел за пределы, сбрасываем
+        if table_counter >= len(valid_tables):
+            table_counter = 0
+            logging.info("Сброс счетчика столов, начинаем сначала")
+        
+        # Берем следующий стол
+        table = valid_tables[table_counter]
+        current_index = table_counter
+        table_counter += 1
+        
+        # Получаем ID стола
+        id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
+        table_id = id_element.text.strip()
+        
+        # Получаем ссылку
+        link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
+        href = link_element.get_attribute('href')
+        
+        # Извлекаем числовой ID
+        match = re.search(r'(\d+)$', table_id)
+        numeric_id = match.group(1) if match else table_id
+        
+        logging.info(f"Выбран следующий стол: ID {table_id} (индекс {current_index})")
+        return href, numeric_id
+        
     except TimeoutException:
         logging.error("Таймаут при загрузке столов")
         return None, None
@@ -427,6 +445,7 @@ def monitor_table(table_url, table_id):
 
         driver.get(table_url)
         
+        # Ждем загрузки карт
         cards_loaded = False
         wait_start = time.time()
         max_wait = 30
@@ -434,9 +453,8 @@ def monitor_table(table_url, table_id):
         while not cards_loaded and (time.time() - wait_start) < max_wait:
             try:
                 player_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-                dealer_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
                 
-                if len(player_cards) > 0 or len(dealer_cards) > 0:
+                if len(player_cards) > 0:
                     cards_loaded = True
                     logging.info(f"Карты загружены для стола {table_id}")
                     break
@@ -473,7 +491,7 @@ def monitor_table(table_url, table_id):
                     no_response_count += 1
                     if no_response_count >= max_no_response:
                         if is_game_truly_finished(driver):
-                            logging.info(f"Стол {table_id} завершен")
+                            logging.info(f"Стол {table_id} завершен (таймаут)")
                             game_active = False
                             break
                         else:
@@ -484,8 +502,10 @@ def monitor_table(table_url, table_id):
                 last_activity_time = current_time
                 no_response_count = 0
                 
+                # Определяем текущий ход
                 current_turn = determine_turn(state)
                 
+                # Логика отслеживания перехода хода
                 if current_turn is None and last_turn is not None:
                     if not in_transition:
                         in_transition = True
@@ -509,6 +529,7 @@ def monitor_table(table_url, table_id):
                     
                     last_turn = current_turn
                 
+                # Проверка завершения игры
                 if is_game_truly_finished(driver):
                     if not verification_pending:
                         verification_pending = True
@@ -548,6 +569,12 @@ def monitor_table(table_url, table_id):
                 else:
                     verification_pending = False
 
+                # Пропускаем пустые состояния
+                if initial_load and len(state['p_cards']) == 0 and len(state['d_cards']) == 0:
+                    time.sleep(1)
+                    continue
+
+                # Отправка обновлений
                 if state != last_state or initial_load:
                     cards_changed = False
                     if last_state:
@@ -604,6 +631,7 @@ def monitor_table(table_url, table_id):
     except Exception as e:
         logging.error(f"Критическая ошибка: {e}")
     finally:
+        # Финальная проверка перед закрытием
         if driver and game_active:
             try:
                 time.sleep(3)
@@ -692,9 +720,9 @@ def clean_threads():
             logging.info(f"Поток стола {tid} очищен")
 
 def main():
-    global next_table_index
-    next_table_index = 0  # Начинаем с первого стола
-    logging.info("🚀 Бот запущен с последовательным выбором столов")
+    global table_counter
+    table_counter = 0
+    logging.info("🚀 Бот запущен с последовательным выбором столов (каждый новый браузер берет следующий стол)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     while True:
