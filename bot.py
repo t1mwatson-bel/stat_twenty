@@ -10,7 +10,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import telebot
@@ -93,12 +93,20 @@ def get_t_number(table_id):
 # ===== ОСНОВНЫЕ ФУНКЦИИ =====
 
 def create_driver():
+    """Создание драйвера с дополнительными параметрами для стабильности"""
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-software-rasterizer')
+    options.add_argument('--disable-setuid-sandbox')
     options.add_argument('--window-size=1920,1080')
+    options.add_argument('--remote-debugging-port=9222')  # Для отладки
+    options.add_argument('--memory-pressure-off')  # Отключаем давление памяти
+    options.add_argument('--single-process')  # Один процесс
+    options.add_argument('--disable-crash-reporter')  # Отключаем краш-репортер
     options.binary_location = '/usr/bin/chromium'
     
     service = Service('/usr/bin/chromedriver')
@@ -106,10 +114,19 @@ def create_driver():
     try:
         driver = webdriver.Chrome(service=service, options=options)
         driver.set_page_load_timeout(30)
+        driver.implicitly_wait(5)
         return driver
     except Exception as e:
         logging.error(f"Ошибка создания драйвера: {e}")
         return None
+
+def safe_driver_operation(driver, operation, default=None):
+    """Безопасное выполнение операций с драйвером"""
+    try:
+        return operation()
+    except (WebDriverException, AttributeError) as e:
+        logging.error(f"Ошибка драйвера: {e}")
+        return default
 
 def parse_cards(elements):
     cards = []
@@ -162,15 +179,12 @@ def check_special_conditions(state):
     p_score = calculate_score(state['p_cards'])
     d_score = calculate_score(state['d_cards'])
     
-    # #O - 21 очко
     if p_score == 21 or d_score == 21:
         tags.append('#O')
     
-    # #R - по 2 карты
     if len(state['p_cards']) == 2 or len(state['d_cards']) == 2:
         tags.append('#R')
     
-    # #G - золотое очко (два туза)
     if len(state['p_cards']) == 2:
         if state['p_cards'][0][:-1] == 'A' and state['p_cards'][1][:-1] == 'A':
             tags.append('#G')
@@ -178,87 +192,52 @@ def check_special_conditions(state):
     return ' '.join(tags)
 
 def is_turn_indicator(driver, player="player"):
-    """Улучшенное определение хода"""
+    """Определение хода"""
     try:
-        # Для игрока (первый игрок)
         if player == "player":
-            # Ищем различные индикаторы хода у игрока
             selectors = [
                 '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:first-child [class*="turn"]',
                 '.live-twenty-one-field-player:first-child [class*="active"]',
-                '.live-twenty-one-field-player:first-child .ui-game-turn-indicator',
-                # Иногда ход обозначается подсветкой или миганием
-                '.live-twenty-one-field-player:first-child .live-twenty-one-field-score[class*="active"]',
-                '.live-twenty-one-field-player:first-child .scoreboard-card-games-card[class*="active"]'
             ]
-        # Для дилера (второй игрок)
         else:
             selectors = [
                 '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:last-child [class*="turn"]',
                 '.live-twenty-one-field-player:last-child [class*="active"]',
-                '.live-twenty-one-field-player:last-child .ui-game-turn-indicator',
-                '.live-twenty-one-field-player:last-child .live-twenty-one-field-score[class*="active"]',
-                '.live-twenty-one-field-player:last-child .scoreboard-card-games-card[class*="active"]'
             ]
         
         for selector in selectors:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            for element in elements:
-                if element.is_displayed():
-                    # Проверяем, видим ли элемент
-                    return True
-                    
-        # Дополнительная проверка: если у игрока меньше карт, чем должно быть для хода
-        # Это может помочь определить ход по логике игры
-        if player == "player":
-            player_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
-            dealer_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
-            
-            # Если у дилера карт меньше 2, а у игрока уже есть, то ход игрока
-            if dealer_cards < 2 and player_cards >= 2:
+            if elements and elements[0].is_displayed():
                 return True
         
-    except Exception as e:
-        logging.debug(f"Ошибка определения хода для {player}: {e}")
-    
+        # Логика по умолчанию: если карт мало, то ход игрока
+        player_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
+        dealer_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
+        
+        if player == "player" and player_cards < dealer_cards:
+            return True
+        elif player == "dealer" and dealer_cards < player_cards:
+            return True
+        
+    except:
+        pass
     return False
 
 def get_state(driver):
-    """Улучшенное получение состояния с определением хода"""
+    """Получение состояния с защитой от краша"""
     try:
+        # Проверяем, жив ли драйвер
+        driver.current_url
+        
         player_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label').text
         player_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
         dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
         dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
         
-        # Определяем ход
         player_turn = is_turn_indicator(driver, "player")
         dealer_turn = is_turn_indicator(driver, "dealer")
-        
-        # Логика разрешения конфликтов:
-        # Если оба True или оба False, пробуем определить по количеству карт
-        if player_turn == dealer_turn:
-            # По логике игры: ход у того, у кого меньше карт (если игра не завершена)
-            if len(player_cards) < len(dealer_cards):
-                player_turn = True
-                dealer_turn = False
-            elif len(dealer_cards) < len(player_cards):
-                player_turn = False
-                dealer_turn = True
-            else:
-                # Если карт поровну, смотрим на счет
-                try:
-                    p_score_int = int(player_score) if player_score.isdigit() else 0
-                    d_score_int = int(dealer_score) if dealer_score.isdigit() else 0
-                    
-                    # Если у игрока меньше 21 и у дилера меньше 17, то ход игрока
-                    if p_score_int < 21 and d_score_int < 17:
-                        player_turn = True
-                        dealer_turn = False
-                except:
-                    pass
         
         return {
             'p_score': player_score,
@@ -268,6 +247,9 @@ def get_state(driver):
             'player_turn': player_turn,
             'dealer_turn': dealer_turn
         }
+    except WebDriverException as e:
+        logging.error(f"Драйвер упал: {e}")
+        return "CRASHED"
     except Exception as e:
         logging.error(f"Ошибка получения состояния: {e}")
         return None
@@ -289,13 +271,11 @@ def format_message(table_id, state, is_final=False, t_num=None):
     
     if is_final:
         special_tags = check_special_conditions(state)
-        # #N - номер стола, #T - общее количство очков
         if special_tags:
             return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {special_tags}"
         else:
             return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num}"
     else:
-        # ⏰ - игра идет, ▶ - стрелка хода
         if state.get('dealer_turn'):
             return f"⏰#{table_id}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards})"
         else:
@@ -308,6 +288,8 @@ def monitor_table(table_url, table_id):
     t_num = get_t_number(table_id)
     game_active = True
     cards_appeared = False
+    crash_count = 0
+    max_crashes = 3
 
     try:
         driver = create_driver()
@@ -317,32 +299,37 @@ def monitor_table(table_url, table_id):
 
         logging.info(f"Мониторинг стола {table_id} (T{t_num})")
         driver.get(table_url)
-        time.sleep(3)  # Небольшая задержка на загрузку страницы
+        time.sleep(5)
 
-        while game_active:
+        while game_active and crash_count < max_crashes:
             try:
                 state = get_state(driver)
                 
-                if not state:
-                    time.sleep(1)  # Уменьшил до 1 секунды
+                if state == "CRASHED":
+                    crash_count += 1
+                    logging.warning(f"Краш драйвера {table_id}, попытка {crash_count}/{max_crashes}")
+                    time.sleep(3)
                     continue
                 
-                # Проверяем появление карт - без задержки!
+                if not state:
+                    time.sleep(1)
+                    continue
+                
+                # Проверяем появление карт
                 if not cards_appeared:
                     if state['p_cards'] or state['d_cards']:
                         cards_appeared = True
-                        # Сразу отправляем первое сообщение с картами
                         msg = format_message(table_id, state)
                         try:
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
                             last_state = state
-                            logging.info(f"Стол {table_id}: первое сообщение с картами")
+                            logging.info(f"Стол {table_id}: первое сообщение")
                         except Exception as e:
-                            logging.error(f"Ошибка отправки первого сообщения: {e}")
-                    continue  # Продолжаем цикл без задержки
+                            logging.error(f"Ошибка отправки: {e}")
+                    continue
                 
-                # Проверка завершения игры
+                # Проверка завершения
                 if is_game_finished(driver):
                     final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
                     try:
@@ -352,10 +339,10 @@ def monitor_table(table_url, table_id):
                             bot.send_message(CHANNEL_ID, final_msg)
                         logging.info(f"Стол {table_id} завершен")
                     except Exception as e:
-                        logging.error(f"Ошибка отправки финала: {e}")
+                        logging.error(f"Ошибка финала: {e}")
                     break
 
-                # Отправка/обновление сообщения
+                # Обновление
                 if state != last_state:
                     msg = format_message(table_id, state)
                     try:
@@ -365,25 +352,24 @@ def monitor_table(table_url, table_id):
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
                         last_state = state
-                        logging.info(f"Стол {table_id}: {state['p_score']} - {state['d_score']}")
                     except Exception as e:
-                        logging.error(f"Ошибка отправки: {e}")
+                        logging.error(f"Ошибка обновления: {e}")
 
-                time.sleep(1)  # Проверяем каждую секунду
-
-            except Exception as e:
-                logging.error(f"Ошибка в цикле: {e}")
-                time.sleep(1)
+                time.sleep(1.5)
+                crash_count = 0  # Сброс счетчика при успехе
 
             except Exception as e:
-                logging.error(f"Ошибка в цикле: {e}")
+                logging.error(f"Ошибка в цикле {table_id}: {e}")
                 time.sleep(2)
 
     except Exception as e:
-        logging.error(f"Критическая ошибка: {e}")
+        logging.error(f"Критическая ошибка {table_id}: {e}")
     finally:
         if driver:
-            driver.quit()
+            try:
+                driver.quit()
+            except:
+                pass
         with lock:
             if table_id in active_tables:
                 del active_tables[table_id]
