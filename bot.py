@@ -14,6 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import telebot
 import pickle
 import os
+from telebot import apihelper
 
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
@@ -24,6 +25,10 @@ CHECK_INTERVAL = 30
 DATA_FILE = "game_data.pkl"
 DATA_RETENTION_DAYS = 3
 # =====================
+
+# Настройка обработки ошибок Telegram
+apihelper.RETRY_ON_ERROR = True
+apihelper.MAX_RETRIES = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
@@ -45,6 +50,7 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
 table_drivers = {}  # {table_id: driver}
+last_messages = {}  # {table_id: last_message_text} для проверки изменений
 lock = threading.Lock()
 
 class GameData:
@@ -299,6 +305,56 @@ def format_message(table_id, state, is_final=False, t_num=None, table_number=Non
         else:
             return f"⏰#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
+def send_telegram_message_with_retry(chat_id, text, reply_to_message_id=None, parse_mode=None):
+    """Отправка сообщения с повторными попытками при ошибке 429"""
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            return bot.send_message(chat_id, text, reply_to_message_id=reply_to_message_id, parse_mode=parse_mode)
+        except Exception as e:
+            if "429" in str(e):
+                # Извлекаем время ожидания из сообщения об ошибке
+                retry_after = 15
+                match = re.search(r'retry after (\d+)', str(e))
+                if match:
+                    retry_after = int(match.group(1))
+                
+                logging.warning(f"Ошибка 429 при отправке, ожидание {retry_after} сек (попытка {attempt + 1}/{max_retries})")
+                time.sleep(retry_after)
+            else:
+                # Другие ошибки не повторяем
+                raise e
+    
+    raise Exception(f"Не удалось отправить сообщение после {max_retries} попыток")
+
+def edit_telegram_message_with_retry(chat_id, message_id, text, parse_mode=None):
+    """Редактирование сообщения с повторными попытками при ошибке 429 и игнорированием ошибки 400"""
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            return bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode)
+        except Exception as e:
+            if "429" in str(e):
+                # Извлекаем время ожидания из сообщения об ошибке
+                retry_after = 15
+                match = re.search(r'retry after (\d+)', str(e))
+                if match:
+                    retry_after = int(match.group(1))
+                
+                logging.warning(f"Ошибка 429 при редактировании, ожидание {retry_after} сек (попытка {attempt + 1}/{max_retries})")
+                time.sleep(retry_after)
+            elif "400" in str(e) and "message is not modified" in str(e):
+                # Игнорируем ошибку "message is not modified"
+                logging.debug(f"Сообщение не изменилось для стола {chat_id}")
+                return None
+            else:
+                # Другие ошибки не повторяем
+                logging.error(f"Ошибка при редактировании сообщения: {e}")
+                return None
+    
+    logging.error(f"Не удалось отредактировать сообщение после {max_retries} попыток из-за ошибки 429")
+    return None
+
 def monitor_table(table_url, table_id):
     """Мониторинг конкретного стола в отдельном потоке"""
     driver = None
@@ -311,6 +367,8 @@ def monitor_table(table_url, table_id):
     table_number = int(table_id) % 1440
     if table_number == 0:
         table_number = 1440
+    last_send_time = 0
+    min_send_interval = 3  # Минимальный интервал между отправками в секундах
 
     # Проверяем, не была ли уже завершена эта игра
     if game_data.is_game_completed(table_id):
@@ -334,6 +392,8 @@ def monitor_table(table_url, table_id):
 
         while game_active:
             try:
+                current_time = time.time()
+                
                 state = get_state(driver)
                 
                 if not state:
@@ -354,12 +414,18 @@ def monitor_table(table_url, table_id):
                                               t_num=t_num, table_number=table_number)
                     
                     try:
-                        # Редактируем существующее сообщение или отправляем новое
                         with lock:
                             if msg_id:
-                                bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
+                                # Редактируем существующее сообщение
+                                result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                if result is None and "message is not modified" not in str(result):
+                                    # Если редактирование не удалось по другой причине, отправляем новое
+                                    sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
+                                    msg_id = sent.message_id
+                                    message_ids[table_id] = msg_id
                             else:
-                                sent = bot.send_message(CHANNEL_ID, final_msg)
+                                # Отправляем новое сообщение
+                                sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
                                 msg_id = sent.message_id
                                 message_ids[table_id] = msg_id
                         
@@ -375,20 +441,36 @@ def monitor_table(table_url, table_id):
                     break
 
                 # Отправка/редактирование промежуточных результатов
-                if state != last_state:
+                if state != last_state and (current_time - last_send_time) >= min_send_interval:
                     msg = format_message(table_id, state, table_number=table_number)
+                    
+                    # Проверяем, не отправляем ли мы то же сообщение
+                    with lock:
+                        last_msg = last_messages.get(table_id)
+                        if last_msg == msg:
+                            logging.debug(f"Сообщение для стола {table_id} не изменилось, пропускаем")
+                            time.sleep(2)
+                            continue
+                    
                     try:
                         with lock:
                             if msg_id:
                                 # Редактируем существующее сообщение
-                                bot.edit_message_text(msg, CHANNEL_ID, msg_id)
+                                result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
+                                if result is None:
+                                    # Если редактирование вернуло None (ошибка 400), просто продолжаем
+                                    pass
+                                else:
+                                    last_messages[table_id] = msg
                             else:
                                 # Отправляем новое сообщение
-                                sent = bot.send_message(CHANNEL_ID, msg)
+                                sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
                                 msg_id = sent.message_id
                                 message_ids[table_id] = msg_id
+                                last_messages[table_id] = msg
                         
                         last_state = state
+                        last_send_time = current_time
                         
                         # Определяем, кто ходит для лога
                         turn = determine_turn(state)
@@ -396,6 +478,8 @@ def monitor_table(table_url, table_id):
                         logging.info(f"Стол {table_id} обновлен: {turn_symbol} {state['p_score']} - {state['d_score']}")
                     except Exception as e:
                         logging.error(f"Ошибка отправки сообщения для стола {table_id}: {e}")
+                        # Увеличиваем интервал при ошибках
+                        time.sleep(5)
 
                 time.sleep(2)
 
@@ -418,6 +502,8 @@ def monitor_table(table_url, table_id):
                 del active_tables[table_id]
             if table_id in message_ids:
                 del message_ids[table_id]
+            if table_id in last_messages:
+                del last_messages[table_id]
         
         logging.info(f"Мониторинг стола {table_id} завершен, браузер закрыт")
 
@@ -504,6 +590,8 @@ def clean_threads():
             del active_tables[tid]
             if tid in message_ids:
                 del message_ids[tid]
+            if tid in last_messages:
+                del last_messages[tid]
             logging.info(f"Поток и браузер стола {tid} очищены")
 
 def main():
@@ -547,6 +635,7 @@ def main():
             active_tables.clear()
             message_ids.clear()
             table_drivers.clear()
+            last_messages.clear()
 
 if __name__ == "__main__":
     main()
