@@ -47,6 +47,10 @@ message_ids = {}
 game_data = {}
 lock = threading.Lock()
 
+# Для закрепления столов за браузерами
+browser_tables = {0: None, 1: None}  # browser_id: table_id
+browser_lock = threading.Lock()
+
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
 
 def load_game_data():
@@ -187,11 +191,13 @@ def is_turn_indicator(driver, player="player"):
     try:
         if player == "player":
             selectors = [
+                '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:first-child [class*="turn"]',
                 '.live-twenty-one-field-player:first-child [class*="active"]'
             ]
         else:
             selectors = [
+                '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:last-child [class*="turn"]',
                 '.live-twenty-one-field-player:last-child [class*="active"]'
             ]
@@ -199,7 +205,9 @@ def is_turn_indicator(driver, player="player"):
         for selector in selectors:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
             if elements:
-                return True
+                for el in elements:
+                    if el.is_displayed():
+                        return True
     except:
         pass
     return False
@@ -261,186 +269,166 @@ def format_message(table_id, state, is_final=False, t_num=None):
         else:
             return f"⏰#{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
-def monitor_table(table_url, table_id):
-    # Проверяем, не запущен ли уже этот стол
-    with lock:
-        if table_id in active_tables or table_id in message_ids:
-            logging.warning(f"Стол {table_id} уже мониторится, пропускаем")
-            return
+def monitor_fixed_table(browser_id, table_url, table_id):
+    """Мониторинг конкретного стола закрепленного за браузером"""
     
-    driver = None
-    last_state = None
-    msg_id = None
-    t_num = get_t_number(table_id)
-    game_active = True
-    cards_appeared = False
-    start_time = time.time()
-    max_lifetime = 8
+    with browser_lock:
+        browser_tables[browser_id] = table_id
     
-    # Получаем сохраненный msg_id если есть
-    with lock:
-        if table_id in game_data and 'msg_id' in game_data[table_id]:
-            saved_msg_id = game_data[table_id]['msg_id']
-            if saved_msg_id:
-                msg_id = saved_msg_id
-                message_ids[table_id] = saved_msg_id
-                logging.info(f"Стол {table_id}: загружен сохраненный msg_id {saved_msg_id}")
+    while True:
+        driver = None
+        last_state = None
+        msg_id = None
+        t_num = get_t_number(table_id)
+        cards_appeared = False
+        start_time = time.time()
+        max_lifetime = 10  # 10 секунд жизни браузера
 
-    try:
-        driver = create_driver()
-        if not driver:
-            logging.error(f"Не удалось создать драйвер для стола {table_id}")
-            return
+        # Получаем сохраненный msg_id если есть
+        with lock:
+            if table_id in game_data and 'msg_id' in game_data[table_id]:
+                saved_msg_id = game_data[table_id]['msg_id']
+                if saved_msg_id:
+                    msg_id = saved_msg_id
+                    message_ids[table_id] = saved_msg_id
+                    logging.info(f"Браузер {browser_id}: загружен msg_id {saved_msg_id} для стола {table_id}")
 
-        logging.info(f"Мониторинг стола {table_id} (T{t_num})")
-        driver.get(table_url)
-        time.sleep(5)
+        try:
+            driver = create_driver()
+            if not driver:
+                logging.error(f"Браузер {browser_id}: не удалось создать драйвер")
+                time.sleep(5)
+                continue
 
-        while game_active:
-            # Проверка времени жизни
-            if time.time() - start_time > max_lifetime:
-                logging.info(f"Стол {table_id}: время жизни {max_lifetime}с истекло")
-                break
-                
-            try:
-                state = get_state(driver)
-                
-                if not state:
-                    time.sleep(1)
-                    continue
-                
-                if not cards_appeared:
-                    if state['p_cards'] or state['d_cards']:
-                        cards_appeared = True
+            logging.info(f"Браузер {browser_id} начал мониторинг стола {table_id}")
+            driver.get(table_url)
+            time.sleep(3)
+
+            while time.time() - start_time < max_lifetime:
+                try:
+                    state = get_state(driver)
+                    
+                    if not state:
+                        time.sleep(0.5)
+                        continue
+                    
+                    if not cards_appeared:
+                        if state['p_cards'] or state['d_cards']:
+                            cards_appeared = True
+                            msg = format_message(table_id, state)
+                            try:
+                                if msg_id:
+                                    bot.edit_message_text(msg, CHANNEL_ID, msg_id)
+                                    logging.info(f"Браузер {browser_id}: обновлен стол {table_id}")
+                                else:
+                                    sent = bot.send_message(CHANNEL_ID, msg)
+                                    msg_id = sent.message_id
+                                    get_t_number(table_id, msg_id)
+                                    with lock:
+                                        message_ids[table_id] = msg_id
+                                    logging.info(f"Браузер {browser_id}: первый запуск стола {table_id}")
+                                last_state = state
+                            except Exception as e:
+                                logging.error(f"Браузер {browser_id}: ошибка отправки: {e}")
+                        continue
+                    
+                    if is_game_finished(driver):
+                        final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
+                        try:
+                            if msg_id:
+                                bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
+                            else:
+                                bot.send_message(CHANNEL_ID, final_msg)
+                            logging.info(f"Браузер {browser_id}: стол {table_id} завершен")
+                        except Exception as e:
+                            logging.error(f"Браузер {browser_id}: ошибка финала: {e}")
+                        break
+
+                    if state != last_state:
                         msg = format_message(table_id, state)
                         try:
                             if msg_id:
-                                # Редактируем существующее сообщение
                                 bot.edit_message_text(msg, CHANNEL_ID, msg_id)
-                                logging.info(f"Стол {table_id}: сообщение отредактировано (первое)")
                             else:
-                                # Отправляем новое сообщение
                                 sent = bot.send_message(CHANNEL_ID, msg)
                                 msg_id = sent.message_id
-                                get_t_number(table_id, msg_id)  # Сохраняем msg_id
+                                get_t_number(table_id, msg_id)
                                 with lock:
                                     message_ids[table_id] = msg_id
-                                logging.info(f"Стол {table_id}: первое сообщение отправлено")
                             last_state = state
+                            logging.info(f"Браузер {browser_id}: стол {table_id} обновлен")
                         except Exception as e:
-                            logging.error(f"Ошибка отправки первого сообщения: {e}")
-                    continue
-                
-                if is_game_finished(driver):
-                    final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
-                    try:
-                        if msg_id:
-                            bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
-                        else:
-                            bot.send_message(CHANNEL_ID, final_msg)
-                        logging.info(f"Стол {table_id} завершен")
-                    except Exception as e:
-                        logging.error(f"Ошибка отправки финала: {e}")
+                            logging.error(f"Браузер {browser_id}: ошибка обновления: {e}")
+
+                    time.sleep(1)
+
+                except WebDriverException as e:
+                    logging.error(f"Браузер {browser_id}: драйвер упал - {e}")
                     break
+                except Exception as e:
+                    logging.error(f"Браузер {browser_id}: ошибка - {e}")
+                    time.sleep(1)
 
-                if state != last_state:
-                    msg = format_message(table_id, state)
-                    try:
-                        if msg_id:
-                            bot.edit_message_text(msg, CHANNEL_ID, msg_id)
-                        else:
-                            sent = bot.send_message(CHANNEL_ID, msg)
-                            msg_id = sent.message_id
-                            get_t_number(table_id, msg_id)
-                            with lock:
-                                message_ids[table_id] = msg_id
-                        last_state = state
-                        logging.info(f"Стол {table_id} обновлен")
-                    except Exception as e:
-                        logging.error(f"Ошибка отправки: {e}")
-
-                time.sleep(2)
-
-            except WebDriverException as e:
-                logging.error(f"Драйвер упал для стола {table_id}, закрываем и удаляем...")
+        except Exception as e:
+            logging.error(f"Браузер {browser_id}: критическая ошибка - {e}")
+        finally:
+            if driver:
                 try:
                     driver.quit()
                 except:
                     pass
-                driver = None
-                with lock:
-                    if table_id in active_tables:
-                        del active_tables[table_id]
-                    if table_id in message_ids:
-                        del message_ids[table_id]
-                game_active = False
-                break
-                
-            except Exception as e:
-                logging.error(f"Ошибка в цикле: {e}")
-                time.sleep(2)
+            logging.info(f"Браузер {browser_id}: перезапуск через 2 секунды")
+            time.sleep(2)
 
-    except Exception as e:
-        logging.error(f"Критическая ошибка: {e}")
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-        with lock:
-            if table_id in active_tables:
-                del active_tables[table_id]
-            # НЕ удаляем message_ids, чтобы сохранить для следующего запуска
-
-def scan_tables():
+def scan_and_assign_tables():
+    """Сканируем столы и назначаем их браузерам"""
     driver = None
     try:
         driver = create_driver()
         if not driver:
             return
         
-        logging.info("Сканирование столов...")
+        logging.info("Сканирование столов для назначения...")
         driver.get(MAIN_URL)
         time.sleep(5)
 
         links = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block__link')
         ids = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
 
-        new_tables = []
-        for i, link in enumerate(links):
+        available_tables = []
+        for i, link in enumerate(links[:MAX_BROWSERS]):  # Берем только первые MAX_BROWSERS столов
             if i >= len(ids):
                 continue
             raw_id = ids[i].text.strip()
             match = re.search(r'(\d+)$', raw_id)
             table_id = match.group(1) if match else raw_id
             href = link.get_attribute('href')
+            available_tables.append((table_id, href))
 
-            with lock:
-                if table_id in active_tables:
-                    continue
-                # Проверяем, есть ли игра в сохраненных данных
-                if table_id in game_data:
-                    # Игра уже была, возможно сообщение существует
-                    pass
-            new_tables.append((table_id, href))
+        logging.info(f"Найдено столов для назначения: {len(available_tables)}")
 
-        logging.info(f"Найдено новых столов: {len(new_tables)}")
-
-        for table_id, href in new_tables:
-            with lock:
-                if len(active_tables) >= MAX_BROWSERS:
+        # Назначаем столы браузерам
+        with browser_lock:
+            for i, (table_id, href) in enumerate(available_tables):
+                if i >= MAX_BROWSERS:
                     break
                     
-            thread = threading.Thread(target=monitor_table, args=(href, table_id))
-            thread.daemon = True
-            thread.start()
-            
-            with lock:
-                active_tables[table_id] = thread
-            
-            logging.info(f"Запущен мониторинг стола {table_id}")
-            time.sleep(10)
+                # Если браузер уже смотрит другой стол - переназначаем
+                if browser_tables[i] != table_id:
+                    browser_tables[i] = table_id
+                    # Запускаем поток для этого браузера если его нет
+                    thread_name = f"browser_{i}"
+                    thread_exists = False
+                    for t in threading.enumerate():
+                        if t.name == thread_name:
+                            thread_exists = True
+                            break
+                    
+                    if not thread_exists:
+                        thread = threading.Thread(target=monitor_fixed_table, args=(i, href, table_id), name=thread_name)
+                        thread.daemon = True
+                        thread.start()
+                        logging.info(f"Браузер {i} назначен на стол {table_id}")
 
     except Exception as e:
         logging.error(f"Ошибка сканирования: {e}")
@@ -448,24 +436,22 @@ def scan_tables():
         if driver:
             driver.quit()
 
-def clean_threads():
-    with lock:
-        dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
-        for tid in dead:
-            del active_tables[tid]
-            # НЕ удаляем message_ids, так как они сохранены в game_data
-
 def main():
     load_game_data()
-    logging.info("Бот запущен")
+    logging.info("Бот запущен с закрепленными столами")
+    
+    # Запускаем браузеры с начальными столами
+    scan_and_assign_tables()
     
     while True:
         try:
-            clean_threads()
-            scan_tables()
-            with lock:
-                logging.info(f"Активных столов: {len(active_tables)}")
             time.sleep(CHECK_INTERVAL)
+            # Периодически проверяем и переназначаем столы
+            scan_and_assign_tables()
+            
+            with lock:
+                logging.info(f"Активных столов в мониторинге: {len(active_tables)}")
+                
         except KeyboardInterrupt:
             break
         except Exception as e:
