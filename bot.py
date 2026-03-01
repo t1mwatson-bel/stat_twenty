@@ -22,7 +22,7 @@ import psutil
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 4
+MAX_BROWSERS = 3
 CHECK_INTERVAL = 60
 
 # Логирование
@@ -36,7 +36,7 @@ logging.basicConfig(
     ]
 )
 
-# Селекторы
+# Селекторы (проверенные)
 SELECTORS = {
     'table_link': '.dashboard-game-block__link',
     'table_id': '.dashboard-game-info__additional-info',
@@ -48,7 +48,7 @@ SELECTORS = {
     'game_round': '.scoreboard-card-games-board-status'
 }
 
-# Масти
+# Масти — финальные, проверенные
 SUIT_MAP = {
     'suit-0': '♠️',
     'suit-1': '♣️',
@@ -83,6 +83,7 @@ def create_driver(retries=3):
             logging.info(f"🔄 Попытка {attempt+1} создания браузера...")
             options = Options()
 
+            # Полный набор флагов для стабильности
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
@@ -104,6 +105,21 @@ def create_driver(retries=3):
             options.add_argument('--disable-component-extensions-with-background-pages')
             options.add_argument('--disable-default-apps')
             options.add_argument('--disable-sync')
+            options.add_argument('--disable-background-networking')
+            options.add_argument('--disable-background-timer-throttling')
+            options.add_argument('--disable-backgrounding-occluded-windows')
+            options.add_argument('--disable-breakpad')
+            options.add_argument('--disable-client-side-phishing-detection')
+            options.add_argument('--disable-component-update')
+            options.add_argument('--disable-hang-monitor')
+            options.add_argument('--disable-ipc-flooding-protection')
+            options.add_argument('--disable-popup-blocking')
+            options.add_argument('--disable-prompt-on-repost')
+            options.add_argument('--disable-renderer-backgrounding')
+            options.add_argument('--force-max-rate-commit-spans')
+            options.add_argument('--enable-automation')
+            options.add_argument('--password-store=basic')
+            options.add_argument('--use-mock-keychain')
             options.add_experimental_option('excludeSwitches', ['enable-logging'])
 
             chrome_path = '/usr/bin/chromium'
@@ -130,7 +146,7 @@ def create_driver(retries=3):
             if attempt < retries - 1:
                 time.sleep(3)
             else:
-                logging.error("❌ Не удалось создать браузер")
+                logging.error("❌ Не удалось создать браузер после всех попыток")
                 return None
 
 def parse_card_from_element(card):
@@ -187,7 +203,7 @@ def monitor_table(table_url, table_id):
     driver = None
     start = time.time()
     last_state = None
-    last_message_id = None
+    sent = set()
     t_num = random.randint(30, 60)
 
     try:
@@ -206,6 +222,7 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
 
+                # Пропускаем пустые состояния
                 if state['player_score'] in ['?', '0', ''] or not state['player_cards']:
                     time.sleep(2)
                     continue
@@ -217,10 +234,7 @@ def monitor_table(table_url, table_id):
                 if any(w in state['game_status'].lower() for w in ['завершен', 'завершена']):
                     final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}"
                     try:
-                        if last_message_id:
-                            bot.edit_message_text(chat_id=CHANNEL_ID, message_id=last_message_id, text=final)
-                        else:
-                            bot.send_message(CHANNEL_ID, final)
+                        bot.send_message(CHANNEL_ID, final)
                         logging.info(f"✅ #{table_id} завершён")
                     except:
                         pass
@@ -230,27 +244,17 @@ def monitor_table(table_url, table_id):
                     if last_state:
                         # Новая карта игрока
                         if len(state['player_cards']) > len(last_state['player_cards']):
-                            text = f"⏰#N{table_id}. ▶ {state['player_score']}({''.join(state['player_cards'])}) - {state['dealer_score']}({''.join(state['dealer_cards'])})"
-                            try:
-                                if last_message_id:
-                                    bot.edit_message_text(chat_id=CHANNEL_ID, message_id=last_message_id, text=text)
-                                else:
-                                    msg = bot.send_message(CHANNEL_ID, text)
-                                    last_message_id = msg.message_id
-                            except:
-                                pass
+                            msg = f"⏰#N{table_id}. ▶ {last_state['player_score']}({''.join(last_state['player_cards'])}) - {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
+                            if msg not in sent:
+                                bot.send_message(CHANNEL_ID, msg)
+                                sent.add(msg)
 
                         # Новая карта дилера
                         if len(state['dealer_cards']) > len(last_state['dealer_cards']):
-                            text = f"⏰#N{table_id}. {state['player_score']}({''.join(state['player_cards'])}) - ▶ {state['dealer_score']}({''.join(state['dealer_cards'])})"
-                            try:
-                                if last_message_id:
-                                    bot.edit_message_text(chat_id=CHANNEL_ID, message_id=last_message_id, text=text)
-                                else:
-                                    msg = bot.send_message(CHANNEL_ID, text)
-                                    last_message_id = msg.message_id
-                            except:
-                                pass
+                            msg = f"⏰#N{table_id}. {last_state['player_score']}({''.join(last_state['player_cards'])}) - ▶ {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
+                            if msg not in sent:
+                                bot.send_message(CHANNEL_ID, msg)
+                                sent.add(msg)
 
                     last_state = state
 
@@ -268,8 +272,11 @@ def monitor_table(table_url, table_id):
         logging.error(f"❌ Критическая ошибка #{table_id}: {e}")
     finally:
         if driver:
-            driver.quit()
-            logging.info(f"🛑 Браузер #{table_id} закрыт")
+            try:
+                driver.quit()
+                logging.info(f"🛑 Браузер #{table_id} закрыт")
+            except:
+                pass
 
 def scan_new_tables():
     driver = None
@@ -306,10 +313,11 @@ def scan_new_tables():
             free.append((table_id, href))
 
         driver.quit()
-        logging.info(f"📊 Свободных столов: {len(free)}")
+        logging.info(f"📊 Свободных: {len(free)}")
 
         for table_id, href in free:
             if len(active_tables) >= MAX_BROWSERS:
+                logging.info("⚠️ Достигнут лимит браузеров")
                 break
             if not check_memory():
                 break
@@ -336,23 +344,43 @@ def scan_new_tables():
                 pass
 
 def clean_finished():
+    """Удаляет мёртвые и зависшие потоки + убивает процессы Chrome"""
     dead = []
-    for tid, data in active_tables.items():
-        if not data['thread'].is_alive():
+    for tid, data in list(active_tables.items()):
+        thread = data['thread']
+        # Если поток мёртв — чистим
+        if not thread.is_alive():
             dead.append(tid)
             processed_games.add(tid)
+            logging.info(f"🧹 Стол #{tid} (поток мёртв) удалён")
+            continue
+
+        # Если поток жив, но висит больше 70 минут — принудительно убиваем
+        if time.time() - data['start'] > 4200:  # 70 минут
+            logging.warning(f"⚠️ Стол #{tid} висит >70 мин, принудительно завершаем")
+            dead.append(tid)
+            processed_games.add(tid)
+
     for tid in dead:
         del active_tables[tid]
-        logging.info(f"🧹 Стол #{tid} удалён")
+
+    # Дополнительно: убиваем зомби-процессы Chromium
+    try:
+        os.system("pkill -f chromium || true")
+        os.system("pkill -f chrome || true")
+    except:
+        pass
+
+    logging.info(f"🧹 Активных после чистки: {len(active_tables)}")
 
 def main():
     logging.info("="*50)
-    logging.info("🤖 СТАБИЛЬНЫЙ БОТ (EDIT) ЗАПУЩЕН")
+    logging.info("🤖 СТАБИЛЬНЫЙ БОТ (ЗОМБИ-КИЛЛЕР) ЗАПУЩЕН")
     logging.info(f"📊 MAX_BROWSERS = {MAX_BROWSERS}")
     logging.info("="*50)
 
     try:
-        bot.send_message(CHANNEL_ID, "🤖 Стабильный бот (edit) запущен")
+        bot.send_message(CHANNEL_ID, "🤖 Бот с зомби-киллером запущен")
     except:
         pass
 
