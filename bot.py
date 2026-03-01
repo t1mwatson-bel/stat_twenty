@@ -231,28 +231,15 @@ def get_state(driver):
         return None
 
 def is_game_finished(driver):
-    """Проверка что карты больше не набираются"""
     try:
-        # Проверяем статус игры
-        status_elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
-        if status_elements:
-            status_text = status_elements[0].text.lower()
-            if any(word in status_text for word in ['завершен', 'finished', 'ended']):
+        # Проверяем по таймеру
+        timer_elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
+        if timer_elements:
+            timer_text = timer_elements[0].text.strip()
+            # Если текст точно "Игра завершена"
+            if timer_text == "Игра завершена":
+                logging.info(f"Игра завершена: '{timer_text}'")
                 return True
-        
-        # Проверяем количество карт - если у обоих игроков карт больше 2 и счет не меняется
-        player_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-        dealer_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
-        
-        # Если у обоих по 2 карты - игра только началась
-        if len(player_cards) == 2 and len(dealer_cards) == 2:
-            return False
-            
-        # Проверяем, есть ли кнопка новой игры
-        new_game_buttons = driver.find_elements(By.CSS_SELECTOR, '.ui-game-controls__button, [class*="new"], [class*="restart"]')
-        if new_game_buttons:
-            return True
-            
     except:
         pass
     return False
@@ -277,9 +264,9 @@ def format_message(table_id, state, is_final=False, t_num=None):
             return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{total_score}"
     else:
         if state.get('dealer_turn'):
-            return f"⏰#{table_id}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards})"
+            return f"⏰#N{table_id}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards})"
         else:
-            return f"⏰#{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+            return f"⏰#N{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
     # Проверяем, не запущен ли уже этот стол
@@ -294,8 +281,6 @@ def monitor_table(table_url, table_id):
     t_num = get_t_number(table_id)
     game_active = True
     cards_appeared = False
-    no_change_count = 0
-    max_no_change = 3  # Если 3 раза подряд состояние не меняется - игра завершена
 
     # Получаем сохраненный msg_id если есть
     with lock:
@@ -357,7 +342,6 @@ def monitor_table(table_url, table_id):
                         logging.error(f"Ошибка отправки финала: {e}")
                     break
 
-                # Проверяем изменения
                 if state != last_state:
                     msg = format_message(table_id, state)
                     try:
@@ -370,26 +354,9 @@ def monitor_table(table_url, table_id):
                             with lock:
                                 message_ids[table_id] = msg_id
                         last_state = state
-                        no_change_count = 0
                         logging.info(f"Стол {table_id} обновлен")
                     except Exception as e:
                         logging.error(f"Ошибка отправки: {e}")
-                else:
-                    no_change_count += 1
-                    logging.info(f"Стол {table_id}: нет изменений ({no_change_count}/{max_no_change})")
-                    
-                    # Если долго нет изменений - возможно игра зависла
-                    if no_change_count >= max_no_change:
-                        # Проверяем еще раз статус игры
-                        if is_game_finished(driver):
-                            final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
-                            try:
-                                if msg_id:
-                                    bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
-                                logging.info(f"Стол {table_id}: принудительное завершение")
-                            except:
-                                pass
-                            break
 
                 time.sleep(2)
 
@@ -415,7 +382,6 @@ def monitor_table(table_url, table_id):
             # НЕ удаляем message_ids - сохраняем для истории
 
 def scan_tables():
-    """Сканируем и запускаем мониторинг новых столов"""
     driver = None
     try:
         driver = create_driver()
@@ -439,18 +405,15 @@ def scan_tables():
             href = link.get_attribute('href')
 
             with lock:
-                # Проверяем, не мониторим ли уже этот стол
                 if table_id in active_tables or table_id in message_ids:
                     continue
             new_tables.append((table_id, href))
 
         logging.info(f"Найдено новых столов: {len(new_tables)}")
 
-        # Запускаем мониторинг для новых столов, если есть свободные браузеры
         for table_id, href in new_tables:
             with lock:
                 if len(active_tables) >= MAX_BROWSERS:
-                    logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS}), новые столы будут ждать")
                     break
                     
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
@@ -470,7 +433,6 @@ def scan_tables():
             driver.quit()
 
 def clean_threads():
-    """Очищаем завершенные потоки"""
     with lock:
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
