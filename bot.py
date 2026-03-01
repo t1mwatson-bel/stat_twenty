@@ -426,11 +426,14 @@ def scanner_worker():
             for i, link in enumerate(links):
                 if i >= len(ids):
                     continue
-                raw_id = ids[i].text.strip()
-                match = re.search(r'(\d+)$', raw_id)
-                table_id = match.group(1) if match else raw_id
-                href = link.get_attribute('href')
-                tables.append((table_id, href))
+                try:
+                    raw_id = ids[i].text.strip()
+                    match = re.search(r'(\d+)$', raw_id)
+                    table_id = match.group(1) if match else raw_id
+                    href = link.get_attribute('href')
+                    tables.append((table_id, href))
+                except StaleElementReferenceException:
+                    continue
 
             if tables:
                 # Берем последний (нижний) стол
@@ -438,7 +441,7 @@ def scanner_worker():
                 table_id, href = last_table
                 
                 with lock:
-                    if len(monitors) < MAX_MONITORS and table_id not in monitors:
+                    if len(monitors) < MAX_MONITORS and table_id not in monitors and table_id not in message_ids:
                         thread = threading.Thread(target=monitor_table, args=(href, table_id))
                         thread.daemon = True
                         thread.start()
@@ -447,6 +450,9 @@ def scanner_worker():
 
             logging.info(f"Сканер: найдено столов {len(tables)}, мониторов {len(monitors)}/{MAX_MONITORS}")
 
+        except StaleElementReferenceException:
+            logging.warning("Сканер: страница обновилась, пропускаем")
+            continue
         except Exception as e:
             logging.error(f"Сканер: ошибка: {e}")
         finally:
