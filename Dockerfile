@@ -16,7 +16,8 @@ RUN ln -s /usr/bin/chromium /usr/bin/chromium-browser \
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
