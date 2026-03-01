@@ -19,7 +19,7 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
+MAX_BROWSERS = 2
 CHECK_INTERVAL = 30
 DATA_FILE = "game_data.json"
 MAX_DAYS = 3
@@ -45,68 +45,49 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 message_ids = {}
 game_data = {}
-current_t_counter = 1
-t_counter_lock = threading.Lock()
 lock = threading.Lock()
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
 
 def load_game_data():
-    global game_data, current_t_counter
+    global game_data
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 current_time = datetime.now()
                 game_data = {}
-                
-                # Загружаем счетчик T
-                if 't_counter' in data:
-                    current_t_counter = data['t_counter']
-                
-                # Загружаем игры
-                if 'games' in data:
-                    for table_id, info in data['games'].items():
-                        try:
-                            start_time = datetime.fromisoformat(info['start_time'])
-                            if (current_time - start_time) < timedelta(days=MAX_DAYS):
-                                game_data[table_id] = info
-                        except:
-                            continue
-                logging.info(f"Загружено {len(game_data)} активных игр, счетчик T: {current_t_counter}")
+                for table_id, info in data.items():
+                    try:
+                        start_time = datetime.fromisoformat(info['start_time'])
+                        if (current_time - start_time) < timedelta(days=MAX_DAYS):
+                            game_data[table_id] = info
+                    except:
+                        continue
+                logging.info(f"Загружено {len(game_data)} активных игр")
     except Exception as e:
         logging.error(f"Ошибка загрузки данных: {e}")
         game_data = {}
 
 def save_game_data():
     try:
-        data = {
-            't_counter': current_t_counter,
-            'games': game_data
-        }
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(game_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logging.error(f"Ошибка сохранения данных: {e}")
 
-def get_next_t_number():
-    """Получение следующего номера T (от 1 до 1440, циклично)"""
-    global current_t_counter
-    with t_counter_lock:
-        t_num = current_t_counter
-        current_t_counter += 1
-        if current_t_counter > 1440:
-            current_t_counter = 1
-        return t_num
-
-def get_t_number(table_id):
+def get_t_number(table_id, msg_id=None):
     with lock:
         if table_id in game_data:
+            if msg_id:
+                game_data[table_id]['msg_id'] = msg_id
+                save_game_data()
             return game_data[table_id]['t_num']
         else:
-            t_num = get_next_t_number()
+            t_num = random.randint(30, 60)
             game_data[table_id] = {
                 't_num': t_num,
+                'msg_id': msg_id,
                 'start_time': datetime.now().isoformat(),
                 'last_update': datetime.now().isoformat()
             }
@@ -261,11 +242,19 @@ def format_message(table_id, state, is_final=False, t_num=None):
     d_cards = format_cards(state['d_cards'])
     
     if is_final:
+        # Считаем общее количество очков для #T
+        try:
+            p_score_int = int(state['p_score']) if state['p_score'].isdigit() else 0
+            d_score_int = int(state['d_score']) if state['d_score'].isdigit() else 0
+            total_score = p_score_int + d_score_int
+        except:
+            total_score = 0
+            
         special_tags = check_special_conditions(state, is_final=True)
         if special_tags:
-            return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {special_tags}"
+            return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{total_score} {special_tags}"
         else:
-            return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num}"
+            return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{total_score}"
     else:
         if state.get('dealer_turn'):
             return f"⏰#{table_id}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards})"
@@ -285,6 +274,17 @@ def monitor_table(table_url, table_id):
     t_num = get_t_number(table_id)
     game_active = True
     cards_appeared = False
+    start_time = time.time()
+    max_lifetime = 8
+    
+    # Получаем сохраненный msg_id если есть
+    with lock:
+        if table_id in game_data and 'msg_id' in game_data[table_id]:
+            saved_msg_id = game_data[table_id]['msg_id']
+            if saved_msg_id:
+                msg_id = saved_msg_id
+                message_ids[table_id] = saved_msg_id
+                logging.info(f"Стол {table_id}: загружен сохраненный msg_id {saved_msg_id}")
 
     try:
         driver = create_driver()
@@ -297,6 +297,11 @@ def monitor_table(table_url, table_id):
         time.sleep(5)
 
         while game_active:
+            # Проверка времени жизни
+            if time.time() - start_time > max_lifetime:
+                logging.info(f"Стол {table_id}: время жизни {max_lifetime}с истекло")
+                break
+                
             try:
                 state = get_state(driver)
                 
@@ -309,12 +314,19 @@ def monitor_table(table_url, table_id):
                         cards_appeared = True
                         msg = format_message(table_id, state)
                         try:
-                            sent = bot.send_message(CHANNEL_ID, msg)
-                            msg_id = sent.message_id
-                            with lock:
-                                message_ids[table_id] = msg_id
+                            if msg_id:
+                                # Редактируем существующее сообщение
+                                bot.edit_message_text(msg, CHANNEL_ID, msg_id)
+                                logging.info(f"Стол {table_id}: сообщение отредактировано (первое)")
+                            else:
+                                # Отправляем новое сообщение
+                                sent = bot.send_message(CHANNEL_ID, msg)
+                                msg_id = sent.message_id
+                                get_t_number(table_id, msg_id)  # Сохраняем msg_id
+                                with lock:
+                                    message_ids[table_id] = msg_id
+                                logging.info(f"Стол {table_id}: первое сообщение отправлено")
                             last_state = state
-                            logging.info(f"Стол {table_id}: первое сообщение отправлено")
                         except Exception as e:
                             logging.error(f"Ошибка отправки первого сообщения: {e}")
                     continue
@@ -339,6 +351,7 @@ def monitor_table(table_url, table_id):
                         else:
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
+                            get_t_number(table_id, msg_id)
                             with lock:
                                 message_ids[table_id] = msg_id
                         last_state = state
@@ -349,16 +362,20 @@ def monitor_table(table_url, table_id):
                 time.sleep(2)
 
             except WebDriverException as e:
-                logging.error(f"Драйвер упал для стола {table_id}, перезапускаем...")
+                logging.error(f"Драйвер упал для стола {table_id}, закрываем и удаляем...")
                 try:
                     driver.quit()
                 except:
                     pass
-                driver = create_driver()
-                if driver:
-                    driver.get(table_url)
-                    time.sleep(5)
-                continue
+                driver = None
+                with lock:
+                    if table_id in active_tables:
+                        del active_tables[table_id]
+                    if table_id in message_ids:
+                        del message_ids[table_id]
+                game_active = False
+                break
+                
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
                 time.sleep(2)
@@ -374,8 +391,7 @@ def monitor_table(table_url, table_id):
         with lock:
             if table_id in active_tables:
                 del active_tables[table_id]
-            if table_id in message_ids:
-                del message_ids[table_id]
+            # НЕ удаляем message_ids, чтобы сохранить для следующего запуска
 
 def scan_tables():
     driver = None
@@ -401,8 +417,12 @@ def scan_tables():
             href = link.get_attribute('href')
 
             with lock:
-                if table_id in active_tables or table_id in message_ids:
+                if table_id in active_tables:
                     continue
+                # Проверяем, есть ли игра в сохраненных данных
+                if table_id in game_data:
+                    # Игра уже была, возможно сообщение существует
+                    pass
             new_tables.append((table_id, href))
 
         logging.info(f"Найдено новых столов: {len(new_tables)}")
@@ -420,7 +440,7 @@ def scan_tables():
                 active_tables[table_id] = thread
             
             logging.info(f"Запущен мониторинг стола {table_id}")
-            time.sleep(3)
+            time.sleep(10)
 
     except Exception as e:
         logging.error(f"Ошибка сканирования: {e}")
@@ -433,8 +453,7 @@ def clean_threads():
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
             del active_tables[tid]
-            if tid in message_ids:
-                del message_ids[tid]
+            # НЕ удаляем message_ids, так как они сохранены в game_data
 
 def main():
     load_game_data()
