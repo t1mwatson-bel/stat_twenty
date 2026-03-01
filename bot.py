@@ -45,43 +45,66 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 message_ids = {}
 game_data = {}
+current_t_counter = 1
+t_counter_lock = threading.Lock()
 lock = threading.Lock()
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
 
 def load_game_data():
-    global game_data
+    global game_data, current_t_counter
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 current_time = datetime.now()
                 game_data = {}
-                for table_id, info in data.items():
-                    try:
-                        start_time = datetime.fromisoformat(info['start_time'])
-                        if (current_time - start_time) < timedelta(days=MAX_DAYS):
-                            game_data[table_id] = info
-                    except:
-                        continue
-                logging.info(f"Загружено {len(game_data)} активных игр")
+                
+                # Загружаем счетчик T
+                if 't_counter' in data:
+                    current_t_counter = data['t_counter']
+                
+                # Загружаем игры
+                if 'games' in data:
+                    for table_id, info in data['games'].items():
+                        try:
+                            start_time = datetime.fromisoformat(info['start_time'])
+                            if (current_time - start_time) < timedelta(days=MAX_DAYS):
+                                game_data[table_id] = info
+                        except:
+                            continue
+                logging.info(f"Загружено {len(game_data)} активных игр, счетчик T: {current_t_counter}")
     except Exception as e:
         logging.error(f"Ошибка загрузки данных: {e}")
         game_data = {}
 
 def save_game_data():
     try:
+        data = {
+            't_counter': current_t_counter,
+            'games': game_data
+        }
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(game_data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logging.error(f"Ошибка сохранения данных: {e}")
+
+def get_next_t_number():
+    """Получение следующего номера T (от 1 до 1440, циклично)"""
+    global current_t_counter
+    with t_counter_lock:
+        t_num = current_t_counter
+        current_t_counter += 1
+        if current_t_counter > 1440:
+            current_t_counter = 1
+        return t_num
 
 def get_t_number(table_id):
     with lock:
         if table_id in game_data:
             return game_data[table_id]['t_num']
         else:
-            t_num = random.randint(30, 60)
+            t_num = get_next_t_number()
             game_data[table_id] = {
                 't_num': t_num,
                 'start_time': datetime.now().isoformat(),
@@ -157,7 +180,7 @@ def calculate_score(cards):
     
     return score
 
-def check_special_conditions(state):
+def check_special_conditions(state, is_final=False):
     tags = []
     
     p_score = calculate_score(state['p_cards'])
@@ -166,8 +189,12 @@ def check_special_conditions(state):
     if p_score == 21 or d_score == 21:
         tags.append('#O')
     
-    if len(state['p_cards']) == 2 or len(state['d_cards']) == 2:
-        tags.append('#R')
+    if is_final:
+        if len(state['p_cards']) == 2 and len(state['d_cards']) == 2:
+            tags.append('#R')
+    else:
+        if len(state['p_cards']) == 2 or len(state['d_cards']) == 2:
+            tags.append('#R')
     
     if len(state['p_cards']) == 2:
         if state['p_cards'][0][:-1] == 'A' and state['p_cards'][1][:-1] == 'A':
@@ -234,7 +261,7 @@ def format_message(table_id, state, is_final=False, t_num=None):
     d_cards = format_cards(state['d_cards'])
     
     if is_final:
-        special_tags = check_special_conditions(state)
+        special_tags = check_special_conditions(state, is_final=True)
         if special_tags:
             return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {special_tags}"
         else:
@@ -246,6 +273,12 @@ def format_message(table_id, state, is_final=False, t_num=None):
             return f"⏰#{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
+    # Проверяем, не запущен ли уже этот стол
+    with lock:
+        if table_id in active_tables or table_id in message_ids:
+            logging.warning(f"Стол {table_id} уже мониторится, пропускаем")
+            return
+    
     driver = None
     last_state = None
     msg_id = None
