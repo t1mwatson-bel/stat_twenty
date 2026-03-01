@@ -269,6 +269,8 @@ def monitor_table(table_url, table_id):
     cards_appeared = False
     start_time = time.time()
     max_lifetime = 300
+    crash_count = 0
+    max_crashes = 2
 
     # Получаем сохраненный msg_id если есть
     with lock:
@@ -289,13 +291,16 @@ def monitor_table(table_url, table_id):
         driver.get(table_url)
         time.sleep(3)
 
-        while game_active and (time.time() - start_time) < max_lifetime:
+        while game_active and crash_count < max_crashes and (time.time() - start_time) < max_lifetime:
             try:
                 state = get_state(driver)
                 
                 if not state:
                     time.sleep(1)
                     continue
+                
+                # Сброс счетчика при успехе
+                crash_count = 0
                 
                 if not cards_appeared:
                     if state['p_cards'] or state['d_cards']:
@@ -335,11 +340,16 @@ def monitor_table(table_url, table_id):
 
                 time.sleep(2)
 
+            except WebDriverException as e:
+                crash_count += 1
+                logging.error(f"Краш {crash_count}/{max_crashes} для стола {table_id}")
+                time.sleep(3)
+                continue
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
                 time.sleep(2)
 
-        logging.info(f"Стол {table_id}: 5 минут истекли")
+        logging.info(f"Стол {table_id}: завершение работы")
 
     except Exception as e:
         logging.error(f"Критическая ошибка: {e}")
@@ -379,12 +389,11 @@ def scan_tables():
             tables.append((table_id, href))
 
         if tables:
-            # Берем последний стол
             last_table = tables[-1]
             table_id, href = last_table
             
             with lock:
-                if table_id not in active_tables:
+                if len(active_tables) < MAX_BROWSERS and table_id not in active_tables:
                     thread = threading.Thread(target=monitor_table, args=(href, table_id))
                     thread.daemon = True
                     thread.start()
