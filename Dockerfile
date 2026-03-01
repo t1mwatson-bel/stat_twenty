@@ -1,27 +1,20 @@
-FROM python:3.11-slim
+FROM python:3.9-slim
 
-# Устанавливаем Chromium и драйвер
+# Установка Firefox и geckodriver
 RUN apt-get update && apt-get install -y \
+    firefox-esr \
     wget \
-    gnupg \
-    unzip \
-    curl \
-    chromium \
-    chromium-driver \
-    && rm -rf /var/lib/apt/lists/*
+    && wget https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz \
+    && tar -xvzf geckodriver-v0.35.0-linux64.tar.gz \
+    && chmod +x geckodriver \
+    && mv geckodriver /usr/local/bin/ \
+    && rm geckodriver-v0.35.0-linux64.tar.gz
 
-# Создаем симлинки
-RUN ln -s /usr/bin/chromium /usr/bin/google-chrome || true \
-    && ln -s /usr/bin/chromedriver /usr/bin/chromedriver || true
-
-# Проверяем установку
-RUN which chromium && which chromedriver || echo "Check failed"
-
-WORKDIR /app
-
+# Установка зависимостей Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-COPY bot.py .
+# Копируем код бота
+COPY . .
 
 CMD ["python", "bot.py"]
