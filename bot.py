@@ -104,7 +104,6 @@ def create_driver():
     options.add_argument('--no-sandbox')
     options.add_argument('--window-size=1920,1080')
     
-    # Явно указываем путь к драйверу
     service = FirefoxService(executable_path='/usr/local/bin/geckodriver')
     
     try:
@@ -238,21 +237,21 @@ def get_state(driver):
 
 def is_game_finished(driver):
     try:
-        status_elements = driver.find_elements(By.CSS_SELECTOR, '.scoreboard-card-games-board-status')
-        if status_elements:
-            status_text = status_elements[0].text.strip()
-            if "Победа" in status_text or "Ничья" in status_text:
-                logging.info(f"Игра завершена: {status_text}")
-                return True
-        
-        timer_elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
-        if timer_elements:
-            timer_text = timer_elements[0].text.strip()
-            if timer_text == "Игра завершена":
-                logging.info("Игра завершена по таймеру")
-                return True
-    except:
-        pass
+        # Проверяем наличие панели завершения игры
+        game_over_panel = driver.find_elements(By.CSS_SELECTOR, '.ui-message-block.game-over-panel')
+        if game_over_panel:
+            logging.info("Найдена панель завершения игры")
+            return True
+            
+        # Проверяем текст "Игра завершена"
+        game_over_text = driver.find_elements(By.XPATH, "//*[contains(text(), 'Игра завершена')]")
+        if game_over_text:
+            logging.info("Найден текст 'Игра завершена'")
+            return True
+            
+    except Exception as e:
+        logging.error(f"Ошибка проверки завершения: {e}")
+    
     return False
 
 def format_message(table_id, state, is_final=False, t_num=None):
@@ -338,6 +337,7 @@ def monitor_table(table_url, table_id):
                             logging.error(f"Монитор {table_id}: ошибка отправки: {e}")
                     continue
 
+                # Проверяем завершение игры - если да, закрываем браузер
                 if is_game_finished(driver):
                     final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
                     try:
@@ -345,10 +345,10 @@ def monitor_table(table_url, table_id):
                             bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
                         else:
                             bot.send_message(CHANNEL_ID, final_msg)
-                        logging.info(f"Монитор {table_id}: игра завершена")
+                        logging.info(f"Монитор {table_id}: игра завершена - закрываем браузер")
                     except Exception as e:
                         logging.error(f"Монитор {table_id}: ошибка финала: {e}")
-                    break
+                    break  # Выходим из цикла, браузер закроется в finally
 
                 if state != last_state:
                     msg = format_message(table_id, state)
