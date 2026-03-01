@@ -338,7 +338,7 @@ def monitor_table(table_url, table_id):
             except:
                 pass
 
-ddef scan_new_tables():
+def scan_new_tables():
     """Сканирует главную страницу и запускает только свободные столы"""
     driver = None
     try:
