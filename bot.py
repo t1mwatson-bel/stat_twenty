@@ -232,38 +232,17 @@ def get_state(driver):
 
 def is_game_finished(driver):
     try:
-        # Проверяем по таймеру
-        timer_elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
-        if timer_elements:
-            timer_text = timer_elements[0].text.strip()
-            # Если текст точно "Игра завершена"
-            if timer_text == "Игра завершена":
-                logging.info(f"Игра завершена: '{timer_text}'")
+        # Проверяем статус игры
+        status_elements = driver.find_elements(By.CSS_SELECTOR, '.scoreboard-card-games-board-status')
+        if status_elements:
+            status_text = status_elements[0].text.strip()
+            logging.info(f"Статус игры: '{status_text}'")
+            # Если есть любой непустой статус - игра завершена
+            if status_text:
+                logging.info(f"Игра завершена: {status_text}")
                 return True
     except:
         pass
-    return False
-
-def check_game_finished_debug(driver, table_id):
-    """Отладочная функция для проверки элемента завершения"""
-    try:
-        # Ищем элемент
-        elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
-        if elements:
-            element = elements[0]
-            text = element.text
-            html = element.get_attribute('outerHTML')
-            visible = element.is_displayed()
-            logging.info(f"СТОЛ {table_id} DEBUG: Найден элемент: {html}")
-            logging.info(f"СТОЛ {table_id} DEBUG: Текст: '{text}', Видим: {visible}")
-            
-            if text == "Игра завершена":
-                logging.info(f"СТОЛ {table_id} DEBUG: Текст совпадает!")
-                return True
-        else:
-            logging.info(f"СТОЛ {table_id} DEBUG: Элемент .ui-game-timer__label НЕ НАЙДЕН")
-    except Exception as e:
-        logging.error(f"СТОЛ {table_id} DEBUG: Ошибка: {e}")
     return False
 
 def format_message(table_id, state, is_final=False, t_num=None):
@@ -352,7 +331,7 @@ def monitor_table(table_url, table_id):
                     continue
                 
                 # Проверяем завершение игры
-                if is_game_finished(driver) or check_game_finished_debug(driver, table_id):
+                if is_game_finished(driver):
                     final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
                     try:
                         if msg_id:
