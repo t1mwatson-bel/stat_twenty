@@ -13,12 +13,13 @@ from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
 import telebot
 import random
+import psutil  # Добавил для проверки памяти
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3  # Уменьшил до 3 для стабильности
+MAX_BROWSERS = 3  # Для стабильности
 CHECK_INTERVAL = 60
 
 # Настройка логирования
@@ -62,9 +63,26 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 processed_games = set()
 
+def check_memory():
+    """Проверяет свободную память"""
+    try:
+        memory = psutil.virtual_memory()
+        free_mb = memory.available / 1024 / 1024
+        logging.info(f"💾 Свободно памяти: {free_mb:.0f} MB")
+        return free_mb > 300  # Нужно минимум 300 MB для нового браузера
+    except Exception as e:
+        logging.warning(f"⚠️ Не удалось проверить память: {e}")
+        return True  # Если не можем проверить - разрешаем
+
 def create_driver():
     """Создает браузер с оптимизацией памяти"""
     logging.info("🔄 Создание браузера...")
+    
+    # Проверяем память перед созданием
+    if not check_memory():
+        logging.error("❌ Недостаточно памяти для создания браузера")
+        return None
+    
     options = Options()
     
     # Критические параметры для Railway
@@ -239,7 +257,7 @@ def monitor_table(table_url, table_id):
                 pass
 
 def scan_new_tables():
-    """Сканирует главную страницу"""
+    """Сканирует главную страницу и запускает столы ПО ОДНОМУ"""
     driver = None
     try:
         logging.info("🔍 Сканирование новых столов...")
@@ -256,11 +274,7 @@ def scan_new_tables():
         
         logging.info(f"🔗 Найдено ссылок: {len(table_links)}, ID: {len(table_ids)}")
         
-        available_slots = MAX_BROWSERS - len(active_tables)
-        if available_slots <= 0:
-            logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS})")
-            return
-        
+        # Собираем новые столы
         new_tables = []
         for i, link in enumerate(table_links):
             if i < len(table_ids):
@@ -269,25 +283,52 @@ def scan_new_tables():
                 
                 if href and table_id and table_id not in processed_games and table_id not in active_tables:
                     new_tables.append((table_id, href))
-                    if len(new_tables) >= available_slots:
-                        break
         
-        logging.info(f"🚀 Новых столов для запуска: {len(new_tables)}")
+        logging.info(f"🚀 Найдено новых столов: {len(new_tables)}")
         
-        # Запускаем с задержкой между браузерами
+        # Закрываем главный браузер
+        driver.quit()
+        
+        # ЗАПУСКАЕМ ПО ОДНОМУ, ЖДЕМ КАЖДЫЙ
         for table_id, href in new_tables:
+            # Проверяем сколько уже активных
+            if len(active_tables) >= MAX_BROWSERS:
+                logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS})")
+                break
+            
+            # Проверяем память перед запуском
+            if not check_memory():
+                logging.error("❌ Недостаточно памяти для запуска нового стола")
+                break
+            
             logging.info(f"🚀 Запускаем монитор для стола #{table_id}")
+            
+            # Запускаем в отдельном потоке
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
             thread.daemon = True
             thread.start()
-            active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
-            time.sleep(3)  # Задержка между запуском браузеров
+            
+            # Ждем 5 секунд чтобы браузер точно создался
+            time.sleep(5)
+            
+            # Проверяем что поток жив
+            if thread.is_alive():
+                active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
+                logging.info(f"✅ Стол #{table_id} успешно запущен")
+            else:
+                logging.error(f"❌ Стол #{table_id} НЕ запустился")
+            
+            # Пауза между запусками
+            time.sleep(3)
             
     except Exception as e:
         logging.error(f"❌ Ошибка сканирования: {e}")
     finally:
         if driver:
-            driver.quit()
+            try:
+                driver.quit()
+            except:
+                pass
 
 def clean_finished_tables():
     """Удаляет завершенные столы"""
