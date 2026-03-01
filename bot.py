@@ -8,8 +8,8 @@ import os
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -19,7 +19,7 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_MONITORS = 3
+MAX_MONITORS = 2  # Временно 2 для стабильности
 CHECK_INTERVAL = 10
 DATA_FILE = "game_data.json"
 MAX_DAYS = 3
@@ -99,19 +99,34 @@ def get_t_number(table_id, msg_id=None):
 # ===== ОСНОВНЫЕ ФУНКЦИИ =====
 
 def create_driver():
-    options = FirefoxOptions()
+    options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
+    # Лимиты памяти
+    options.add_argument('--memory-pressure-off')
+    options.add_argument('--max_old_space_size=256')
+    options.add_argument('--single-process')
+    options.add_argument('--disable-background-networking')
+    options.add_argument('--disable-client-side-phishing-detection')
+    options.add_argument('--disable-default-apps')
+    options.add_argument('--disable-hang-monitor')
+    options.add_argument('--disable-sync')
+    options.add_argument('--disable-web-resources')
+    options.add_argument('--no-first-run')
+    options.add_argument('--password-store=basic')
+    options.binary_location = '/usr/bin/google-chrome'
     
-    service = FirefoxService(executable_path='/usr/local/bin/geckodriver')
+    service = Service('/usr/local/bin/chromedriver')
     
     try:
-        driver = webdriver.Firefox(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options)
         driver.set_page_load_timeout(30)
         return driver
     except Exception as e:
-        logging.error(f"Ошибка создания драйвера Firefox: {e}")
+        logging.error(f"Ошибка создания драйвера Chrome: {e}")
         return None
 
 def parse_cards(elements):
@@ -337,7 +352,6 @@ def monitor_table(table_url, table_id):
                             logging.error(f"Монитор {table_id}: ошибка отправки: {e}")
                     continue
 
-                # Проверяем завершение игры - если да, закрываем браузер
                 if is_game_finished(driver):
                     final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
                     try:
@@ -348,7 +362,7 @@ def monitor_table(table_url, table_id):
                         logging.info(f"Монитор {table_id}: игра завершена - закрываем браузер")
                     except Exception as e:
                         logging.error(f"Монитор {table_id}: ошибка финала: {e}")
-                    break  # Выходим из цикла, браузер закроется в finally
+                    break
 
                 if state != last_state:
                     msg = format_message(table_id, state)
@@ -479,7 +493,7 @@ def clean_monitors():
 
 def main():
     load_game_data()
-    logging.info("Бот запущен на Firefox")
+    logging.info("Бот запущен на Chrome с 2 мониторами")
     
     start_scanner()
     
