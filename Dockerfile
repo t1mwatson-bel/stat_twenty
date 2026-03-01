@@ -1,6 +1,5 @@
 FROM python:3.10-slim
 
-# Install Chromium and dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -10,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
