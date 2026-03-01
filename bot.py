@@ -10,16 +10,16 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
+from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException, StaleElementReferenceException
 import telebot
 import random
-import psutil  # Добавил для проверки памяти
+import psutil
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3  # Для стабильности
+MAX_BROWSERS = 3
 CHECK_INTERVAL = 60
 
 # Настройка логирования
@@ -40,13 +40,13 @@ SELECTORS = {
     'player_cards': '.live-twenty-one-field-player:first-child .scoreboard-card-games-card',
     'dealer_score': '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label',
     'dealer_cards': '.live-twenty-one-field-player:last-child .scoreboard-card-games-card',
-    'game_status': '.ui-game-timer__label'
+    'game_status': '.ui-game-timer__label',
+    'game_round': '.scoreboard-card-games-board-status'  # Статус раунда
 }
 
-# Масти и значения
-# Масти и значения
+# Масти и значения (ИСПРАВЛЕНО по твоей раздаче)
 SUIT_MAP = {
-    'suit-0': '♠️',  # Пики
+    'suit-0': '♠️',
     'suit-1': '♣️',  # Трефы
     'suit-2': '♦️',  # Бубны
     'suit-3': '♥️'   # Черви
@@ -63,6 +63,7 @@ VALUE_MAP = {
 bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 processed_games = set()
+sent_actions = {}  # Для отслеживания отправленных действий
 
 def check_memory():
     """Проверяет свободную память"""
@@ -70,16 +71,15 @@ def check_memory():
         memory = psutil.virtual_memory()
         free_mb = memory.available / 1024 / 1024
         logging.info(f"💾 Свободно памяти: {free_mb:.0f} MB")
-        return free_mb > 300  # Нужно минимум 300 MB для нового браузера
+        return free_mb > 300
     except Exception as e:
         logging.warning(f"⚠️ Не удалось проверить память: {e}")
-        return True  # Если не можем проверить - разрешаем
+        return True
 
 def create_driver():
     """Создает браузер с оптимизацией памяти"""
     logging.info("🔄 Создание браузера...")
     
-    # Проверяем память перед созданием
     if not check_memory():
         logging.error("❌ Недостаточно памяти для создания браузера")
         return None
@@ -140,7 +140,6 @@ def create_driver():
         logging.error("❌ Chromedriver не найден")
         return None
     
-    # Пробуем создать драйвер с повторными попытками
     max_attempts = 3
     for attempt in range(max_attempts):
         try:
@@ -180,10 +179,70 @@ def parse_card_from_element(card_element):
         logging.error(f"Ошибка парсинга карты: {e}")
         return '??'
 
+def get_game_state(driver, table_id):
+    """Получает текущее состояние игры"""
+    try:
+        # Получаем статус раунда
+        round_status = "Неизвестно"
+        try:
+            round_elem = driver.find_element(By.CSS_SELECTOR, SELECTORS['game_round'])
+            round_status = round_elem.text
+        except:
+            pass
+        
+        # Получаем счет и карты игрока
+        player_score = "?"
+        player_cards = []
+        try:
+            player_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['player_score']).text
+            player_card_elements = driver.find_elements(By.CSS_SELECTOR, SELECTORS['player_cards'])
+            for card in player_card_elements:
+                player_cards.append(parse_card_from_element(card))
+        except:
+            pass
+        
+        # Получаем счет и карты дилера
+        dealer_score = "?"
+        dealer_cards = []
+        try:
+            dealer_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['dealer_score']).text
+            dealer_card_elements = driver.find_elements(By.CSS_SELECTOR, SELECTORS['dealer_cards'])
+            for card in dealer_card_elements:
+                dealer_cards.append(parse_card_from_element(card))
+        except:
+            pass
+        
+        # Получаем статус игры
+        game_status = ""
+        try:
+            status_elem = driver.find_element(By.CSS_SELECTOR, SELECTORS['game_status'])
+            game_status = status_elem.text
+        except:
+            pass
+        
+        return {
+            'round_status': round_status,
+            'player_score': player_score,
+            'player_cards': player_cards,
+            'dealer_score': dealer_score,
+            'dealer_cards': dealer_cards,
+            'game_status': game_status
+        }
+    except Exception as e:
+        logging.error(f"Ошибка получения состояния игры #{table_id}: {e}")
+        return None
+
+def format_cards(cards):
+    """Форматирует список карт в строку"""
+    return ''.join(cards) if cards else ""
+
 def monitor_table(table_url, table_id):
-    """Следит за одним столом"""
+    """Следит за одним столом в реальном времени"""
     driver = None
     start_time = time.time()
+    last_state = None
+    action_count = 0
+    game_started = False
     
     try:
         logging.info(f"🔄 Браузер для стола #{table_id} запущен")
@@ -194,61 +253,94 @@ def monitor_table(table_url, table_id):
         driver.get(table_url)
         logging.info(f"✅ Стол #{table_id} загружен")
         
+        # Приветственное сообщение
+        bot.send_message(CHANNEL_ID, f"🎯 Стол #{table_id}: Начало мониторинга")
+        
         while True:
             if time.time() - start_time > 3600:
                 logging.warning(f"⏰ Стол #{table_id} превысил время ожидания")
+                bot.send_message(CHANNEL_ID, f"⏰ Стол #{table_id}: Превышено время ожидания")
                 break
             
             try:
-                # Проверяем статус
-                status_elem = driver.find_element(By.CSS_SELECTOR, SELECTORS['game_status'])
-                status_text = status_elem.text
-                logging.info(f"🎯 Стол #{table_id} статус: '{status_text}'")
+                current_state = get_game_state(driver, table_id)
+                if not current_state:
+                    time.sleep(2)
+                    continue
                 
-                if any(word in status_text.lower() for word in ['завершен', 'завершена', 'completed', 'finished']):
-                    logging.info(f"✅ Стол #{table_id} завершен! Парсим карты")
-                    
-                    # Парсим игрока
-                    player_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['player_score']).text
-                    player_cards = []
-                    for card in driver.find_elements(By.CSS_SELECTOR, SELECTORS['player_cards']):
-                        player_cards.append(parse_card_from_element(card))
-                    
-                    # Парсим дилера
-                    dealer_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['dealer_score']).text
-                    dealer_cards = []
-                    for card in driver.find_elements(By.CSS_SELECTOR, SELECTORS['dealer_cards']):
-                        dealer_cards.append(parse_card_from_element(card))
-                    
-                    # Формируем сообщение
-                    player_cards_str = ''.join(player_cards)
-                    dealer_cards_str = ''.join(dealer_cards)
+                # Проверяем завершение игры
+                if any(word in current_state['game_status'].lower() for word in ['завершен', 'завершена', 'completed', 'finished']):
+                    # Отправляем финальный результат
+                    player_cards_str = format_cards(current_state['player_cards'])
+                    dealer_cards_str = format_cards(current_state['dealer_cards'])
                     t_number = random.randint(30, 60)
-                    message = f"#{table_id}. {player_score}({player_cards_str}) - {dealer_score}({dealer_cards_str}) #T{t_number}"
                     
-                    logging.info(f"📝 Сообщение: {message}")
+                    final_message = (f"🏆 Стол #{table_id}: ИГРА ЗАВЕРШЕНА\n"
+                                   f"👤 Игрок: {current_state['player_score']}({player_cards_str})\n"
+                                   f"👤 Дилер: {current_state['dealer_score']}({dealer_cards_str})\n"
+                                   f"#N{table_id}. {current_state['player_score']}({player_cards_str}) - "
+                                   f"{current_state['dealer_score']}({dealer_cards_str}) #T{t_number}")
                     
-                    # Отправляем в Telegram
-                    try:
-                        bot.send_message(CHANNEL_ID, message)
-                        logging.info(f"✅ Сообщение для стола #{table_id} отправлено")
-                    except Exception as e:
-                        logging.error(f"❌ Ошибка отправки в Telegram: {e}")
-                    
-                    processed_games.add(table_id)
+                    bot.send_message(CHANNEL_ID, final_message)
+                    logging.info(f"✅ Стол #{table_id} завершен, финал отправлен")
                     break
                 
-                time.sleep(3)
+                # Если состояние изменилось - отправляем обновление
+                if current_state != last_state:
+                    action_count += 1
+                    
+                    # Формируем сообщение о действии
+                    player_cards_str = format_cards(current_state['player_cards'])
+                    dealer_cards_str = format_cards(current_state['dealer_cards'])
+                    
+                    # Определяем тип действия
+                    action_type = "🔄"
+                    if "Ход игрока" in current_state['round_status']:
+                        action_type = "🎯"
+                    elif "Ход дилера" in current_state['round_status']:
+                        action_type = "🎲"
+                    
+                    # Проверяем новые карты
+                    if last_state:
+                        new_player_cards = len(current_state['player_cards']) - len(last_state.get('player_cards', []))
+                        new_dealer_cards = len(current_state['dealer_cards']) - len(last_state.get('dealer_cards', []))
+                        
+                        if new_player_cards > 0:
+                            new_cards = current_state['player_cards'][-new_player_cards:]
+                            bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Игрок взял {', '.join(new_cards)}")
+                        
+                        if new_dealer_cards > 0:
+                            new_cards = current_state['dealer_cards'][-new_dealer_cards:]
+                            bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Дилер взял {', '.join(new_cards)}")
+                    
+                    # Отправляем текущее состояние каждые 3 действия или при важных изменениях
+                    if action_count % 3 == 0 or "перебор" in current_state['round_status'].lower() or "очко" in current_state['round_status'].lower():
+                        status_message = (f"{action_type} Стол #{table_id}: {current_state['round_status']}\n"
+                                        f"👤 Игрок: {current_state['player_score']} {player_cards_str}\n"
+                                        f"👤 Дилер: {current_state['dealer_score']} {dealer_cards_str}")
+                        bot.send_message(CHANNEL_ID, status_message)
+                    
+                    last_state = current_state
                 
+                time.sleep(2)  # Проверка каждые 2 секунды
+                
+            except StaleElementReferenceException:
+                logging.warning(f"⚠️ Стол #{table_id} - элементы устарели, обновляем страницу")
+                driver.refresh()
+                time.sleep(3)
             except NoSuchElementException:
-                logging.warning(f"⚠️ Стол #{table_id} - элемент статуса не найден")
-                time.sleep(5)
+                logging.warning(f"⚠️ Стол #{table_id} - элемент не найден")
+                time.sleep(3)
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в столе #{table_id}: {e}")
-                time.sleep(5)
+                time.sleep(3)
                 
     except Exception as e:
         logging.error(f"❌ Критическая ошибка стола #{table_id}: {e}")
+        try:
+            bot.send_message(CHANNEL_ID, f"❌ Стол #{table_id}: Ошибка мониторинга")
+        except:
+            pass
     finally:
         if driver:
             try:
@@ -258,7 +350,7 @@ def monitor_table(table_url, table_id):
                 pass
 
 def scan_new_tables():
-    """Сканирует главную страницу и запускает столы ПО ОДНОМУ"""
+    """Сканирует главную страницу и запускает столы"""
     driver = None
     try:
         logging.info("🔍 Сканирование новых столов...")
@@ -287,39 +379,31 @@ def scan_new_tables():
         
         logging.info(f"🚀 Найдено новых столов: {len(new_tables)}")
         
-        # Закрываем главный браузер
         driver.quit()
         
-        # ЗАПУСКАЕМ ПО ОДНОМУ, ЖДЕМ КАЖДЫЙ
+        # Запускаем по одному
         for table_id, href in new_tables:
-            # Проверяем сколько уже активных
             if len(active_tables) >= MAX_BROWSERS:
                 logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS})")
                 break
             
-            # Проверяем память перед запуском
             if not check_memory():
                 logging.error("❌ Недостаточно памяти для запуска нового стола")
                 break
             
             logging.info(f"🚀 Запускаем монитор для стола #{table_id}")
-            
-            # Запускаем в отдельном потоке
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
             thread.daemon = True
             thread.start()
             
-            # Ждем 5 секунд чтобы браузер точно создался
             time.sleep(5)
             
-            # Проверяем что поток жив
             if thread.is_alive():
                 active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
                 logging.info(f"✅ Стол #{table_id} успешно запущен")
             else:
                 logging.error(f"❌ Стол #{table_id} НЕ запустился")
             
-            # Пауза между запусками
             time.sleep(3)
             
     except Exception as e:
@@ -337,6 +421,7 @@ def clean_finished_tables():
     for table_id, data in active_tables.items():
         if not data['thread'].is_alive():
             finished.append(table_id)
+            processed_games.add(table_id)
     
     for table_id in finished:
         del active_tables[table_id]
@@ -344,9 +429,15 @@ def clean_finished_tables():
 
 def main():
     logging.info("="*50)
-    logging.info("🤖 БОТ ЗАПУЩЕН")
+    logging.info("🤖 БОТ REAL-TIME ЗАПУЩЕН")
     logging.info(f"📊 Максимум браузеров: {MAX_BROWSERS}")
     logging.info("="*50)
+    
+    # Тестовое сообщение
+    try:
+        bot.send_message(CHANNEL_ID, "🤖 Real-time бот запущен и мониторит столы")
+    except Exception as e:
+        logging.error(f"❌ Ошибка отправки тестового сообщения: {e}")
     
     error_count = 0
     while True:
