@@ -8,8 +8,8 @@ import os
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -99,31 +99,20 @@ def get_t_number(table_id, msg_id=None):
 # ===== ОСНОВНЫЕ ФУНКЦИИ =====
 
 def create_driver():
-    options = Options()
+    options = FirefoxOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-extensions')
     options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-background-networking')
-    options.add_argument('--disable-client-side-phishing-detection')
-    options.add_argument('--disable-default-apps')
-    options.add_argument('--disable-hang-monitor')
-    options.add_argument('--disable-sync')
-    options.add_argument('--disable-web-resources')
-    options.add_argument('--no-first-run')
-    options.add_argument('--password-store=basic')
-    options.binary_location = '/usr/bin/chromium'
     
-    service = Service('/usr/bin/chromedriver')
+    service = FirefoxService('/usr/bin/geckodriver')
     
     try:
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Firefox(service=service, options=options)
         driver.set_page_load_timeout(30)
         return driver
     except Exception as e:
-        logging.error(f"Ошибка создания драйвера: {e}")
+        logging.error(f"Ошибка создания драйвера Firefox: {e}")
         return None
 
 def parse_cards(elements):
@@ -490,7 +479,7 @@ def clean_monitors():
 
 def main():
     load_game_data()
-    logging.info("Бот запущен")
+    logging.info("Бот запущен на Firefox")
     
     start_scanner()
     
