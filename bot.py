@@ -1,16 +1,11 @@
+import asyncio
 import threading
 import time
 import re
 import logging
 import random
 from datetime import datetime, timedelta
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException, TimeoutException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import zendriver as zd
 import telebot
 import pickle
 import os
@@ -47,7 +42,7 @@ VALUE_MAP = {
 bot = telebot.TeleBot(TOKEN)
 active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
-table_drivers = {}  # {table_id: driver}
+table_browsers = {}  # {table_id: browser}
 last_messages = {}  # {table_id: last_message_text}
 table_counter = 0   # Счетчик для последовательного выбора столов
 lock = threading.Lock()
@@ -111,39 +106,31 @@ class GameData:
 
 game_data = GameData()
 
-def create_driver():
-    options = Options()
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-infobars')
-    options.add_argument('--disable-plugins')
-    options.add_argument('--disable-software-rasterizer')
-    options.add_argument('--window-size=1920,1080')
-    options.binary_location = '/usr/bin/chromium'
-    
-    service = Service('/usr/bin/chromedriver')
-    
+async def create_browser():
+    """Создание нового браузера через Zendriver"""
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(30)
-        return driver
+        browser = await zd.start(
+            headless=True,
+            browser_args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+        )
+        return browser
     except Exception as e:
-        logging.error(f"Ошибка создания драйвера: {e}")
+        logging.error(f"Ошибка создания браузера: {e}")
         return None
 
-def parse_cards(elements):
+def parse_cards(card_elements):
     cards = []
-    for el in elements:
+    for el in card_elements:
         try:
-            cls = el.get_attribute('class')
+            cls = ' '.join(el.attributes.get('class', []))
             suit = next((s for c, s in SUIT_MAP.items() if c in cls), '?')
-            val = re.search(r'value-(\d+)', cls)
-            value = VALUE_MAP.get(f'value-{val.group(1)}', val.group(1)) if val else '?'
+            val_match = re.search(r'value-(\d+)', cls)
+            if val_match:
+                value = VALUE_MAP.get(f'value-{val_match.group(1)}', val_match.group(1))
+            else:
+                value = '?'
             cards.append(f"{value}{suit}")
-        except StaleElementReferenceException:
+        except Exception:
             continue
     return cards
 
@@ -162,74 +149,80 @@ def check_special_conditions(player_cards, dealer_cards, player_score, dealer_sc
     return ' '.join(specials)
 
 def determine_turn(state):
-    try:
-        if state.get('player_active', False):
-            return 'player'
-        elif state.get('dealer_active', False):
-            return 'dealer'
-    except:
-        pass
+    if state.get('player_active', False):
+        return 'player'
+    elif state.get('dealer_active', False):
+        return 'dealer'
     return None
 
-def get_state_fast(driver):
+async def get_state_fast(page):
+    """Быстрое получение состояния через Zendriver"""
     try:
-        player_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label').text
-        player_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
-        dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
-        dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
+        await page.wait_for('.live-twenty-one-field-player', timeout=5)
+        
+        player_score_elem = await page.select('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        player_score = await player_score_elem.text_content() if player_score_elem else "0"
+        
+        player_card_elems = await page.select_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+        player_cards = parse_cards(player_card_elems)
+        
+        dealer_score_elem = await page.select('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
+        dealer_score = await dealer_score_elem.text_content() if dealer_score_elem else "0"
+        
+        dealer_card_elems = await page.select_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
+        dealer_cards = parse_cards(dealer_card_elems)
         
         player_active = False
         dealer_active = False
         try:
-            player_area = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child')
-            if 'active' in player_area.get_attribute('class').lower():
-                player_active = True
-            dealer_area = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child')
-            if 'active' in dealer_area.get_attribute('class').lower():
-                dealer_active = True
+            player_area = await page.select('.live-twenty-one-field-player:first-child')
+            if player_area:
+                class_attr = player_area.attributes.get('class', [])
+                if any('active' in c.lower() for c in class_attr):
+                    player_active = True
+            
+            dealer_area = await page.select('.live-twenty-one-field-player:last-child')
+            if dealer_area:
+                class_attr = dealer_area.attributes.get('class', [])
+                if any('active' in c.lower() for c in class_attr):
+                    dealer_active = True
         except:
             pass
             
         return {
-            'p_score': player_score,
+            'p_score': player_score.strip(),
             'p_cards': player_cards,
-            'd_score': dealer_score,
+            'd_score': dealer_score.strip(),
             'd_cards': dealer_cards,
             'player_active': player_active,
             'dealer_active': dealer_active
         }
     except Exception as e:
+        logging.error(f"Ошибка получения состояния: {e}")
         return None
 
-def is_game_truly_finished(driver):
+async def is_game_truly_finished(page):
     try:
-        finished_element = driver.find_element(By.CSS_SELECTOR, 
-            'span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
-        if finished_element and 'Игра завершена' in finished_element.text:
-            return True
-    except NoSuchElementException:
-        pass
-    
-    try:
-        new_game_btn = driver.find_elements(By.CSS_SELECTOR, '.ui-game-controls__button, .new-game-button, [class*="new"]')
-        if new_game_btn and any(btn.is_displayed() for btn in new_game_btn):
-            return True
+        finished_elem = await page.select('span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
+        if finished_elem:
+            text = await finished_elem.text_content()
+            if text and 'Игра завершена' in text:
+                return True
     except:
         pass
-    
     return False
 
-def safe_quit_driver(table_id):
+async def safe_close_browser(table_id):
     try:
         with lock:
-            if table_id in table_drivers:
-                driver = table_drivers[table_id]
-                if driver:
-                    logging.info(f"Закрытие драйвера для стола {table_id}")
-                    driver.quit()
-                    del table_drivers[table_id]
+            if table_id in table_browsers:
+                browser = table_browsers[table_id]
+                if browser:
+                    logging.info(f"Закрытие браузера для стола {table_id}")
+                    await browser.stop()
+                    del table_browsers[table_id]
     except Exception as e:
-        logging.error(f"Ошибка при закрытии драйвера стола {table_id}: {e}")
+        logging.error(f"Ошибка при закрытии браузера стола {table_id}: {e}")
 
 def format_message(table_id, state, is_final=False, t_num=None, table_number=None):
     p_cards = format_cards(state['p_cards'])
@@ -319,34 +312,29 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
                 return None
     return None
 
-def get_next_table(driver):
-    """Получить следующий стол по порядку (циклически)"""
+async def get_next_table(page):
+    """Получить следующий стол по порядку"""
     global table_counter
     
     try:
-        # Ждем загрузки столов
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
-        )
+        await page.wait_for('.dashboard-game-block', timeout=15)
+        await page.sleep(3)
         
-        # Даем время на полную загрузку
-        time.sleep(3)
-        
-        # Получаем все столы
-        tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
+        tables = await page.select_all('.dashboard-game-block')
         logging.info(f"Найдено столов: {len(tables)}")
         
         if not tables:
             logging.warning("Нет доступных столов")
             return None, None
         
-        # Пробуем найти валидный стол (с ID)
         valid_tables = []
         for table in tables:
             try:
-                id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
-                if id_element and id_element.text.strip():
-                    valid_tables.append(table)
+                id_elem = await table.select('.dashboard-game-info__additional-info')
+                if id_elem:
+                    text = await id_elem.text_content()
+                    if text and text.strip():
+                        valid_tables.append(table)
             except:
                 continue
         
@@ -356,34 +344,27 @@ def get_next_table(driver):
         
         logging.info(f"Валидных столов: {len(valid_tables)}")
         
-        # Если счетчик вышел за пределы, сбрасываем
         if table_counter >= len(valid_tables):
             table_counter = 0
             logging.info("Сброс счетчика столов, начинаем сначала")
         
-        # Берем следующий стол
         table = valid_tables[table_counter]
         current_index = table_counter
         table_counter += 1
         
-        # Получаем ID стола
-        id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
-        table_id = id_element.text.strip()
+        id_elem = await table.select('.dashboard-game-info__additional-info')
+        table_id_text = await id_elem.text_content()
+        table_id = table_id_text.strip() if table_id_text else ""
         
-        # Получаем ссылку
-        link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
-        href = link_element.get_attribute('href')
+        link_elem = await table.select('.dashboard-game-block__link')
+        href = link_elem.attributes.get('href', '') if link_elem else ""
         
-        # Извлекаем числовой ID
         match = re.search(r'(\d+)$', table_id)
         numeric_id = match.group(1) if match else table_id
         
         logging.info(f"Выбран следующий стол: ID {table_id} (индекс {current_index})")
         return href, numeric_id
         
-    except TimeoutException:
-        logging.error("Таймаут при загрузке столов")
-        return None, None
     except Exception as e:
         logging.error(f"Ошибка при поиске стола: {e}")
         return None, None
@@ -408,8 +389,8 @@ def wait_for_next_game():
         logging.info(f"Пропустили время запуска, ждем до {next_launch.strftime('%H:%M:%S')}")
         time.sleep(wait_seconds)
 
-def monitor_table(table_url, table_id):
-    driver = None
+async def monitor_table_async(table_url, table_id):
+    browser = None
     last_state = None
     msg_id = None
     t_num = random.randint(30, 60)
@@ -424,7 +405,6 @@ def monitor_table(table_url, table_id):
     initial_load = True
     last_activity_time = time.time()
     max_idle_time = 60
-    cards_count_history = []
     verification_pending = False
     verification_start = 0
     last_turn = None
@@ -435,41 +415,40 @@ def monitor_table(table_url, table_id):
     logging.info(f"Начало мониторинга стола {table_id}")
 
     try:
-        driver = create_driver()
-        if not driver:
-            logging.error(f"Не удалось создать драйвер для стола {table_id}.")
+        browser = await create_browser()
+        if not browser:
+            logging.error(f"Не удалось создать браузер для стола {table_id}.")
             return
 
         with lock:
-            table_drivers[table_id] = driver
+            table_browsers[table_id] = browser
 
-        driver.get(table_url)
+        page = browser
+        await page.get(table_url)
         
-        # Ждем загрузки карт
         cards_loaded = False
         wait_start = time.time()
         max_wait = 30
         
         while not cards_loaded and (time.time() - wait_start) < max_wait:
             try:
-                player_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-                
-                if len(player_cards) > 0:
+                player_cards = await page.select_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+                if player_cards and len(player_cards) > 0:
                     cards_loaded = True
                     logging.info(f"Карты загружены для стола {table_id}")
                     break
                 
-                if is_game_truly_finished(driver):
+                if await is_game_truly_finished(page):
                     logging.info(f"Игра на столе {table_id} уже завершена")
                     game_active = False
                     break
                     
-                time.sleep(0.5)
+                await page.sleep(0.5)
             except Exception as e:
-                time.sleep(0.5)
+                await page.sleep(0.5)
         
         if cards_loaded:
-            time.sleep(1)
+            await page.sleep(1)
         
         logging.info(f"Старт мониторинга стола {table_id}")
 
@@ -478,34 +457,32 @@ def monitor_table(table_url, table_id):
                 current_time = time.time()
                 
                 if current_time - last_activity_time > max_idle_time:
-                    if not is_game_truly_finished(driver):
+                    if not await is_game_truly_finished(page):
                         logging.warning(f"Стол {table_id} бездействует, обновляем")
-                        driver.refresh()
-                        time.sleep(3)
+                        await page.reload()
+                        await page.sleep(3)
                         last_activity_time = current_time
                         continue
                 
-                state = get_state_fast(driver)
+                state = await get_state_fast(page)
                 
                 if not state:
                     no_response_count += 1
                     if no_response_count >= max_no_response:
-                        if is_game_truly_finished(driver):
-                            logging.info(f"Стол {table_id} завершен (таймаут)")
+                        if await is_game_truly_finished(page):
+                            logging.info(f"Стол {table_id} завершен")
                             game_active = False
                             break
                         else:
                             no_response_count = max_no_response - 3
-                    time.sleep(2)
+                    await page.sleep(2)
                     continue
                 
                 last_activity_time = current_time
                 no_response_count = 0
                 
-                # Определяем текущий ход
                 current_turn = determine_turn(state)
                 
-                # Логика отслеживания перехода хода
                 if current_turn is None and last_turn is not None:
                     if not in_transition:
                         in_transition = True
@@ -514,8 +491,8 @@ def monitor_table(table_url, table_id):
                     
                     elif current_time - transition_start > transition_timeout:
                         logging.warning(f"Стол {table_id}: переход затянулся, обновляем")
-                        driver.refresh()
-                        time.sleep(2)
+                        await page.reload()
+                        await page.sleep(2)
                         in_transition = False
                         transition_start = 0
                         last_turn = None
@@ -529,18 +506,17 @@ def monitor_table(table_url, table_id):
                     
                     last_turn = current_turn
                 
-                # Проверка завершения игры
-                if is_game_truly_finished(driver):
+                if await is_game_truly_finished(page):
                     if not verification_pending:
                         verification_pending = True
                         verification_start = current_time
                         logging.info(f"Стол {table_id}: возможное завершение")
-                        time.sleep(3)
+                        await page.sleep(3)
                         continue
                     elif current_time - verification_start >= 3:
-                        if is_game_truly_finished(driver):
+                        if await is_game_truly_finished(page):
                             logging.info(f"Стол {table_id}: завершение подтверждено")
-                            final_state = get_state_fast(driver) or state
+                            final_state = await get_state_fast(page) or state
                             
                             if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
                                 final_msg = format_message(table_id, final_state, is_final=True, 
@@ -569,12 +545,6 @@ def monitor_table(table_url, table_id):
                 else:
                     verification_pending = False
 
-                # Пропускаем пустые состояния
-                if initial_load and len(state['p_cards']) == 0 and len(state['d_cards']) == 0:
-                    time.sleep(1)
-                    continue
-
-                # Отправка обновлений
                 if state != last_state or initial_load:
                     cards_changed = False
                     if last_state:
@@ -588,7 +558,7 @@ def monitor_table(table_url, table_id):
                         with lock:
                             last_msg = last_messages.get(table_id)
                             if last_msg == msg and not initial_load and not cards_changed:
-                                time.sleep(1)
+                                await page.sleep(1)
                                 continue
                         
                         try:
@@ -612,31 +582,22 @@ def monitor_table(table_url, table_id):
                                 
                         except Exception as e:
                             logging.error(f"Ошибка отправки: {e}")
-                            time.sleep(2)
+                            await page.sleep(2)
 
-                time.sleep(1)
+                await page.sleep(1)
 
-            except StaleElementReferenceException:
-                logging.warning(f"StaleElementReferenceException, обновляем")
-                driver.refresh()
-                time.sleep(3)
-                last_activity_time = time.time()
-                cards_count_history = []
-                last_turn = None
-                in_transition = False
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
-                time.sleep(2)
+                await page.sleep(2)
 
     except Exception as e:
         logging.error(f"Критическая ошибка: {e}")
     finally:
-        # Финальная проверка перед закрытием
-        if driver and game_active:
+        if browser and game_active:
             try:
-                time.sleep(3)
-                if not is_game_truly_finished(driver):
-                    state = get_state_fast(driver)
+                await page.sleep(3)
+                if not await is_game_truly_finished(page):
+                    state = await get_state_fast(page)
                     if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
                         logging.warning(f"Стол {table_id}: принудительное завершение")
                         final_msg = format_message(table_id, state, is_final=True, 
@@ -652,7 +613,7 @@ def monitor_table(table_url, table_id):
             except:
                 pass
         
-        safe_quit_driver(table_id)
+        await safe_close_browser(table_id)
         with lock:
             if table_id in active_tables:
                 del active_tables[table_id]
@@ -663,29 +624,31 @@ def monitor_table(table_url, table_id):
         
         logging.info(f"Мониторинг стола {table_id} завершен")
 
-def launch_new_table_monitor():
-    """Запустить мониторинг нового стола (следующий по порядку)"""
+def monitor_table_thread(table_url, table_id):
+    asyncio.run(monitor_table_async(table_url, table_id))
+
+async def launch_new_table_monitor_async():
     with lock:
         if len(active_tables) >= MAX_BROWSERS:
             logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS})")
             return
     
-    scan_driver = None
+    scan_browser = None
     try:
-        scan_driver = create_driver()
-        if not scan_driver:
-            logging.error("Не удалось создать драйвер для поиска стола")
+        scan_browser = await create_browser()
+        if not scan_browser:
+            logging.error("Не удалось создать браузер для поиска стола")
             return
         
         logging.info("Поиск следующего стола по порядку...")
-        scan_driver.get(MAIN_URL)
+        await scan_browser.get(MAIN_URL)
         
-        table_url, table_id = get_next_table(scan_driver)
+        table_url, table_id = await get_next_table(scan_browser)
         
         if table_url and table_id:
             logging.info(f"Найден следующий стол: {table_id}")
             
-            thread = threading.Thread(target=monitor_table, args=(table_url, table_id))
+            thread = threading.Thread(target=monitor_table_thread, args=(table_url, table_id))
             thread.daemon = True
             thread.start()
             
@@ -699,19 +662,22 @@ def launch_new_table_monitor():
     except Exception as e:
         logging.error(f"Ошибка при запуске нового монитора: {e}")
     finally:
-        if scan_driver:
-            scan_driver.quit()
+        if scan_browser:
+            await scan_browser.stop()
+
+def launch_new_table_monitor():
+    asyncio.run(launch_new_table_monitor_async())
 
 def clean_threads():
     with lock:
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
-            if tid in table_drivers:
+            if tid in table_browsers:
                 try:
-                    table_drivers[tid].quit()
+                    # В синхронном контексте просто удаляем ссылку
+                    del table_browsers[tid]
                 except:
                     pass
-                del table_drivers[tid]
             del active_tables[tid]
             if tid in message_ids:
                 del message_ids[tid]
@@ -722,7 +688,7 @@ def clean_threads():
 def main():
     global table_counter
     table_counter = 0
-    logging.info("🚀 Бот запущен с последовательным выбором столов (каждый новый браузер берет следующий стол)")
+    logging.info("🚀 Бот запущен с Zendriver и последовательным выбором столов")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     while True:
@@ -740,12 +706,16 @@ def main():
             time.sleep(5)
     
     logging.info("Завершение работы бота...")
-    with lock:
-        for driver in table_drivers.values():
-            try:
-                driver.quit()
-            except:
-                pass
+    
+    async def close_all():
+        with lock:
+            for browser in table_browsers.values():
+                try:
+                    await browser.stop()
+                except:
+                    pass
+    
+    asyncio.run(close_all())
     game_data.save_data()
 
 if __name__ == "__main__":
