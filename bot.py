@@ -19,8 +19,8 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 1
-CHECK_INTERVAL = 30
+MAX_MONITORS = 3
+CHECK_INTERVAL = 10
 DATA_FILE = "game_data.json"
 MAX_DAYS = 3
 # =====================
@@ -42,9 +42,11 @@ VALUE_MAP = {
 }
 
 bot = telebot.TeleBot(TOKEN)
-active_tables = {}
+monitors = {}  # {table_id: thread}
 message_ids = {}
 game_data = {}
+scanner_thread = None
+scanner_running = False
 lock = threading.Lock()
 
 # ===== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ =====
@@ -104,6 +106,14 @@ def create_driver():
     options.add_argument('--disable-gpu')
     options.add_argument('--disable-extensions')
     options.add_argument('--window-size=1920,1080')
+    options.add_argument('--disable-background-networking')
+    options.add_argument('--disable-client-side-phishing-detection')
+    options.add_argument('--disable-default-apps')
+    options.add_argument('--disable-hang-monitor')
+    options.add_argument('--disable-sync')
+    options.add_argument('--disable-web-resources')
+    options.add_argument('--no-first-run')
+    options.add_argument('--password-store=basic')
     options.binary_location = '/usr/bin/chromium'
     
     service = Service('/usr/bin/chromedriver')
@@ -237,6 +247,25 @@ def get_state(driver):
         logging.error(f"Ошибка получения состояния: {e}")
         return None
 
+def is_game_finished(driver):
+    try:
+        status_elements = driver.find_elements(By.CSS_SELECTOR, '.scoreboard-card-games-board-status')
+        if status_elements:
+            status_text = status_elements[0].text.strip()
+            if "Победа" in status_text or "Ничья" in status_text:
+                logging.info(f"Игра завершена: {status_text}")
+                return True
+        
+        timer_elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
+        if timer_elements:
+            timer_text = timer_elements[0].text.strip()
+            if timer_text == "Игра завершена":
+                logging.info("Игра завершена по таймеру")
+                return True
+    except:
+        pass
+    return False
+
 def format_message(table_id, state, is_final=False, t_num=None):
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
@@ -261,37 +290,36 @@ def format_message(table_id, state, is_final=False, t_num=None):
             return f"⏰#N{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
+    """Монитор для конкретного стола"""
     driver = None
     last_state = None
     msg_id = None
     t_num = get_t_number(table_id)
-    game_active = True
     cards_appeared = False
     start_time = time.time()
-    max_lifetime = 300
+    max_lifetime = 300  # 5 минут
     crash_count = 0
     max_crashes = 2
 
-    # Получаем сохраненный msg_id если есть
     with lock:
         if table_id in game_data and 'msg_id' in game_data[table_id]:
             saved_msg_id = game_data[table_id]['msg_id']
             if saved_msg_id:
                 msg_id = saved_msg_id
                 message_ids[table_id] = saved_msg_id
-                logging.info(f"Стол {table_id}: загружен сохраненный msg_id {saved_msg_id}")
+                logging.info(f"Монитор {table_id}: загружен msg_id {saved_msg_id}")
 
     try:
         driver = create_driver()
         if not driver:
-            logging.error(f"Не удалось создать драйвер для стола {table_id}")
+            logging.error(f"Монитор {table_id}: не удалось создать драйвер")
             return
 
-        logging.info(f"Мониторинг стола {table_id} (T{t_num})")
+        logging.info(f"Монитор {table_id} запущен (T{t_num})")
         driver.get(table_url)
         time.sleep(3)
 
-        while game_active and crash_count < max_crashes and (time.time() - start_time) < max_lifetime:
+        while crash_count < max_crashes and (time.time() - start_time) < max_lifetime:
             try:
                 state = get_state(driver)
                 
@@ -299,7 +327,6 @@ def monitor_table(table_url, table_id):
                     time.sleep(1)
                     continue
                 
-                # Сброс счетчика при успехе
                 crash_count = 0
                 
                 if not cards_appeared:
@@ -309,18 +336,30 @@ def monitor_table(table_url, table_id):
                         try:
                             if msg_id:
                                 bot.edit_message_text(msg, CHANNEL_ID, msg_id)
-                                logging.info(f"Стол {table_id}: сообщение отредактировано")
+                                logging.info(f"Монитор {table_id}: сообщение отредактировано")
                             else:
                                 sent = bot.send_message(CHANNEL_ID, msg)
                                 msg_id = sent.message_id
                                 get_t_number(table_id, msg_id)
                                 with lock:
                                     message_ids[table_id] = msg_id
-                                logging.info(f"Стол {table_id}: первое сообщение")
+                                logging.info(f"Монитор {table_id}: первое сообщение")
                             last_state = state
                         except Exception as e:
-                            logging.error(f"Ошибка отправки: {e}")
+                            logging.error(f"Монитор {table_id}: ошибка отправки: {e}")
                     continue
+
+                if is_game_finished(driver):
+                    final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
+                    try:
+                        if msg_id:
+                            bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
+                        else:
+                            bot.send_message(CHANNEL_ID, final_msg)
+                        logging.info(f"Монитор {table_id}: игра завершена")
+                    except Exception as e:
+                        logging.error(f"Монитор {table_id}: ошибка финала: {e}")
+                    break
 
                 if state != last_state:
                     msg = format_message(table_id, state)
@@ -334,108 +373,134 @@ def monitor_table(table_url, table_id):
                             with lock:
                                 message_ids[table_id] = msg_id
                         last_state = state
-                        logging.info(f"Стол {table_id} обновлен")
+                        logging.info(f"Монитор {table_id}: обновлен")
                     except Exception as e:
-                        logging.error(f"Ошибка обновления: {e}")
+                        logging.error(f"Монитор {table_id}: ошибка обновления: {e}")
 
                 time.sleep(2)
 
             except WebDriverException as e:
                 crash_count += 1
-                logging.error(f"Краш {crash_count}/{max_crashes} для стола {table_id}")
+                logging.error(f"Монитор {table_id}: краш {crash_count}/{max_crashes}")
                 time.sleep(3)
                 continue
             except Exception as e:
-                logging.error(f"Ошибка в цикле: {e}")
+                logging.error(f"Монитор {table_id}: ошибка: {e}")
                 time.sleep(2)
 
-        logging.info(f"Стол {table_id}: завершение работы")
+        logging.info(f"Монитор {table_id}: завершение работы")
 
     except Exception as e:
-        logging.error(f"Критическая ошибка: {e}")
+        logging.error(f"Монитор {table_id}: критическая ошибка: {e}")
     finally:
         if driver:
             try:
                 driver.quit()
-                logging.info(f"Браузер для стола {table_id} закрыт")
+                logging.info(f"Монитор {table_id}: браузер закрыт")
             except:
                 pass
         with lock:
-            if table_id in active_tables:
-                del active_tables[table_id]
+            if table_id in monitors:
+                del monitors[table_id]
 
-def scan_tables():
-    driver = None
-    try:
-        driver = create_driver()
-        if not driver:
-            return
-        
-        logging.info("Сканирование столов...")
-        driver.get(MAIN_URL)
-        time.sleep(3)
-
-        links = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block__link')
-        ids = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
-
-        tables = []
-        for i, link in enumerate(links):
-            if i >= len(ids):
+def scanner_worker():
+    """Сканер - живет вечно, ищет новые столы"""
+    global scanner_running
+    logging.info("Сканер запущен")
+    
+    while scanner_running:
+        driver = None
+        try:
+            driver = create_driver()
+            if not driver:
+                time.sleep(5)
                 continue
-            raw_id = ids[i].text.strip()
-            match = re.search(r'(\d+)$', raw_id)
-            table_id = match.group(1) if match else raw_id
-            href = link.get_attribute('href')
-            tables.append((table_id, href))
 
-        if tables:
-            last_table = tables[-1]
-            table_id, href = last_table
-            
-            with lock:
-                if len(active_tables) < MAX_BROWSERS and table_id not in active_tables:
-                    thread = threading.Thread(target=monitor_table, args=(href, table_id))
-                    thread.daemon = True
-                    thread.start()
-                    active_tables[table_id] = thread
-                    logging.info(f"Запущен мониторинг нижнего стола {table_id}")
+            driver.get(MAIN_URL)
+            time.sleep(3)
 
-        logging.info(f"Найдено столов: {len(tables)}")
+            links = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block__link')
+            ids = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
 
-    except Exception as e:
-        logging.error(f"Ошибка сканирования: {e}")
-    finally:
-        if driver:
-            driver.quit()
+            tables = []
+            for i, link in enumerate(links):
+                if i >= len(ids):
+                    continue
+                raw_id = ids[i].text.strip()
+                match = re.search(r'(\d+)$', raw_id)
+                table_id = match.group(1) if match else raw_id
+                href = link.get_attribute('href')
+                tables.append((table_id, href))
 
-def clean_threads():
+            if tables:
+                # Берем последний (нижний) стол
+                last_table = tables[-1]
+                table_id, href = last_table
+                
+                with lock:
+                    if len(monitors) < MAX_MONITORS and table_id not in monitors:
+                        thread = threading.Thread(target=monitor_table, args=(href, table_id))
+                        thread.daemon = True
+                        thread.start()
+                        monitors[table_id] = thread
+                        logging.info(f"Сканер: запущен монитор для стола {table_id}")
+
+            logging.info(f"Сканер: найдено столов {len(tables)}, мониторов {len(monitors)}/{MAX_MONITORS}")
+
+        except Exception as e:
+            logging.error(f"Сканер: ошибка: {e}")
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+        
+        time.sleep(CHECK_INTERVAL)
+
+def start_scanner():
+    """Запуск сканера в отдельном потоке"""
+    global scanner_thread, scanner_running
+    if scanner_thread and scanner_thread.is_alive():
+        return
+    scanner_running = True
+    scanner_thread = threading.Thread(target=scanner_worker)
+    scanner_thread.daemon = True
+    scanner_thread.start()
+
+def stop_scanner():
+    """Остановка сканера"""
+    global scanner_running
+    scanner_running = False
+
+def clean_monitors():
+    """Очистка завершенных мониторов"""
     with lock:
-        dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
+        dead = [tid for tid, t in monitors.items() if not t.is_alive()]
         for tid in dead:
-            del active_tables[tid]
-            logging.info(f"Поток стола {tid} очищен")
+            del monitors[tid]
+            if tid in message_ids:
+                del message_ids[tid]
+            logging.info(f"Монитор {tid} очищен")
 
 def main():
     load_game_data()
     logging.info("Бот запущен")
     
-    while True:
-        try:
-            clean_threads()
-            scan_tables()
-            
-            with lock:
-                logging.info(f"Активных браузеров: {len(active_tables)}")
-            
-            time.sleep(CHECK_INTERVAL)
-            
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            logging.error(f"Ошибка: {e}")
-            time.sleep(60)
+    start_scanner()
     
-    save_game_data()
+    try:
+        while True:
+            time.sleep(30)
+            clean_monitors()
+            with lock:
+                logging.info(f"Активных мониторов: {len(monitors)}/{MAX_MONITORS}")
+    except KeyboardInterrupt:
+        logging.info("Остановка...")
+        stop_scanner()
+    finally:
+        save_game_data()
+        logging.info("Бот остановлен")
 
 if __name__ == "__main__":
     main()
