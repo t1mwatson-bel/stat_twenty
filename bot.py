@@ -338,7 +338,7 @@ def monitor_table(table_url, table_id):
             except:
                 pass
 
-def scan_new_tables():
+ddef scan_new_tables():
     """Сканирует главную страницу и запускает только свободные столы"""
     driver = None
     try:
@@ -350,6 +350,7 @@ def scan_new_tables():
         driver.get(MAIN_PAGE_URL)
         time.sleep(5)
         
+        # Собираем ссылки
         table_links = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_link'])
         table_ids = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_id'])
         
@@ -358,29 +359,95 @@ def scan_new_tables():
         available_tables = []
         
         for i, link in enumerate(table_links):
+            href = link.get_attribute('href')
+            table_id = None
+            
+            # СПОСОБ 1: Через селектор
             if i < len(table_ids):
                 table_id = table_ids[i].text.strip()
-                href = link.get_attribute('href')
-                
-                if table_id in processed_games:
-                    logging.info(f"⏭️ Стол #{table_id} уже обработан, пропускаем")
-                    continue
-                
-                if table_id in active_tables:
-                    logging.info(f"👁️ Стол #{table_id} уже мониторится, пропускаем")
-                    continue
-                
-                try:
-                    parent = link.find_element(By.XPATH, '../../../../..')
-                    status_elem = parent.find_elements(By.CSS_SELECTOR, SELECTORS['game_status'])
-                    if status_elem:
-                        status_text = status_elem[0].text
-                        if any(word in status_text.lower() for word in ['завершен', 'завершена']):
-                            logging.info(f"✅ Стол #{table_id} уже завершен, добавляем в обработанные")
-                            processed_games.add(table_id)
-                            continue
-                except:
-                    pass
+                logging.info(f"📌 Стол найден через селектор: ID={table_id}")
+            
+            # СПОСОБ 2: Из ссылки
+            if not table_id and href:
+                import re
+                match = re.search(r'/(\d+)-player', href)
+                if match:
+                    table_id = match.group(1)
+                    logging.info(f"📌 Стол найден через ссылку: ID={table_id}")
+            
+            if not table_id:
+                logging.warning(f"⚠️ Не удалось получить ID для ссылки {href}")
+                continue
+            
+            if table_id in processed_games:
+                logging.info(f"⏭️ Стол #{table_id} уже обработан, пропускаем")
+                continue
+            
+            if table_id in active_tables:
+                logging.info(f"👁️ Стол #{table_id} уже мониторится, пропускаем")
+                continue
+            
+            # Проверка статуса на главной
+            try:
+                # Ищем родительский элемент
+                parent = link.find_element(By.XPATH, '../../../../..')
+                status_elem = parent.find_elements(By.CSS_SELECTOR, SELECTORS['game_status'])
+                if status_elem:
+                    status_text = status_elem[0].text
+                    if any(word in status_text.lower() for word in ['завершен', 'завершена']):
+                        logging.info(f"✅ Стол #{table_id} уже завершен, добавляем в обработанные")
+                        processed_games.add(table_id)
+                        continue
+            except Exception as e:
+                logging.debug(f"Не удалось проверить статус для #{table_id}: {e}")
+            
+            available_tables.append((table_id, href))
+            logging.info(f"✅ Стол #{table_id} свободен для мониторинга")
+        
+        logging.info(f"📊 Статистика: Всего {len(table_links)} столов, Свободных: {len(available_tables)}")
+        
+        driver.quit()
+        
+        # Запускаем свободные столы
+        started = 0
+        for table_id, href in available_tables:
+            if len(active_tables) >= MAX_BROWSERS:
+                logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS})")
+                break
+            
+            if not check_memory():
+                logging.error("❌ Недостаточно памяти для запуска нового стола")
+                break
+            
+            if table_id in active_tables or table_id in processed_games:
+                continue
+            
+            logging.info(f"🚀 Запускаем монитор для свободного стола #{table_id}")
+            thread = threading.Thread(target=monitor_table, args=(href, table_id))
+            thread.daemon = True
+            thread.start()
+            
+            time.sleep(5)
+            
+            if thread.is_alive():
+                active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
+                started += 1
+                logging.info(f"✅ Стол #{table_id} успешно запущен")
+            else:
+                logging.error(f"❌ Стол #{table_id} НЕ запустился")
+            
+            time.sleep(3)
+        
+        logging.info(f"🚀 Запущено новых столов: {started}")
+            
+    except Exception as e:
+        logging.error(f"❌ Ошибка сканирования: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
                 
                 if href and table_id:
                     available_tables.append((table_id, href))
