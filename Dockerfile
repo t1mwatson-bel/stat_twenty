@@ -1,4 +1,7 @@
-FROM python:3.10-slim
+FROM python:3.9-slim
+
+# Европейские зеркала для скорости
+RUN sed -i 's/deb.debian.org/ftp.nl.debian.org/g' /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y \
     wget \
