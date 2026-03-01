@@ -267,114 +267,77 @@ def calculate_final_hashtags(player_score, dealer_score, player_cards, dealer_ca
     return " ".join(hashtags)
 
 def monitor_table(table_url, table_id):
-    """Следит за одним столом - одно сообщение на всю игру"""
     driver = None
     start_time = time.time()
     last_state = None
-    game_started = False
-    message_id = None
-    last_sent_text = ""
-    
+    game_actions = set()
+    t_number = random.randint(30, 60)
+
     try:
         logging.info(f"🔄 Браузер для стола #{table_id} запущен")
         driver = create_driver()
         if not driver:
             return
-        
+
         driver.get(table_url)
         logging.info(f"✅ Стол #{table_id} загружен")
-        
-        # Даем время на загрузку
-        time.sleep(5)
-        
+
+        time.sleep(4)  # Ждём полную отрисовку
+
         while True:
             if time.time() - start_time > 3600:
                 logging.warning(f"⏰ Стол #{table_id} превысил время ожидания")
                 break
-            
+
             try:
                 current_state = get_game_state(driver, table_id)
                 if not current_state:
                     time.sleep(2)
                     continue
-                
-                player_cards_str = format_cards(current_state['player_cards'])
-                dealer_cards_str = format_cards(current_state['dealer_cards'])
-                
-                # Проверяем началась ли игра (есть карты)
-                if not game_started:
-                    if (len(current_state['player_cards']) > 0 or 
-                        len(current_state['dealer_cards']) > 0):
-                        game_started = True
-                        logging.info(f"🎮 Стол #{table_id}: игра началась!")
-                
-                # Проверяем завершение игры
+
+                # ИГНОРИРУЕМ состояния, где нет счёта или карт
+                if current_state['player_score'] in ['?', '0', ''] or not current_state['player_cards']:
+                    time.sleep(2)
+                    continue
+
+                player_cards_str = ''.join(current_state['player_cards'])
+                dealer_cards_str = ''.join(current_state['dealer_cards'])
+
+                # Завершение игры
                 if any(word in current_state['game_status'].lower() for word in ['завершен', 'завершена']):
-                    # Рассчитываем финальные хэштеги
-                    final_hashtags = calculate_final_hashtags(
-                        current_state['player_score'],
-                        current_state['dealer_score'],
-                        current_state['player_cards'],
-                        current_state['dealer_cards']
-                    )
-                    
-                    # Определяем разделитель (- или X)
-                    separator = "X" if current_state['player_score'] == current_state['dealer_score'] else "-"
-                    
-                    final_message = f"#N{table_id}. {current_state['player_score']}({player_cards_str}) {separator} {current_state['dealer_score']}({dealer_cards_str}) {final_hashtags}"
-                    
+                    final_message = f"#N{table_id}. {current_state['player_score']}({player_cards_str}) - {current_state['dealer_score']}({dealer_cards_str}) #T{t_number}"
                     try:
-                        if message_id:
-                            # Редактируем существующее сообщение
-                            bot.edit_message_text(final_message, CHANNEL_ID, message_id)
-                            logging.info(f"✅ Стол #{table_id} завершен, сообщение отредактировано")
-                        else:
-                            # Отправляем новое (на всякий случай)
-                            sent = bot.send_message(CHANNEL_ID, final_message)
-                            message_id = sent.message_id
-                            logging.info(f"✅ Стол #{table_id} завершен, отправлено новое")
-                    except Exception as e:
-                        logging.error(f"❌ Ошибка отправки финала: {e}")
+                        bot.send_message(CHANNEL_ID, final_message)
+                        logging.info(f"✅ Стол #{table_id} завершён")
+                    except:
+                        pass
                     break
-                
-                # Формируем текущее состояние для редактирования
-                if game_started and current_state != last_state:
-                    
-                    # Определяем чей сейчас ход по символу ▶
-                    if "Ход игрока" in current_state['round_status']:
-                        current_text = f"⏰#N{table_id}. ▶ {current_state['player_score']}({player_cards_str}) - {current_state['dealer_score']}({dealer_cards_str})"
-                    elif "Ход дилера" in current_state['round_status']:
-                        current_text = f"⏰#N{table_id}. {current_state['player_score']}({player_cards_str}) - ▶ {current_state['dealer_score']}({dealer_cards_str})"
-                    else:
-                        # Если не определено, ставим ▶ перед тем у кого меньше карт
-                        if len(current_state['player_cards']) <= len(current_state['dealer_cards']):
-                            current_text = f"⏰#N{table_id}. ▶ {current_state['player_score']}({player_cards_str}) - {current_state['dealer_score']}({dealer_cards_str})"
-                        else:
-                            current_text = f"⏰#N{table_id}. {current_state['player_score']}({player_cards_str}) - ▶ {current_state['dealer_score']}({dealer_cards_str})"
-                    
-                    # Отправляем или редактируем
-                    if current_text != last_sent_text:
-                        try:
-                            if message_id:
-                                bot.edit_message_text(current_text, CHANNEL_ID, message_id)
-                                logging.info(f"✏️ Стол #{table_id} обновлен")
-                            else:
-                                sent = bot.send_message(CHANNEL_ID, current_text)
-                                message_id = sent.message_id
-                                logging.info(f"📤 Стол #{table_id} создан")
-                            
-                            last_sent_text = current_text
-                        except Exception as e:
-                            logging.error(f"❌ Ошибка отправки/редактирования: {e}")
-                    
+
+                # Если состояние изменилось (и оно валидно)
+                if current_state != last_state and current_state['player_score'] not in ['?', '0']:
+                    if last_state:
+                        # Новая карта игрока
+                        if len(current_state['player_cards']) > len(last_state['player_cards']):
+                            msg = f"⏰#N{table_id}. ▶ {last_state['player_score']}({''.join(last_state['player_cards'])}) - {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
+                            if msg not in game_actions:
+                                bot.send_message(CHANNEL_ID, msg)
+                                game_actions.add(msg)
+
+                        # Новая карта дилера
+                        if len(current_state['dealer_cards']) > len(last_state['dealer_cards']):
+                            msg = f"⏰#N{table_id}. {last_state['player_score']}({''.join(last_state['player_cards'])}) - ▶ {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
+                            if msg not in game_actions:
+                                bot.send_message(CHANNEL_ID, msg)
+                                game_actions.add(msg)
+
                     last_state = current_state
-                
+
                 time.sleep(2)
-                
+
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в столе #{table_id}: {e}")
                 time.sleep(3)
-                
+
     except Exception as e:
         logging.error(f"❌ Критическая ошибка стола #{table_id}: {e}")
     finally:
