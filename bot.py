@@ -278,16 +278,17 @@ def format_message(table_id, state, is_final=False, game_number=None):
     d_cards = format_cards(state['d_cards'])
     
     # Базовый формат: #N{номер}. {счет игрока}({карты}) - {счет дилера}({карты})
-    base_msg = f"#N{game_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+    player_part = f"{state['p_score']}({p_cards})"
+    dealer_part = f"{state['d_score']}({d_cards})"
     
     if not is_final:
         # Промежуточное сообщение с указанием, кто добирает
         if state['turn'] == 'player':
-            return f"⏰{base_msg.replace(f"{state['p_score']}({p_cards})", f"▶ {state['p_score']}({p_cards})")}"
+            player_part = f"▶ {player_part}"
         elif state['turn'] == 'dealer':
-            return f"⏰{base_msg.replace(f"{state['d_score']}({d_cards})", f"▶ {state['d_score']}({d_cards})")}"
-        else:
-            return f"⏰{base_msg}"
+            dealer_part = f"▶ {dealer_part}"
+        
+        return f"⏰#N{game_number}. {player_part} - {dealer_part}"
     else:
         # Финальное сообщение с тегами
         tags = []
@@ -308,9 +309,7 @@ def format_message(table_id, state, is_final=False, game_number=None):
         if is_golden_point(state['p_cards'], state['d_cards']):
             tags.append("#G")
         
-        # Сохраняем данные игры
-        save_game_data()
-        
+        base_msg = f"#N{game_number}. {player_part} - {dealer_part}"
         return f"{base_msg} {' '.join(tags)}"
 
 def monitor_table(table_url, table_id):
