@@ -10,10 +10,6 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Create symbolic links for compatibility
-RUN ln -s /usr/bin/chromium /usr/bin/chromium-browser \
-    && ln -s /usr/bin/chromedriver /usr/local/bin/chromedriver
-
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
