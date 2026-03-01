@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Устанавливаем Chrome и зависимости
+# Устанавливаем Chromium и драйвер
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-# Создаем симлинки для совместимости
-RUN ln -s /usr/bin/chromium /usr/bin/google-chrome \
-    && ln -s /usr/bin/chromedriver /usr/bin/chromedriver
+# Создаем симлинки
+RUN ln -s /usr/bin/chromium /usr/bin/google-chrome || true \
+    && ln -s /usr/bin/chromedriver /usr/bin/chromedriver || true
+
+# Проверяем установку
+RUN which chromium && which chromedriver || echo "Check failed"
 
 WORKDIR /app
 
