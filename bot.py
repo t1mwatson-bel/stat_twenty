@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import random
+import subprocess
 from datetime import datetime
 
 from selenium import webdriver
@@ -13,7 +14,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import (
     WebDriverException, TimeoutException, NoSuchElementException,
-    StaleElementReferenceException
+    StaleElementReferenceException, InvalidSessionIdException
 )
 import telebot
 import psutil
@@ -25,7 +26,6 @@ MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-
 MAX_BROWSERS = 3
 CHECK_INTERVAL = 60
 
-# Логирование
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -36,7 +36,6 @@ logging.basicConfig(
     ]
 )
 
-# Селекторы (проверенные)
 SELECTORS = {
     'table_link': '.dashboard-game-block__link',
     'table_id': '.dashboard-game-info__additional-info',
@@ -48,7 +47,6 @@ SELECTORS = {
     'game_round': '.scoreboard-card-games-board-status'
 }
 
-# Масти — финальные, проверенные
 SUIT_MAP = {
     'suit-0': '♠️',
     'suit-1': '♣️',
@@ -68,6 +66,16 @@ active_tables = {}
 processed_games = set()
 # ==============================================
 
+def kill_all_chromes():
+    """Беспощадно убивает всё, что связано с chromium/chrome"""
+    try:
+        subprocess.run(["pkill", "-9", "-f", "chromium"], capture_output=True)
+        subprocess.run(["pkill", "-9", "-f", "chrome"], capture_output=True)
+        subprocess.run(["pkill", "-9", "-f", "chromedriver"], capture_output=True)
+        logging.info("💀 Все процессы Chromium убиты")
+    except:
+        pass
+
 def check_memory():
     try:
         mem = psutil.virtual_memory()
@@ -77,13 +85,13 @@ def check_memory():
     except:
         return True
 
-def create_driver(retries=3):
+def create_driver(retries=2):
+    kill_all_chromes()  # чистим перед созданием
     for attempt in range(retries):
         try:
             logging.info(f"🔄 Попытка {attempt+1} создания браузера...")
             options = Options()
 
-            # Полный набор флагов для стабильности
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
@@ -125,7 +133,6 @@ def create_driver(retries=3):
             chrome_path = '/usr/bin/chromium'
             if os.path.exists(chrome_path):
                 options.binary_location = chrome_path
-                logging.info(f"✅ Chrome найден: {chrome_path}")
             else:
                 logging.error("❌ Chrome не найден")
                 return None
@@ -143,11 +150,11 @@ def create_driver(retries=3):
 
         except Exception as e:
             logging.warning(f"⚠️ Попытка {attempt+1} не удалась: {e}")
+            kill_all_chromes()
             if attempt < retries - 1:
                 time.sleep(3)
-            else:
-                logging.error("❌ Не удалось создать браузер после всех попыток")
-                return None
+    logging.error("❌ Не удалось создать браузер")
+    return None
 
 def parse_card_from_element(card):
     try:
@@ -195,6 +202,9 @@ def get_game_state(driver, table_id):
         except:
             pass
         return state
+    except InvalidSessionIdException:
+        logging.warning(f"⚠️ #{table_id}: сессия невалидна, выходим")
+        return None
     except Exception as e:
         logging.error(f"get_game_state #{table_id}: {e}")
         return None
@@ -222,7 +232,6 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
 
-                # Пропускаем пустые состояния
                 if state['player_score'] in ['?', '0', ''] or not state['player_cards']:
                     time.sleep(2)
                     continue
@@ -230,7 +239,6 @@ def monitor_table(table_url, table_id):
                 p_cards = ''.join(state['player_cards'])
                 d_cards = ''.join(state['dealer_cards'])
 
-                # Завершение игры
                 if any(w in state['game_status'].lower() for w in ['завершен', 'завершена']):
                     final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}"
                     try:
@@ -242,14 +250,12 @@ def monitor_table(table_url, table_id):
 
                 if state != last_state:
                     if last_state:
-                        # Новая карта игрока
                         if len(state['player_cards']) > len(last_state['player_cards']):
                             msg = f"⏰#N{table_id}. ▶ {last_state['player_score']}({''.join(last_state['player_cards'])}) - {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
                                 bot.send_message(CHANNEL_ID, msg)
                                 sent.add(msg)
 
-                        # Новая карта дилера
                         if len(state['dealer_cards']) > len(last_state['dealer_cards']):
                             msg = f"⏰#N{table_id}. {last_state['player_score']}({''.join(last_state['player_cards'])}) - ▶ {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
@@ -260,10 +266,9 @@ def monitor_table(table_url, table_id):
 
                 time.sleep(2)
 
-            except StaleElementReferenceException:
-                logging.warning(f"⚠️ Stale element #{table_id}, рефреш")
-                driver.refresh()
-                time.sleep(3)
+            except (StaleElementReferenceException, InvalidSessionIdException):
+                logging.warning(f"⚠️ Stale/Invalid сессия #{table_id}, выход")
+                break
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в #{table_id}: {e}")
                 time.sleep(3)
@@ -274,9 +279,9 @@ def monitor_table(table_url, table_id):
         if driver:
             try:
                 driver.quit()
-                logging.info(f"🛑 Браузер #{table_id} закрыт")
             except:
                 pass
+            logging.info(f"🛑 Браузер #{table_id} закрыт")
 
 def scan_new_tables():
     driver = None
@@ -306,10 +311,8 @@ def scan_new_tables():
 
             if not table_id:
                 continue
-
             if table_id in processed_games or table_id in active_tables:
                 continue
-
             free.append((table_id, href))
 
         driver.quit()
@@ -344,43 +347,33 @@ def scan_new_tables():
                 pass
 
 def clean_finished():
-    """Удаляет мёртвые и зависшие потоки + убивает процессы Chrome"""
     dead = []
     for tid, data in list(active_tables.items()):
         thread = data['thread']
-        # Если поток мёртв — чистим
         if not thread.is_alive():
             dead.append(tid)
             processed_games.add(tid)
-            logging.info(f"🧹 Стол #{tid} (поток мёртв) удалён")
-            continue
-
-        # Если поток жив, но висит больше 70 минут — принудительно убиваем
-        if time.time() - data['start'] > 4200:  # 70 минут
-            logging.warning(f"⚠️ Стол #{tid} висит >70 мин, принудительно завершаем")
+            logging.info(f"🧹 Стол #{tid} (мёртвый) удалён")
+        elif time.time() - data['start'] > 4200:
+            logging.warning(f"⚠️ Стол #{tid} завис >70 мин")
             dead.append(tid)
             processed_games.add(tid)
 
     for tid in dead:
         del active_tables[tid]
 
-    # Дополнительно: убиваем зомби-процессы Chromium
-    try:
-        os.system("pkill -f chromium || true")
-        os.system("pkill -f chrome || true")
-    except:
-        pass
-
+    kill_all_chromes()
     logging.info(f"🧹 Активных после чистки: {len(active_tables)}")
 
 def main():
     logging.info("="*50)
-    logging.info("🤖 СТАБИЛЬНЫЙ БОТ (ЗОМБИ-КИЛЛЕР) ЗАПУЩЕН")
+    logging.info("🤖 ULTIMATE STABLE BOT (ZOMBIE KILLER V2)")
     logging.info(f"📊 MAX_BROWSERS = {MAX_BROWSERS}")
     logging.info("="*50)
 
+    kill_all_chromes()
     try:
-        bot.send_message(CHANNEL_ID, "🤖 Бот с зомби-киллером запущен")
+        bot.send_message(CHANNEL_ID, "🤖 Ультимативный бот запущен")
     except:
         pass
 
@@ -395,6 +388,7 @@ def main():
         except Exception as e:
             err += 1
             logging.error(f"💥 Главный цикл, попытка {err}: {e}")
+            kill_all_chromes()
             time.sleep(60)
 
 if __name__ == "__main__":
