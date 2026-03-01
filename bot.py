@@ -321,6 +321,24 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
                 return None
     return None
 
+def is_table_empty(table_element):
+    """Проверка, пустой ли стол (счёт 0:0)"""
+    try:
+        # Ищем элемент со счётом
+        score_element = table_element.find_element(By.CSS_SELECTOR, '.ui-game-scores__item--total')
+        if score_element:
+            # Получаем все числа внутри
+            numbers = score_element.find_elements(By.CSS_SELECTOR, '.ui-game-scores__num')
+            if len(numbers) == 2:
+                score1 = numbers[0].text.strip()
+                score2 = numbers[1].text.strip()
+                # Проверяем, что оба числа равны "0"
+                if score1 == "0" and score2 == "0":
+                    return True
+    except:
+        pass
+    return False
+
 def find_empty_table(driver):
     """Найти самый верхний пустой стол"""
     try:
@@ -334,6 +352,10 @@ def find_empty_table(driver):
         
         for i, table in enumerate(tables):
             try:
+                # Проверяем, пустой ли стол
+                if not is_table_empty(table):
+                    continue
+                
                 # Получаем ID стола
                 id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
                 table_id = id_element.text.strip()
@@ -342,10 +364,11 @@ def find_empty_table(driver):
                 link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
                 href = link_element.get_attribute('href')
                 
-                # Проверяем, не завершена ли уже эта игра
+                # Извлекаем числовой ID
                 match = re.search(r'(\d+)$', table_id)
                 numeric_id = match.group(1) if match else table_id
                 
+                # Проверяем, не завершена ли уже эта игра
                 if game_data.is_game_completed(numeric_id):
                     logging.info(f"Стол {numeric_id} уже завершен, пропускаем")
                     continue
@@ -356,15 +379,14 @@ def find_empty_table(driver):
                         logging.info(f"Стол {numeric_id} уже мониторится, пропускаем")
                         continue
                 
-                # Считаем этот стол подходящим
-                logging.info(f"Выбран стол {i+1}: ID {table_id}")
+                logging.info(f"Выбран пустой стол {i+1}: ID {table_id} (счёт 0:0)")
                 return href, numeric_id
                 
             except Exception as e:
                 logging.debug(f"Ошибка при обработке стола: {e}")
                 continue
         
-        logging.warning("Не найден подходящий пустой стол")
+        logging.warning("Не найден подходящий пустой стол (счёт 0:0)")
         return None, None
         
     except TimeoutException:
@@ -391,7 +413,6 @@ def wait_for_next_game():
         logging.info(f"Следующий запуск через {wait_seconds:.1f} сек (в {launch_time.strftime('%H:%M:%S')})")
         time.sleep(wait_seconds)
     else:
-        # Если уже прошло время запуска, ждем до следующей минуты
         next_launch = launch_time + timedelta(minutes=1)
         wait_seconds = (next_launch - now).total_seconds()
         logging.info(f"Пропустили время запуска, ждем до {next_launch.strftime('%H:%M:%S')}")
@@ -416,6 +437,10 @@ def monitor_table(table_url, table_id):
     cards_count_history = []
     verification_pending = False
     verification_start = 0
+    last_turn = None
+    transition_start = 0
+    in_transition = False
+    transition_timeout = 3
 
     if game_data.is_game_completed(table_id):
         logging.info(f"Стол {table_id} уже был завершен, пропускаем")
@@ -436,7 +461,7 @@ def monitor_table(table_url, table_id):
         # Ждем начала игры (появления карт)
         cards_loaded = False
         wait_start = time.time()
-        max_wait = 30  # Ждем до 30 секунд после начала минуты
+        max_wait = 30
         
         while not cards_loaded and (time.time() - wait_start) < max_wait:
             try:
@@ -448,7 +473,6 @@ def monitor_table(table_url, table_id):
                     logging.info(f"Карты загружены для стола {table_id}: игрок {len(player_cards)} карт, дилер {len(dealer_cards)} карт")
                     break
                 
-                # Проверяем, не завершена ли игра
                 if is_game_truly_finished(driver):
                     logging.info(f"Игра на столе {table_id} уже завершена")
                     game_active = False
@@ -461,7 +485,6 @@ def monitor_table(table_url, table_id):
         if not cards_loaded and game_active:
             logging.warning(f"Карты не загрузились для стола {table_id} за {max_wait} секунд")
         
-        # Даем время на стабилизацию очков
         if cards_loaded:
             time.sleep(1)
         
@@ -495,6 +518,44 @@ def monitor_table(table_url, table_id):
                 
                 last_activity_time = current_time
                 no_response_count = 0
+                
+                # Определяем текущий ход
+                current_turn = determine_turn(state)
+                
+                # Логика отслеживания перехода хода
+                if current_turn is None and last_turn is not None:
+                    # Начался переход (никто не active, но до этого кто-то ходил)
+                    if not in_transition:
+                        in_transition = True
+                        transition_start = current_time
+                        logging.info(f"Стол {table_id}: начался переход хода от {last_turn}")
+                    
+                    # Если переход слишком длительный
+                    elif current_time - transition_start > transition_timeout:
+                        logging.warning(f"Стол {table_id}: переход хода затянулся ({transition_timeout} сек), обновляем")
+                        driver.refresh()
+                        time.sleep(2)
+                        in_transition = False
+                        transition_start = 0
+                        last_turn = None
+                        continue
+
+                elif current_turn is not None:
+                    # Переход завершился - появился active
+                    if in_transition:
+                        logging.info(f"Стол {table_id}: переход завершен, теперь ходит {current_turn}")
+                        in_transition = False
+                        transition_start = 0
+                    
+                    # Обновляем last_turn
+                    last_turn = current_turn
+
+                # Если долго нет хода и никто не active - возможно игра зависла
+                elif current_turn is None and last_turn is None and (current_time - last_activity_time) > 10:
+                    logging.warning(f"Стол {table_id}: нет хода 10 сек, обновляем")
+                    driver.refresh()
+                    time.sleep(2)
+                    continue
                 
                 if is_game_truly_finished(driver):
                     if not verification_pending:
@@ -622,6 +683,8 @@ def monitor_table(table_url, table_id):
                 time.sleep(3)
                 last_activity_time = time.time()
                 cards_count_history = []
+                last_turn = None
+                in_transition = False
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
                 time.sleep(2)
@@ -674,13 +737,13 @@ def launch_new_table_monitor():
             logging.error("Не удалось создать драйвер для поиска стола")
             return
         
-        logging.info("Поиск пустого стола...")
+        logging.info("Поиск пустого стола (счёт 0:0)...")
         scan_driver.get(MAIN_URL)
         
         table_url, table_id = find_empty_table(scan_driver)
         
         if table_url and table_id:
-            logging.info(f"Найден стол {table_id}, запускаем мониторинг")
+            logging.info(f"Найден пустой стол {table_id}, запускаем мониторинг")
             
             thread = threading.Thread(target=monitor_table, args=(table_url, table_id))
             thread.daemon = True
@@ -691,7 +754,7 @@ def launch_new_table_monitor():
             
             logging.info(f"Мониторинг стола {table_id} запущен")
         else:
-            logging.warning("Не удалось найти подходящий стол")
+            logging.warning("Не удалось найти пустой стол (счёт 0:0)")
             
     except Exception as e:
         logging.error(f"Ошибка при запуске нового монитора: {e}")
@@ -722,16 +785,9 @@ def main():
     
     while True:
         try:
-            # Очищаем завершенные потоки
             clean_threads()
-            
-            # Ждем до момента запуска (за 10 сек до следующей минуты)
             wait_for_next_game()
-            
-            # Запускаем мониторинг нового стола
             launch_new_table_monitor()
-            
-            # Небольшая пауза, чтобы не запустить дважды
             time.sleep(2)
             
         except KeyboardInterrupt:
@@ -741,7 +797,6 @@ def main():
             logging.error(f"Ошибка в главном цикле: {e}")
             time.sleep(5)
     
-    # Завершение работы
     logging.info("Завершение работы бота...")
     with lock:
         for driver in table_drivers.values():
