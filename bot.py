@@ -371,9 +371,9 @@ async def monitor_table(table_url, table_id):
     
     async with async_playwright() as p:
         browser = await p.firefox.launch(
-    headless=True,
-    executable_path="/app/ms-playwright/firefox-1509/firefox/firefox"
-)
+            headless=True,
+            executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox"
+        )
         page = await browser.new_page()
         
         try:
@@ -497,9 +497,9 @@ def launch_new_table_monitor():
     async def get_table():
         async with async_playwright() as p:
             browser = await p.firefox.launch(
-    headless=True,
-    executable_path="/app/ms-playwright/firefox-1509/firefox/firefox"
-)
+                headless=True,
+                executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox"
+            )
             page = await browser.new_page()
             await page.goto(MAIN_URL)
             url, tid = await get_next_table(page)
