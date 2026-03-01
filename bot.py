@@ -435,13 +435,12 @@ def scanner_worker():
                 except StaleElementReferenceException:
                     continue
 
-            if tables:
-                # Берем последний (нижний) стол
-                last_table = tables[-1]
-                table_id, href = last_table
-                
+            # Запускаем мониторы для всех новых столов, пока есть место
+            for table_id, href in tables:
                 with lock:
-                    if len(monitors) < MAX_MONITORS and table_id not in monitors and table_id not in message_ids:
+                    if len(monitors) >= MAX_MONITORS:
+                        break
+                    if table_id not in monitors and table_id not in message_ids:
                         thread = threading.Thread(target=monitor_table, args=(href, table_id))
                         thread.daemon = True
                         thread.start()
