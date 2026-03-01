@@ -22,10 +22,9 @@ import psutil
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
-CHECK_INTERVAL = 30
+MAX_BROWSERS = 2
+CHECK_INTERVAL = 60
 
-# Логирование
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -36,7 +35,6 @@ logging.basicConfig(
     ]
 )
 
-# Селекторы (точные)
 SELECTORS = {
     'table_link': '.dashboard-game-block__link',
     'table_id': '.dashboard-game-info__additional-info',
@@ -45,10 +43,9 @@ SELECTORS = {
     'dealer_score': '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label',
     'dealer_cards': '.live-twenty-one-field-player:last-child .scoreboard-card-games-card',
     'game_status': '.ui-game-timer__label',
-    'game_round': '.scoreboard-card-games-board-status',  # ← здесь победа
+    'game_round': '.scoreboard-card-games-board-status',
 }
 
-# Масти — проверено на реальных раздачах
 SUIT_MAP = {
     'suit-0': '♠️',
     'suit-1': '♣️',
@@ -82,8 +79,6 @@ def create_driver(retries=3):
         try:
             logging.info(f"🔄 Попытка {attempt+1} создания браузера...")
             options = Options()
-
-            # Полный комплект флагов для стабильности
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
@@ -125,7 +120,6 @@ def create_driver(retries=3):
             chrome_path = '/usr/bin/chromium'
             if os.path.exists(chrome_path):
                 options.binary_location = chrome_path
-                logging.info(f"✅ Chrome найден: {chrome_path}")
             else:
                 logging.error("❌ Chrome не найден")
                 return None
@@ -222,7 +216,6 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
 
-                # Пропускаем пустые состояния
                 if state['player_score'] in ['?', '0', ''] or not state['player_cards']:
                     time.sleep(2)
                     continue
@@ -230,15 +223,9 @@ def monitor_table(table_url, table_id):
                 p_cards = ''.join(state['player_cards'])
                 d_cards = ''.join(state['dealer_cards'])
 
-                # Завершение игры + определение победителя
+                # Завершение игры — только #N... #T...
                 if any(w in state['game_status'].lower() for w in ['завершен', 'завершена']):
-                    winner = ''
-                    if 'победа дилера' in state['round_status'].lower():
-                        winner = '\n👑 Победа дилера'
-                    elif 'победа игрока' in state['round_status'].lower():
-                        winner = '\n👑 Победа игрока'
-
-                    final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}{winner}"
+                    final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}"
                     try:
                         bot.send_message(CHANNEL_ID, final)
                         logging.info(f"✅ #{table_id} завершён")
@@ -248,14 +235,12 @@ def monitor_table(table_url, table_id):
 
                 if state != last_state:
                     if last_state:
-                        # Новая карта игрока
                         if len(state['player_cards']) > len(last_state['player_cards']):
                             msg = f"⏰#N{table_id}. ▶ {last_state['player_score']}({''.join(last_state['player_cards'])}) - {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
                                 bot.send_message(CHANNEL_ID, msg)
                                 sent.add(msg)
 
-                        # Новая карта дилера
                         if len(state['dealer_cards']) > len(last_state['dealer_cards']):
                             msg = f"⏰#N{table_id}. {last_state['player_score']}({''.join(last_state['player_cards'])}) - ▶ {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
@@ -352,11 +337,8 @@ def clean_finished():
         if not thread.is_alive():
             dead.append(tid)
             processed_games.add(tid)
-            logging.info(f"🧹 Стол #{tid} (поток мёртв) удалён")
             continue
-
-        if time.time() - data['start'] > 4200:  # 70 минут
-            logging.warning(f"⚠️ Стол #{tid} висит >70 мин, принудительно завершаем")
+        if time.time() - data['start'] > 4200:
             dead.append(tid)
             processed_games.add(tid)
 
@@ -365,22 +347,14 @@ def clean_finished():
 
     try:
         os.system("pkill -f chromium || true")
-        os.system("pkill -f chrome || true")
     except:
         pass
-
-    logging.info(f"🧹 Активных после чистки: {len(active_tables)}")
 
 def main():
     logging.info("="*50)
-    logging.info("🤖 БОТ С ОПРЕДЕЛЕНИЕМ ПОБЕДИТЕЛЯ ЗАПУЩЕН")
+    logging.info("🤖 БОТ ЗАПУЩЕН")
     logging.info(f"📊 MAX_BROWSERS = {MAX_BROWSERS}")
     logging.info("="*50)
-
-    try:
-        bot.send_message(CHANNEL_ID, "🤖 Бот с определением победителя запущен")
-    except:
-        pass
 
     err = 0
     while True:
