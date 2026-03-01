@@ -13,7 +13,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
 import telebot
 import random
-from webdriver_manager.chrome import ChromeDriverManager
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
