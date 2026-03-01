@@ -10,7 +10,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import StaleElementReferenceException
 import telebot
-import psutil
 
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
@@ -77,7 +76,8 @@ def get_state(driver):
             'd_cards': dealer_cards,
             'status': status
         }
-    except:
+    except Exception as e:
+        logging.error(f"Ошибка получения состояния: {e}")
         return None
 
 def format_message(table_id, state, is_final=False, t_num=None):
@@ -138,8 +138,7 @@ def monitor_table(table_url, table_id):
     finally:
         if driver:
             driver.quit()
-        if msg_id:
-            message_ids.pop(table_id, None)
+        message_ids.pop(table_id, None)
 
 def scan_tables():
     driver = None
