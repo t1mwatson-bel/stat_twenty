@@ -20,7 +20,7 @@ from telebot import apihelper
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
+MAX_BROWSERS = 5  # Увеличил для более частого запуска
 DATA_FILE = "game_data.pkl"
 DATA_RETENTION_DAYS = 3
 # =====================
@@ -49,6 +49,7 @@ active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
 table_drivers = {}  # {table_id: driver}
 last_messages = {}  # {table_id: last_message_text}
+processed_tables = set()  # Множество обработанных столов
 lock = threading.Lock()
 
 class GameData:
@@ -318,36 +319,21 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
                 return None
     return None
 
-def get_fresh_table(driver):
-    """Получить самый свежий свободный стол (с максимальным номером, который еще не мониторится)"""
+def get_all_available_tables(driver):
+    """Получить ВСЕ доступные столы с их ID"""
     try:
-        logging.info("Ожидание загрузки страницы со столами...")
+        logging.info("Поиск всех доступных столов...")
         
         WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
         )
         
-        time.sleep(5)
+        time.sleep(3)
         
-        # Пробуем несколько раз получить столы
-        max_attempts = 3
-        tables = []
+        tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
+        logging.info(f"Найдено столов на странице: {len(tables)}")
         
-        for attempt in range(max_attempts):
-            tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
-            logging.info(f"Попытка {attempt + 1}: найдено столов: {len(tables)}")
-            
-            if len(tables) > 0:
-                break
-                
-            time.sleep(3)
-        
-        if not tables:
-            logging.warning("Нет доступных столов после нескольких попыток")
-            return None, None
-        
-        # Собираем все валидные столы с ID
-        valid_tables = []
+        available_tables = []
         for table in tables:
             try:
                 id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
@@ -356,73 +342,71 @@ def get_fresh_table(driver):
                     match = re.search(r'(\d+)$', table_id_text)
                     if match:
                         table_num = int(match.group(1))
-                        valid_tables.append((table_num, table))
+                        link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
+                        href = link_element.get_attribute('href')
+                        available_tables.append({
+                            'id': str(table_num),
+                            'url': href,
+                            'number': table_num
+                        })
                         logging.info(f"Найден стол: {table_num}")
-            except:
+            except Exception as e:
                 continue
         
-        if not valid_tables:
-            logging.warning("Нет валидных столов с ID")
+        # Сортируем по номеру стола
+        available_tables.sort(key=lambda x: x['number'])
+        return available_tables
+        
+    except Exception as e:
+        logging.error(f"Ошибка при поиске столов: {e}")
+        return []
+
+def get_next_unprocessed_table():
+    """Получить следующий необработанный стол"""
+    scan_driver = None
+    try:
+        scan_driver = create_driver()
+        if not scan_driver:
+            logging.error("Не удалось создать драйвер для поиска стола")
             return None, None
         
-        # Сортируем по номеру стола (от большего к меньшему - самые свежие первые)
-        valid_tables.sort(key=lambda x: x[0], reverse=True)
+        scan_driver.get(MAIN_URL)
         
-        logging.info(f"Доступные свежие столы: {[t[0] for t in valid_tables[:5]]}")
+        # Получаем все доступные столы
+        all_tables = get_all_available_tables(scan_driver)
         
-        # Берем самый свежий стол, который еще не мониторится
-        selected_table = None
-        selected_id = None
+        if not all_tables:
+            logging.warning("Нет доступных столов")
+            return None, None
         
         with lock:
-            for table_num, table in valid_tables:
-                table_id_str = str(table_num)
-                if table_id_str not in active_tables and table_id_str not in message_ids:
-                    # Проверяем, не завершена ли уже эта игра
-                    if not game_data.is_game_completed(table_id_str):
-                        selected_table = table
-                        selected_id = table_num
-                        logging.info(f"Выбран свободный свежий стол: {selected_id}")
-                        break
-        
-        if not selected_table:
-            logging.warning("Нет свободных свежих столов (все заняты или завершены)")
+            # Ищем первый стол, который еще не обрабатывается и не был обработан
+            for table in all_tables:
+                table_id = table['id']
+                
+                # Проверяем, не обрабатывается ли уже этот стол
+                if table_id in active_tables:
+                    logging.info(f"Стол {table_id} уже в обработке")
+                    continue
+                
+                # Проверяем, не был ли этот стол уже обработан
+                if game_data.is_game_completed(table_id):
+                    logging.info(f"Стол {table_id} уже был завершен")
+                    continue
+                
+                # Нашли новый необработанный стол
+                logging.info(f"Найден новый необработанный стол: {table_id}")
+                return table['url'], table_id
+            
+            logging.info("Новых необработанных столов не найдено")
             return None, None
-        
-        # Получаем ссылку
-        link_element = selected_table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
-        href = link_element.get_attribute('href')
-        
-        logging.info(f"✅ Запускаем мониторинг свежего стола: ID {selected_id}")
-        return href, str(selected_id)
-        
-    except TimeoutException:
-        logging.error("Таймаут при загрузке столов - сайт не отвечает")
-        return None, None
+            
     except Exception as e:
-        logging.error(f"Ошибка при поиске стола: {e}")
+        logging.error(f"Ошибка при поиске нового стола: {e}")
         return None, None
-
-def get_next_game_time():
-    now = datetime.now()
-    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    return next_minute
-
-def wait_for_next_game():
-    next_game = get_next_game_time()
-    # Увеличиваем время запуска до 15 секунд для надежности
-    launch_time = next_game - timedelta(seconds=15)
-    
-    now = datetime.now()
-    if now < launch_time:
-        wait_seconds = (launch_time - now).total_seconds()
-        logging.info(f"Следующий запуск через {wait_seconds:.1f} сек (в {launch_time.strftime('%H:%M:%S')})")
-        time.sleep(wait_seconds)
-    else:
-        next_launch = launch_time + timedelta(minutes=1)
-        wait_seconds = (next_launch - now).total_seconds()
-        logging.info(f"Пропустили время запуска, ждем до {next_launch.strftime('%H:%M:%S')}")
-        time.sleep(wait_seconds)
+    finally:
+        if scan_driver:
+            scan_driver.quit()
 
 def monitor_table(table_url, table_id):
     driver = None
@@ -440,15 +424,15 @@ def monitor_table(table_url, table_id):
     initial_load = True
     last_activity_time = time.time()
     max_idle_time = 60
-    cards_count_history = []
     verification_pending = False
     verification_start = 0
     last_turn = None
     transition_start = 0
     in_transition = False
     transition_timeout = 3
+    game_started = False
 
-    logging.info(f"Начало мониторинга стола {table_id}")
+    logging.info(f"🚀 Начало мониторинга стола {table_id} (номер #{table_number})")
 
     try:
         driver = create_driver()
@@ -461,33 +445,39 @@ def monitor_table(table_url, table_id):
 
         driver.get(table_url)
         
-        # Ждем загрузки карт
-        cards_loaded = False
+        # Ждем начала игры
         wait_start = time.time()
-        max_wait = 30
+        max_wait = 45
         
-        while not cards_loaded and (time.time() - wait_start) < max_wait:
+        while not game_started and (time.time() - wait_start) < max_wait:
             try:
+                # Проверяем, есть ли карты
                 player_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+                dealer_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
                 
-                if len(player_cards) > 0:
-                    cards_loaded = True
-                    logging.info(f"Карты загружены для стола {table_id}")
+                if len(player_cards) > 0 or len(dealer_cards) > 0:
+                    game_started = True
+                    logging.info(f"✅ Игра на столе {table_id} началась")
                     break
                 
+                # Проверяем, не завершена ли уже игра
                 if is_game_truly_finished(driver):
-                    logging.info(f"Игра на столе {table_id} уже завершена")
-                    game_active = False
-                    break
-                    
-                time.sleep(0.5)
+                    logging.info(f"Игра на столе {table_id} уже завершена, пропускаем")
+                    return
+                
+                time.sleep(1)
+                
             except Exception as e:
-                time.sleep(0.5)
+                time.sleep(1)
         
-        if cards_loaded:
-            time.sleep(1)
+        if not game_started:
+            logging.warning(f"Стол {table_id} не дождались начала игры")
+            return
         
-        logging.info(f"Старт мониторинга стола {table_id}")
+        # Даем время на полную загрузку
+        time.sleep(2)
+        
+        logging.info(f"📊 Старт мониторинга стола {table_id}")
 
         while game_active:
             try:
@@ -555,7 +545,7 @@ def monitor_table(table_url, table_id):
                         continue
                     elif current_time - verification_start >= 3:
                         if is_game_truly_finished(driver):
-                            logging.info(f"Стол {table_id}: завершение подтверждено")
+                            logging.info(f"✅ Стол {table_id}: игра завершена")
                             final_state = get_state_fast(driver) or state
                             
                             if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
@@ -573,7 +563,7 @@ def monitor_table(table_url, table_id):
                                     
                                     game_data.add_completed_game(table_id, final_msg, t_num)
                                     game_data.update_last_number(table_number)
-                                    logging.info(f"Стол {table_id} завершен")
+                                    logging.info(f"💾 Стол {table_id} сохранен в истории")
                                 except Exception as e:
                                     logging.error(f"Ошибка отправки финала: {e}")
                             
@@ -619,7 +609,7 @@ def monitor_table(table_url, table_id):
                                         msg_id = sent.message_id
                                         message_ids[table_id] = msg_id
                                         last_messages[table_id] = msg
-                                        logging.info(f"Стол {table_id}: первое сообщение")
+                                        logging.info(f"📨 Стол {table_id}: первое сообщение")
                             
                             if msg_id:
                                 last_state = state
@@ -637,7 +627,6 @@ def monitor_table(table_url, table_id):
                 driver.refresh()
                 time.sleep(3)
                 last_activity_time = time.time()
-                cards_count_history = []
                 last_turn = None
                 in_transition = False
             except Exception as e:
@@ -677,46 +666,31 @@ def monitor_table(table_url, table_id):
             if table_id in last_messages:
                 del last_messages[table_id]
         
-        logging.info(f"Мониторинг стола {table_id} завершен")
+        logging.info(f"🏁 Мониторинг стола {table_id} завершен")
 
 def launch_new_table_monitor():
-    """Запустить мониторинг самого свежего свободного стола"""
+    """Запустить мониторинг нового необработанного стола"""
     with lock:
         if len(active_tables) >= MAX_BROWSERS:
-            logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS})")
+            logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS}), активных: {len(active_tables)}")
             return
     
-    scan_driver = None
-    try:
-        scan_driver = create_driver()
-        if not scan_driver:
-            logging.error("Не удалось создать драйвер для поиска стола")
-            return
+    logging.info("🔍 Поиск следующего необработанного стола...")
+    table_url, table_id = get_next_unprocessed_table()
+    
+    if table_url and table_id:
+        logging.info(f"🎯 Найден новый стол для мониторинга: {table_id}")
         
-        logging.info("Поиск самого свежего свободного стола...")
-        scan_driver.get(MAIN_URL)
+        thread = threading.Thread(target=monitor_table, args=(table_url, table_id))
+        thread.daemon = True
+        thread.start()
         
-        table_url, table_id = get_fresh_table(scan_driver)
+        with lock:
+            active_tables[table_id] = thread
         
-        if table_url and table_id:
-            logging.info(f"Найден свежий свободный стол: {table_id}")
-            
-            thread = threading.Thread(target=monitor_table, args=(table_url, table_id))
-            thread.daemon = True
-            thread.start()
-            
-            with lock:
-                active_tables[table_id] = thread
-            
-            logging.info(f"✅ Запущен мониторинг свежего стола {table_id}")
-        else:
-            logging.warning("Не удалось найти свежий свободный стол")
-            
-    except Exception as e:
-        logging.error(f"Ошибка при запуске нового монитора: {e}")
-    finally:
-        if scan_driver:
-            scan_driver.quit()
+        logging.info(f"✅ Запущен мониторинг стола {table_id}, всего активных: {len(active_tables)}")
+    else:
+        logging.info("⏳ Новых столов для мониторинга нет")
 
 def clean_threads():
     with lock:
@@ -733,18 +707,34 @@ def clean_threads():
                 del message_ids[tid]
             if tid in last_messages:
                 del last_messages[tid]
-            logging.info(f"Поток стола {tid} очищен")
+            logging.info(f"🧹 Поток стола {tid} очищен")
 
 def main():
-    logging.info("🚀 Бот запущен: всегда берет САМЫЕ СВЕЖИЕ СВОБОДНЫЕ СТОЛЫ")
+    logging.info("🚀 Бот запущен с исправленной логикой выбора столов")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
+    
+    # Счетчик для контроля частоты запуска
+    launch_counter = 0
     
     while True:
         try:
             clean_threads()
-            wait_for_next_game()
-            launch_new_table_monitor()
-            time.sleep(2)
+            
+            # Запускаем новый стол каждые 30 секунд (или чаще, если есть свободные слоты)
+            with lock:
+                free_slots = MAX_BROWSERS - len(active_tables)
+                if free_slots > 0:
+                    logging.info(f"📊 Свободных слотов: {free_slots}")
+                    
+                    # Запускаем несколько столов подряд, если есть свободные слоты
+                    for i in range(free_slots):
+                        launch_new_table_monitor()
+                        time.sleep(5)  # Небольшая пауза между запусками
+                else:
+                    logging.info(f"⏳ Все слоты заняты ({len(active_tables)}/{MAX_BROWSERS})")
+            
+            # Проверяем состояние каждые 30 секунд
+            time.sleep(30)
             
         except KeyboardInterrupt:
             logging.info("Получен сигнал завершения")
