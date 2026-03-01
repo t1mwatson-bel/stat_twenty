@@ -19,7 +19,7 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 1  # Только один браузер на нижний стол
+MAX_BROWSERS = 1
 CHECK_INTERVAL = 30
 DATA_FILE = "game_data.json"
 MAX_DAYS = 3
@@ -210,7 +210,6 @@ def is_turn_indicator(driver, player="player"):
 
 def get_state(driver):
     try:
-        # Используем find_elements вместо find_element для избежания NoSuchElementException
         player_score_elements = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = player_score_elements[0].text if player_score_elements else "0"
         
@@ -243,7 +242,6 @@ def format_message(table_id, state, is_final=False, t_num=None):
     d_cards = format_cards(state['d_cards'])
     
     if is_final:
-        # Считаем общее количество очков для #T
         try:
             p_score_int = int(state['p_score']) if state['p_score'].isdigit() else 0
             d_score_int = int(state['d_score']) if state['d_score'].isdigit() else 0
@@ -263,12 +261,6 @@ def format_message(table_id, state, is_final=False, t_num=None):
             return f"⏰#N{table_id}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
-    # Проверяем, не запущен ли уже этот стол
-    with lock:
-        if table_id in active_tables or table_id in message_ids:
-            logging.warning(f"Стол {table_id} уже мониторится, пропускаем")
-            return
-    
     driver = None
     last_state = None
     msg_id = None
@@ -276,7 +268,7 @@ def monitor_table(table_url, table_id):
     game_active = True
     cards_appeared = False
     start_time = time.time()
-    max_lifetime = 300  # 5 минут
+    max_lifetime = 300
 
     # Получаем сохраненный msg_id если есть
     with lock:
@@ -312,17 +304,17 @@ def monitor_table(table_url, table_id):
                         try:
                             if msg_id:
                                 bot.edit_message_text(msg, CHANNEL_ID, msg_id)
-                                logging.info(f"Стол {table_id}: сообщение отредактировано (первое)")
+                                logging.info(f"Стол {table_id}: сообщение отредактировано")
                             else:
                                 sent = bot.send_message(CHANNEL_ID, msg)
                                 msg_id = sent.message_id
                                 get_t_number(table_id, msg_id)
                                 with lock:
                                     message_ids[table_id] = msg_id
-                                logging.info(f"Стол {table_id}: первое сообщение отправлено")
+                                logging.info(f"Стол {table_id}: первое сообщение")
                             last_state = state
                         except Exception as e:
-                            logging.error(f"Ошибка отправки первого сообщения: {e}")
+                            logging.error(f"Ошибка отправки: {e}")
                     continue
 
                 if state != last_state:
@@ -339,18 +331,15 @@ def monitor_table(table_url, table_id):
                         last_state = state
                         logging.info(f"Стол {table_id} обновлен")
                     except Exception as e:
-                        logging.error(f"Ошибка отправки: {e}")
+                        logging.error(f"Ошибка обновления: {e}")
 
                 time.sleep(2)
 
-            except WebDriverException as e:
-                logging.error(f"Драйвер упал для стола {table_id}: {e}")
-                break
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
                 time.sleep(2)
 
-        logging.info(f"Стол {table_id}: время истекло (5 минут), закрываем браузер")
+        logging.info(f"Стол {table_id}: 5 минут истекли")
 
     except Exception as e:
         logging.error(f"Критическая ошибка: {e}")
@@ -379,7 +368,7 @@ def scan_tables():
         links = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block__link')
         ids = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
 
-        new_tables = []
+        tables = []
         for i, link in enumerate(links):
             if i >= len(ids):
                 continue
@@ -387,34 +376,22 @@ def scan_tables():
             match = re.search(r'(\d+)$', raw_id)
             table_id = match.group(1) if match else raw_id
             href = link.get_attribute('href')
-            new_tables.append((table_id, href))
+            tables.append((table_id, href))
 
-        # Берем последний стол (нижний)
-        if new_tables:
-            last_table = new_tables[-1]
+        if tables:
+            # Берем последний стол
+            last_table = tables[-1]
             table_id, href = last_table
             
             with lock:
-                if table_id not in active_tables and table_id not in message_ids:
-                    # Проверяем, нет ли уже активного потока
-                    thread_exists = False
-                    for t in threading.enumerate():
-                        if t.name == f"table_{table_id}":
-                            thread_exists = True
-                            break
-                    
-                    if not thread_exists:
-                        thread = threading.Thread(target=monitor_table, args=(href, table_id), name=f"table_{table_id}")
-                        thread.daemon = True
-                        thread.start()
-                        active_tables[table_id] = thread
-                        logging.info(f"Запущен мониторинг нижнего стола {table_id}")
-                    else:
-                        logging.info(f"Нижний стол {table_id} уже мониторится")
-                else:
-                    logging.info(f"Нижний стол {table_id} уже в обработке")
+                if table_id not in active_tables:
+                    thread = threading.Thread(target=monitor_table, args=(href, table_id))
+                    thread.daemon = True
+                    thread.start()
+                    active_tables[table_id] = thread
+                    logging.info(f"Запущен мониторинг нижнего стола {table_id}")
 
-        logging.info(f"Найдено столов: {len(new_tables)}")
+        logging.info(f"Найдено столов: {len(tables)}")
 
     except Exception as e:
         logging.error(f"Ошибка сканирования: {e}")
@@ -427,11 +404,11 @@ def clean_threads():
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
             del active_tables[tid]
-            logging.info(f"Поток стола {tid} завершен и очищен")
+            logging.info(f"Поток стола {tid} очищен")
 
 def main():
     load_game_data()
-    logging.info(f"Бот запущен, мониторим нижний стол, время жизни браузера 5 минут")
+    logging.info("Бот запущен")
     
     while True:
         try:
@@ -444,14 +421,12 @@ def main():
             time.sleep(CHECK_INTERVAL)
             
         except KeyboardInterrupt:
-            logging.info("Получен сигнал завершения")
             break
         except Exception as e:
-            logging.error(f"Ошибка в главном цикле: {e}")
+            logging.error(f"Ошибка: {e}")
             time.sleep(60)
     
     save_game_data()
-    logging.info("Бот остановлен")
 
 if __name__ == "__main__":
     main()
