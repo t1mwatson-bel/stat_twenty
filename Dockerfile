@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.10-slim  # Было 3.9, стало 3.10
 
 # Install Chromium and dependencies
 RUN apt-get update && apt-get install -y \
