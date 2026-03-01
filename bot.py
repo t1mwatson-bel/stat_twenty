@@ -199,6 +199,7 @@ def monitor_table(table_url, table_id):
     last_state = None
     sent = set()
     t_num = random.randint(30, 60)
+    page_load_time = None
 
     try:
         logging.info(f"🚀 Старт монитора #{table_id}")
@@ -207,7 +208,8 @@ def monitor_table(table_url, table_id):
             return
 
         driver.get(table_url)
-        time.sleep(4)
+        page_load_time = time.time()
+        logging.info(f"✅ Страница #{table_id} загружена, ждём данные...")
 
         while time.time() - start < 3600:
             try:
@@ -216,16 +218,34 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
 
+                # ========== УМНАЯ ПРОВЕРКА ПУСТЫХ ДАННЫХ ==========
                 if state['player_score'] in ['?', '0', ''] or not state['player_cards']:
-                    time.sleep(2)
-                    continue
+                    # Если прошло меньше 20 секунд с момента загрузки — просто ждём
+                    if time.time() - page_load_time < 20:
+                        logging.info(f"⏳ Стол #{table_id} загружается, ждём карты... ({int(time.time() - page_load_time)}с)")
+                        time.sleep(2)
+                        continue
+                    else:
+                        # Если прошло больше 20 секунд, а данных всё нет — перезагружаем страницу
+                        logging.warning(f"⚠️ Стол #{table_id} не прогружается >20с, перезагрузка...")
+                        driver.refresh()
+                        page_load_time = time.time()  # сбрасываем таймер загрузки
+                        time.sleep(5)
+                        continue
+                # =================================================
 
                 p_cards = ''.join(state['player_cards'])
                 d_cards = ''.join(state['dealer_cards'])
 
-                # Завершение игры — только #N... #T...
+                # Завершение игры + определение победителя
                 if any(w in state['game_status'].lower() for w in ['завершен', 'завершена']):
-                    final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}"
+                    winner = ''
+                    if 'победа дилера' in state['round_status'].lower():
+                        winner = '\n👑 Победа дилера'
+                    elif 'победа игрока' in state['round_status'].lower():
+                        winner = '\n👑 Победа игрока'
+
+                    final = f"#N{table_id}. {state['player_score']}({p_cards}) - {state['dealer_score']}({d_cards}) #T{t_num}{winner}"
                     try:
                         bot.send_message(CHANNEL_ID, final)
                         logging.info(f"✅ #{table_id} завершён")
@@ -235,12 +255,14 @@ def monitor_table(table_url, table_id):
 
                 if state != last_state:
                     if last_state:
+                        # Новая карта игрока
                         if len(state['player_cards']) > len(last_state['player_cards']):
                             msg = f"⏰#N{table_id}. ▶ {last_state['player_score']}({''.join(last_state['player_cards'])}) - {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
                                 bot.send_message(CHANNEL_ID, msg)
                                 sent.add(msg)
 
+                        # Новая карта дилера
                         if len(state['dealer_cards']) > len(last_state['dealer_cards']):
                             msg = f"⏰#N{table_id}. {last_state['player_score']}({''.join(last_state['player_cards'])}) - ▶ {last_state['dealer_score']}({''.join(last_state['dealer_cards'])})"
                             if msg not in sent:
@@ -254,6 +276,7 @@ def monitor_table(table_url, table_id):
             except StaleElementReferenceException:
                 logging.warning(f"⚠️ Stale element #{table_id}, рефреш")
                 driver.refresh()
+                page_load_time = time.time()
                 time.sleep(3)
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в #{table_id}: {e}")
