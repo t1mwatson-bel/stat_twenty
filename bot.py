@@ -19,7 +19,7 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
+MAX_BROWSERS = 2
 CHECK_INTERVAL = 30
 DATA_FILE = "game_data.json"
 MAX_DAYS = 3
