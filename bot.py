@@ -49,7 +49,6 @@ active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
 table_drivers = {}  # {table_id: driver}
 last_messages = {}  # {table_id: last_message_text}
-last_table_id = 0   # Последний взятый ID стола
 lock = threading.Lock()
 
 class GameData:
@@ -319,10 +318,8 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
                 return None
     return None
 
-def get_next_table(driver):
-    """Получить следующий новый стол (с большим ID)"""
-    global last_table_id
-    
+def get_fresh_table(driver):
+    """Получить самый свежий свободный стол (с максимальным номером, который еще не мониторится)"""
     try:
         logging.info("Ожидание загрузки страницы со столами...")
         
@@ -368,37 +365,35 @@ def get_next_table(driver):
             logging.warning("Нет валидных столов с ID")
             return None, None
         
-        # Сортируем по номеру стола (от меньшего к большему)
-        valid_tables.sort(key=lambda x: x[0])
+        # Сортируем по номеру стола (от большего к меньшему - самые свежие первые)
+        valid_tables.sort(key=lambda x: x[0], reverse=True)
         
-        logging.info(f"Всего столов: {len(valid_tables)}, последний взятый: {last_table_id}")
+        logging.info(f"Доступные свежие столы: {[t[0] for t in valid_tables[:5]]}")
         
-        # Ищем первый стол с номером БОЛЬШЕ последнего взятого
+        # Берем самый свежий стол, который еще не мониторится
         selected_table = None
         selected_id = None
         
-        for table_num, table in valid_tables:
-            if table_num > last_table_id:
-                selected_table = table
-                selected_id = table_num
-                break
+        with lock:
+            for table_num, table in valid_tables:
+                table_id_str = str(table_num)
+                if table_id_str not in active_tables and table_id_str not in message_ids:
+                    # Проверяем, не завершена ли уже эта игра
+                    if not game_data.is_game_completed(table_id_str):
+                        selected_table = table
+                        selected_id = table_num
+                        logging.info(f"Выбран свободный свежий стол: {selected_id}")
+                        break
         
         if not selected_table:
-            # Если нет новых столов, берем самый первый (на случай перезапуска)
-            selected_table = valid_tables[0][1]
-            selected_id = valid_tables[0][0]
-            logging.info(f"Новых столов нет, берем первый: {selected_id}")
-        else:
-            logging.info(f"Найден новый стол: {selected_id}")
-        
-        # Обновляем последний взятый ID
-        last_table_id = selected_id
+            logging.warning("Нет свободных свежих столов (все заняты или завершены)")
+            return None, None
         
         # Получаем ссылку
         link_element = selected_table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
         href = link_element.get_attribute('href')
         
-        logging.info(f"✅ Выбран следующий стол: ID {selected_id}")
+        logging.info(f"✅ Запускаем мониторинг свежего стола: ID {selected_id}")
         return href, str(selected_id)
         
     except TimeoutException:
@@ -415,7 +410,8 @@ def get_next_game_time():
 
 def wait_for_next_game():
     next_game = get_next_game_time()
-    launch_time = next_game - timedelta(seconds=10)
+    # Увеличиваем время запуска до 15 секунд для надежности
+    launch_time = next_game - timedelta(seconds=15)
     
     now = datetime.now()
     if now < launch_time:
@@ -684,7 +680,7 @@ def monitor_table(table_url, table_id):
         logging.info(f"Мониторинг стола {table_id} завершен")
 
 def launch_new_table_monitor():
-    """Запустить мониторинг нового стола (следующий по номеру)"""
+    """Запустить мониторинг самого свежего свободного стола"""
     with lock:
         if len(active_tables) >= MAX_BROWSERS:
             logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS})")
@@ -697,13 +693,13 @@ def launch_new_table_monitor():
             logging.error("Не удалось создать драйвер для поиска стола")
             return
         
-        logging.info("Поиск следующего стола по порядку...")
+        logging.info("Поиск самого свежего свободного стола...")
         scan_driver.get(MAIN_URL)
         
-        table_url, table_id = get_next_table(scan_driver)
+        table_url, table_id = get_fresh_table(scan_driver)
         
         if table_url and table_id:
-            logging.info(f"Найден следующий стол: {table_id}")
+            logging.info(f"Найден свежий свободный стол: {table_id}")
             
             thread = threading.Thread(target=monitor_table, args=(table_url, table_id))
             thread.daemon = True
@@ -712,9 +708,9 @@ def launch_new_table_monitor():
             with lock:
                 active_tables[table_id] = thread
             
-            logging.info(f"Запущен мониторинг стола {table_id}")
+            logging.info(f"✅ Запущен мониторинг свежего стола {table_id}")
         else:
-            logging.warning("Не удалось найти следующий стол")
+            logging.warning("Не удалось найти свежий свободный стол")
             
     except Exception as e:
         logging.error(f"Ошибка при запуске нового монитора: {e}")
@@ -740,9 +736,7 @@ def clean_threads():
             logging.info(f"Поток стола {tid} очищен")
 
 def main():
-    global last_table_id
-    last_table_id = 0
-    logging.info("🚀 Бот запущен с Selenium и последовательным выбором столов")
+    logging.info("🚀 Бот запущен: всегда берет САМЫЕ СВЕЖИЕ СВОБОДНЫЕ СТОЛЫ")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     while True:
