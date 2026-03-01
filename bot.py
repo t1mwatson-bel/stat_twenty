@@ -3,7 +3,6 @@ import time
 import re
 import logging
 import os
-import signal
 import sys
 from datetime import datetime
 from selenium import webdriver
@@ -22,10 +21,11 @@ MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-
 MAX_BROWSERS = 3
 CHECK_INTERVAL = 60
 
-# Настройка логирования
+# Настройка логирования - ИСПРАВЛЕНО
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
         logging.FileHandler('bot.log'),
         logging.StreamHandler()
@@ -44,12 +44,7 @@ SELECTORS = {
     'game_round': '.scoreboard-card-games-board-status'
 }
 
-# ========== ИСПРАВЛЕННЫЙ МАППИНГ МАСТЕЙ ==========
-# Проверено на реальных раздачах:
-# - 9♠️ = suit-0
-# - 9♦️ = suit-2
-# - A♦️ = suit-2 + value-14
-# - 10♣️ = suit-1
+# Масти и значения - ИСПРАВЛЕНО по твоим данным
 SUIT_MAP = {
     'suit-0': '♠️',  # Пики
     'suit-1': '♣️',  # Трефы
@@ -61,7 +56,7 @@ VALUE_MAP = {
     'value-11': 'J',
     'value-12': 'Q',
     'value-13': 'K',
-    'value-14': 'A'  # Туз
+    'value-14': 'A'
 }
 # ==============================================
 
@@ -113,7 +108,6 @@ def create_driver():
     options.add_argument('--disable-default-apps')
     options.add_argument('--disable-sync')
     
-    # Путь к Chromium
     chrome_paths = ['/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable']
     chrome_found = False
     for path in chrome_paths:
@@ -127,7 +121,6 @@ def create_driver():
         logging.error("❌ Chrome не найден")
         return None
     
-    # Путь к chromedriver
     driver_paths = ['/usr/bin/chromedriver', '/usr/local/bin/chromedriver']
     driver_found = False
     service = None
@@ -250,12 +243,18 @@ def monitor_table(table_url, table_id):
         driver.get(table_url)
         logging.info(f"✅ Стол #{table_id} загружен")
         
-        bot.send_message(CHANNEL_ID, f"🎯 Стол #{table_id}: Начало мониторинга")
+        try:
+            bot.send_message(CHANNEL_ID, f"🎯 Стол #{table_id}: Начало мониторинга")
+        except:
+            pass
         
         while True:
             if time.time() - start_time > 3600:
                 logging.warning(f"⏰ Стол #{table_id} превысил время ожидания")
-                bot.send_message(CHANNEL_ID, f"⏰ Стол #{table_id}: Превышено время ожидания")
+                try:
+                    bot.send_message(CHANNEL_ID, f"⏰ Стол #{table_id}: Превышено время ожидания")
+                except:
+                    pass
                 break
             
             try:
@@ -275,7 +274,10 @@ def monitor_table(table_url, table_id):
                                    f"#N{table_id}. {current_state['player_score']}({player_cards_str}) - "
                                    f"{current_state['dealer_score']}({dealer_cards_str}) #T{t_number}")
                     
-                    bot.send_message(CHANNEL_ID, final_message)
+                    try:
+                        bot.send_message(CHANNEL_ID, final_message)
+                    except:
+                        pass
                     logging.info(f"✅ Стол #{table_id} завершен, финал отправлен")
                     break
                 
@@ -297,17 +299,26 @@ def monitor_table(table_url, table_id):
                         
                         if new_player_cards > 0:
                             new_cards = current_state['player_cards'][-new_player_cards:]
-                            bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Игрок взял {', '.join(new_cards)}")
+                            try:
+                                bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Игрок взял {', '.join(new_cards)}")
+                            except:
+                                pass
                         
                         if new_dealer_cards > 0:
                             new_cards = current_state['dealer_cards'][-new_dealer_cards:]
-                            bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Дилер взял {', '.join(new_cards)}")
+                            try:
+                                bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Дилер взял {', '.join(new_cards)}")
+                            except:
+                                pass
                     
                     if action_count % 3 == 0 or "перебор" in current_state['round_status'].lower() or "очко" in current_state['round_status'].lower():
                         status_message = (f"{action_type} Стол #{table_id}: {current_state['round_status']}\n"
                                         f"👤 Игрок: {current_state['player_score']} {player_cards_str}\n"
                                         f"👤 Дилер: {current_state['dealer_score']} {dealer_cards_str}")
-                        bot.send_message(CHANNEL_ID, status_message)
+                        try:
+                            bot.send_message(CHANNEL_ID, status_message)
+                        except:
+                            pass
                     
                     last_state = current_state
                 
@@ -350,7 +361,6 @@ def scan_new_tables():
         driver.get(MAIN_PAGE_URL)
         time.sleep(5)
         
-        # Собираем ссылки
         table_links = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_link'])
         table_ids = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_id'])
         
@@ -362,12 +372,10 @@ def scan_new_tables():
             href = link.get_attribute('href')
             table_id = None
             
-            # СПОСОБ 1: Через селектор
             if i < len(table_ids):
                 table_id = table_ids[i].text.strip()
                 logging.info(f"📌 Стол найден через селектор: ID={table_id}")
             
-            # СПОСОБ 2: Из ссылки
             if not table_id and href:
                 import re
                 match = re.search(r'/(\d+)-player', href)
@@ -387,9 +395,7 @@ def scan_new_tables():
                 logging.info(f"👁️ Стол #{table_id} уже мониторится, пропускаем")
                 continue
             
-            # Проверка статуса на главной
             try:
-                # Ищем родительский элемент
                 parent = link.find_element(By.XPATH, '../../../../..')
                 status_elem = parent.find_elements(By.CSS_SELECTOR, SELECTORS['game_status'])
                 if status_elem:
@@ -398,8 +404,8 @@ def scan_new_tables():
                         logging.info(f"✅ Стол #{table_id} уже завершен, добавляем в обработанные")
                         processed_games.add(table_id)
                         continue
-            except Exception as e:
-                logging.debug(f"Не удалось проверить статус для #{table_id}: {e}")
+            except:
+                pass
             
             available_tables.append((table_id, href))
             logging.info(f"✅ Стол #{table_id} свободен для мониторинга")
@@ -408,7 +414,6 @@ def scan_new_tables():
         
         driver.quit()
         
-        # Запускаем свободные столы
         started = 0
         for table_id, href in available_tables:
             if len(active_tables) >= MAX_BROWSERS:
@@ -420,55 +425,6 @@ def scan_new_tables():
                 break
             
             if table_id in active_tables or table_id in processed_games:
-                continue
-            
-            logging.info(f"🚀 Запускаем монитор для свободного стола #{table_id}")
-            thread = threading.Thread(target=monitor_table, args=(href, table_id))
-            thread.daemon = True
-            thread.start()
-            
-            time.sleep(5)
-            
-            if thread.is_alive():
-                active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
-                started += 1
-                logging.info(f"✅ Стол #{table_id} успешно запущен")
-            else:
-                logging.error(f"❌ Стол #{table_id} НЕ запустился")
-            
-            time.sleep(3)
-        
-        logging.info(f"🚀 Запущено новых столов: {started}")
-            
-    except Exception as e:
-        logging.error(f"❌ Ошибка сканирования: {e}")
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-                
-                if href and table_id:
-                    available_tables.append((table_id, href))
-                    logging.info(f"✅ Стол #{table_id} свободен для мониторинга")
-        
-        logging.info(f"📊 Статистика: Всего {len(table_links)} столов, Свободных: {len(available_tables)}")
-        
-        driver.quit()
-        
-        started = 0
-        for table_id, href in available_tables:
-            if len(active_tables) >= MAX_BROWSERS:
-                logging.info(f"⚠️ Достигнут лимит браузеров ({MAX_BROWSERS})")
-                break
-            
-            if not check_memory():
-                logging.error("❌ Недостаточно памяти для запуска нового стола")
-                break
-            
-            if table_id in active_tables or table_id in processed_games:
-                logging.info(f"⏭️ Стол #{table_id} уже занят, пропускаем")
                 continue
             
             logging.info(f"🚀 Запускаем монитор для свободного стола #{table_id}")
@@ -529,7 +485,6 @@ def main():
             logging.info(f"📊 Активных столов: {len(active_tables)}/{MAX_BROWSERS}")
             error_count = 0
             time.sleep(CHECK_INTERVAL)
-            
         except Exception as e:
             error_count += 1
             logging.error(f"💥 Ошибка в главном цикле (попытка {error_count}): {e}")
