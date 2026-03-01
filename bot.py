@@ -43,7 +43,7 @@ VALUE_MAP = {
 
 bot = telebot.TeleBot(TOKEN)
 active_tables = {}
-message_ids = {}
+message_ids = {}  # {table_id: message_id}
 game_data = {}
 lock = threading.Lock()
 
@@ -56,7 +56,6 @@ def load_game_data():
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Очищаем старые данные
                 current_time = datetime.now()
                 game_data = {}
                 for table_id, info in data.items():
@@ -119,13 +118,6 @@ def update_game_data(table_id):
     with lock:
         if table_id in game_data:
             game_data[table_id]['last_update'] = datetime.now().isoformat()
-            save_game_data()
-
-def remove_game_data(table_id):
-    """Удаление данных игры"""
-    with lock:
-        if table_id in game_data:
-            del game_data[table_id]
             save_game_data()
 
 # ===== ОСНОВНЫЕ ФУНКЦИИ =====
@@ -322,7 +314,6 @@ def get_state(driver):
             'dealer_turn': dealer_turn
         }
     except TimeoutException:
-        logging.error(f"Таймаут загрузки страницы")
         return None
     except Exception as e:
         logging.error(f"Ошибка получения состояния: {e}")
@@ -353,6 +344,7 @@ def monitor_table(table_url, table_id):
     game_active = True
     no_response_count = 0
     max_no_response = 5
+    game_started = False  # Флаг, что игра началась (появились карты)
 
     try:
         driver = create_driver()
@@ -363,6 +355,23 @@ def monitor_table(table_url, table_id):
         logging.info(f"Начало мониторинга стола {table_id} (T{t_num})")
         driver.get(table_url)
         time.sleep(5)
+
+        # Ждем появления первых карт (игровое поле загрузилось)
+        wait_start = time.time()
+        while not game_started and time.time() - wait_start < 30:
+            try:
+                state = get_state(driver)
+                if state and (state['p_cards'] or state['d_cards']):
+                    game_started = True
+                    logging.info(f"Стол {table_id}: игра началась, карты появились")
+                else:
+                    time.sleep(2)
+            except:
+                time.sleep(2)
+
+        if not game_started:
+            logging.warning(f"Стол {table_id}: карты так и не появились, завершаем")
+            return
 
         while game_active:
             try:
@@ -378,6 +387,7 @@ def monitor_table(table_url, table_id):
                 
                 no_response_count = 0
                 
+                # Проверка завершения игры
                 if is_game_finished(driver):
                     final_state = get_state(driver) or state
                     final_msg = format_message(table_id, final_state, is_final=True, t_num=t_num)
@@ -386,6 +396,7 @@ def monitor_table(table_url, table_id):
                         if msg_id:
                             bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
                         else:
+                            # Если по какой-то причине нет msg_id, отправляем новое
                             bot.send_message(CHANNEL_ID, final_msg)
                         logging.info(f"Стол {table_id} завершен")
                     except Exception as e:
@@ -394,27 +405,34 @@ def monitor_table(table_url, table_id):
                     game_active = False
                     break
 
-                # Проверяем, изменилось ли состояние
+                # Проверяем, изменилось ли состояние (карты или ход)
                 state_changed = False
                 if last_state:
+                    # Сравниваем карты и счет
                     if (state['p_score'] != last_state['p_score'] or
                         state['d_score'] != last_state['d_score'] or
                         str(state['p_cards']) != str(last_state['p_cards']) or
-                        str(state['d_cards']) != str(last_state['d_cards']) or
-                        state['player_turn'] != last_state['player_turn'] or
-                        state['dealer_turn'] != last_state['dealer_turn']):
+                        str(state['d_cards']) != str(last_state['d_cards'])):
+                        state_changed = True
+                    # Также обновляем при смене хода (стрелка)
+                    elif state['player_turn'] != last_state['player_turn'] or state['dealer_turn'] != last_state['dealer_turn']:
                         state_changed = True
                 else:
+                    # Первое состояние после появления карт
                     state_changed = True
 
                 if state_changed:
                     msg = format_message(table_id, state)
                     try:
                         if msg_id:
+                            # Редактируем существующее сообщение
                             bot.edit_message_text(msg, CHANNEL_ID, msg_id)
                         else:
+                            # Отправляем только первое сообщение (когда появились карты)
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
+                            with lock:
+                                message_ids[table_id] = msg_id
                         
                         last_state = state.copy()
                         update_game_data(table_id)
