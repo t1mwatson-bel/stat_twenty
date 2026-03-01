@@ -370,7 +370,10 @@ async def monitor_table(table_url, table_id):
     logging.info(f"Начало мониторинга стола {table_id}")
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.firefox.launch(
+    headless=True,
+    executable_path="/app/ms-playwright/firefox-1509/firefox/firefox"
+)
         page = await browser.new_page()
         
         try:
