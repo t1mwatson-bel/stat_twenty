@@ -232,7 +232,9 @@ def monitor_table(table_url, table_id):
     driver = None
     start_time = time.time()
     last_state = None
-    action_count = 0
+    game_actions = set()
+    t_number = random.randint(30, 60)
+    player_turn = True  # Сначала ход игрока
     
     try:
         logging.info(f"🔄 Браузер для стола #{table_id} запущен")
@@ -243,18 +245,11 @@ def monitor_table(table_url, table_id):
         driver.get(table_url)
         logging.info(f"✅ Стол #{table_id} загружен")
         
-        try:
-            bot.send_message(CHANNEL_ID, f"🎯 Стол #{table_id}: Начало мониторинга")
-        except:
-            pass
+        time.sleep(3)
         
         while True:
             if time.time() - start_time > 3600:
                 logging.warning(f"⏰ Стол #{table_id} превысил время ожидания")
-                try:
-                    bot.send_message(CHANNEL_ID, f"⏰ Стол #{table_id}: Превышено время ожидания")
-                except:
-                    pass
                 break
             
             try:
@@ -263,84 +258,65 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
                 
-                if any(word in current_state['game_status'].lower() for word in ['завершен', 'завершена', 'completed', 'finished']):
-                    player_cards_str = format_cards(current_state['player_cards'])
-                    dealer_cards_str = format_cards(current_state['dealer_cards'])
-                    t_number = random.randint(30, 60)
-                    
-                    final_message = (f"🏆 Стол #{table_id}: ИГРА ЗАВЕРШЕНА\n"
-                                   f"👤 Игрок: {current_state['player_score']}({player_cards_str})\n"
-                                   f"👤 Дилер: {current_state['dealer_score']}({dealer_cards_str})\n"
-                                   f"#N{table_id}. {current_state['player_score']}({player_cards_str}) - "
-                                   f"{current_state['dealer_score']}({dealer_cards_str}) #T{t_number}")
+                player_cards_str = format_cards(current_state['player_cards'])
+                dealer_cards_str = format_cards(current_state['dealer_cards'])
+                
+                # Проверяем завершение игры
+                if any(word in current_state['game_status'].lower() for word in ['завершен', 'завершена']):
+                    final_message = f"#N{table_id}. {current_state['player_score']}({player_cards_str}) - {current_state['dealer_score']}({dealer_cards_str}) #T{t_number}"
                     
                     try:
                         bot.send_message(CHANNEL_ID, final_message)
-                    except:
-                        pass
-                    logging.info(f"✅ Стол #{table_id} завершен, финал отправлен")
+                        logging.info(f"✅ Стол #{table_id} завершен: {final_message}")
+                    except Exception as e:
+                        logging.error(f"❌ Ошибка отправки финала: {e}")
                     break
                 
+                # Если состояние изменилось
                 if current_state != last_state:
-                    action_count += 1
-                    
-                    player_cards_str = format_cards(current_state['player_cards'])
-                    dealer_cards_str = format_cards(current_state['dealer_cards'])
-                    
-                    action_type = "🔄"
-                    if "Ход игрока" in current_state['round_status']:
-                        action_type = "🎯"
-                    elif "Ход дилера" in current_state['round_status']:
-                        action_type = "🎲"
                     
                     if last_state:
-                        new_player_cards = len(current_state['player_cards']) - len(last_state.get('player_cards', []))
-                        new_dealer_cards = len(current_state['dealer_cards']) - len(last_state.get('dealer_cards', []))
+                        last_player_cards = format_cards(last_state['player_cards'])
+                        last_dealer_cards = format_cards(last_state['dealer_cards'])
                         
-                        if new_player_cards > 0:
-                            new_cards = current_state['player_cards'][-new_player_cards:]
-                            try:
-                                bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Игрок взял {', '.join(new_cards)}")
-                            except:
-                                pass
+                        # Проверяем новые карты игрока
+                        new_player = len(current_state['player_cards']) - len(last_state.get('player_cards', []))
+                        if new_player > 0:
+                            # Формат для игрока: ▶ перед счетом игрока
+                            player_action = f"⏰#N{table_id}. ▶ {last_state['player_score']}({last_player_cards}) - {last_state['dealer_score']}({last_dealer_cards})"
+                            
+                            if player_action not in game_actions:
+                                try:
+                                    bot.send_message(CHANNEL_ID, player_action)
+                                    game_actions.add(player_action)
+                                    logging.info(f"📤 Игрок берет карту: {player_action}")
+                                except Exception as e:
+                                    logging.error(f"❌ Ошибка отправки: {e}")
                         
-                        if new_dealer_cards > 0:
-                            new_cards = current_state['dealer_cards'][-new_dealer_cards:]
-                            try:
-                                bot.send_message(CHANNEL_ID, f"{action_type} Стол #{table_id}: Дилер взял {', '.join(new_cards)}")
-                            except:
-                                pass
-                    
-                    if action_count % 3 == 0 or "перебор" in current_state['round_status'].lower() or "очко" in current_state['round_status'].lower():
-                        status_message = (f"{action_type} Стол #{table_id}: {current_state['round_status']}\n"
-                                        f"👤 Игрок: {current_state['player_score']} {player_cards_str}\n"
-                                        f"👤 Дилер: {current_state['dealer_score']} {dealer_cards_str}")
-                        try:
-                            bot.send_message(CHANNEL_ID, status_message)
-                        except:
-                            pass
+                        # Проверяем новые карты дилера
+                        new_dealer = len(current_state['dealer_cards']) - len(last_state.get('dealer_cards', []))
+                        if new_dealer > 0:
+                            # Формат для дилера: ▶ перед счетом дилера
+                            dealer_action = f"⏰#N{table_id}. {last_state['player_score']}({last_player_cards}) - ▶ {last_state['dealer_score']}({last_dealer_cards})"
+                            
+                            if dealer_action not in game_actions:
+                                try:
+                                    bot.send_message(CHANNEL_ID, dealer_action)
+                                    game_actions.add(dealer_action)
+                                    logging.info(f"📤 Дилер берет карту: {dealer_action}")
+                                except Exception as e:
+                                    logging.error(f"❌ Ошибка отправки: {e}")
                     
                     last_state = current_state
                 
                 time.sleep(2)
                 
-            except StaleElementReferenceException:
-                logging.warning(f"⚠️ Стол #{table_id} - элементы устарели, обновляем страницу")
-                driver.refresh()
-                time.sleep(3)
-            except NoSuchElementException:
-                logging.warning(f"⚠️ Стол #{table_id} - элемент не найден")
-                time.sleep(3)
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в столе #{table_id}: {e}")
                 time.sleep(3)
                 
     except Exception as e:
         logging.error(f"❌ Критическая ошибка стола #{table_id}: {e}")
-        try:
-            bot.send_message(CHANNEL_ID, f"❌ Стол #{table_id}: Ошибка мониторинга")
-        except:
-            pass
     finally:
         if driver:
             try:
@@ -348,7 +324,6 @@ def monitor_table(table_url, table_id):
                 logging.info(f"🛑 Браузер для стола #{table_id} закрыт")
             except:
                 pass
-
 def scan_new_tables():
     """Сканирует главную страницу и запускает только свободные столы"""
     driver = None
