@@ -1,24 +1,28 @@
 FROM python:3.9-slim
 
-# Установка Firefox и необходимых зависимостей
+# Install Chrome and dependencies
 RUN apt-get update && apt-get install -y \
-    firefox-esr \
     wget \
-    bzip2 \
+    gnupg \
+    unzip \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update && apt-get install -y \
+    google-chrome-stable \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Скачиваем geckodriver
-RUN wget https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz \
-    && tar -xvzf geckodriver-v0.35.0-linux64.tar.gz \
-    && chmod +x geckodriver \
-    && mv geckodriver /usr/local/bin/ \
-    && rm geckodriver-v0.35.0-linux64.tar.gz
+# Download and install ChromeDriver
+RUN wget -O /tmp/chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/`google-chrome --version | awk '{print $3}'`/linux64/chromedriver-linux64.zip \
+    && unzip /tmp/chromedriver.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf /tmp/chromedriver.zip /tmp/chromedriver-linux64
 
-# Установка Python зависимостей
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем код бота
 COPY . .
 
 CMD ["python", "bot.py"]
