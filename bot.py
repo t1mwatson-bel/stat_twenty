@@ -244,6 +244,28 @@ def is_game_finished(driver):
         pass
     return False
 
+def check_game_finished_debug(driver, table_id):
+    """Отладочная функция для проверки элемента завершения"""
+    try:
+        # Ищем элемент
+        elements = driver.find_elements(By.CSS_SELECTOR, '.ui-game-timer__label')
+        if elements:
+            element = elements[0]
+            text = element.text
+            html = element.get_attribute('outerHTML')
+            visible = element.is_displayed()
+            logging.info(f"СТОЛ {table_id} DEBUG: Найден элемент: {html}")
+            logging.info(f"СТОЛ {table_id} DEBUG: Текст: '{text}', Видим: {visible}")
+            
+            if text == "Игра завершена":
+                logging.info(f"СТОЛ {table_id} DEBUG: Текст совпадает!")
+                return True
+        else:
+            logging.info(f"СТОЛ {table_id} DEBUG: Элемент .ui-game-timer__label НЕ НАЙДЕН")
+    except Exception as e:
+        logging.error(f"СТОЛ {table_id} DEBUG: Ошибка: {e}")
+    return False
+
 def format_message(table_id, state, is_final=False, t_num=None):
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
@@ -330,7 +352,7 @@ def monitor_table(table_url, table_id):
                     continue
                 
                 # Проверяем завершение игры
-                if is_game_finished(driver):
+                if is_game_finished(driver) or check_game_finished_debug(driver, table_id):
                     final_msg = format_message(table_id, state, is_final=True, t_num=t_num)
                     try:
                         if msg_id:
