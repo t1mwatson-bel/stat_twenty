@@ -42,8 +42,9 @@ VALUE_MAP = {
 }
 
 bot = telebot.TeleBot(TOKEN)
-active_tables = {}
-message_ids = {}  # {table_id: message_id}
+active_tables = {}  # {table_id: thread}
+message_ids = {}    # {table_id: message_id}
+table_drivers = {}  # {table_id: driver}
 lock = threading.Lock()
 
 class GameData:
@@ -119,6 +120,7 @@ class GameData:
 game_data = GameData()
 
 def create_driver():
+    """Создание нового драйвера для каждого стола"""
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
@@ -179,13 +181,9 @@ def check_special_conditions(player_cards, dealer_cards, player_score, dealer_sc
 def determine_turn(state):
     """Определение, чей сейчас ход"""
     try:
-        # Проверка активной кнопки или индикатора хода
-        player_active = state.get('player_active', False)
-        dealer_active = state.get('dealer_active', False)
-        
-        if player_active:
+        if state.get('player_active', False):
             return 'player'
-        elif dealer_active:
+        elif state.get('dealer_active', False):
             return 'dealer'
     except:
         pass
@@ -194,7 +192,7 @@ def determine_turn(state):
 def is_game_finished(driver):
     """Проверка завершения игры по селектору завершения"""
     try:
-        # Проверка по новому селектору
+        # Проверка по селектору завершения
         finished_element = driver.find_element(By.CSS_SELECTOR, 
             'span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
         
@@ -209,12 +207,16 @@ def is_game_finished(driver):
     
     return False
 
-def safe_quit_driver(driver, table_id):
-    """Безопасное закрытие драйвера"""
+def safe_quit_driver(table_id):
+    """Безопасное закрытие драйвера для конкретного стола"""
     try:
-        if driver:
-            logging.info(f"Закрытие драйвера для стола {table_id}")
-            driver.quit()
+        with lock:
+            if table_id in table_drivers:
+                driver = table_drivers[table_id]
+                if driver:
+                    logging.info(f"Закрытие драйвера для стола {table_id}")
+                    driver.quit()
+                    del table_drivers[table_id]
     except Exception as e:
         logging.error(f"Ошибка при закрытии драйвера стола {table_id}: {e}")
 
@@ -230,7 +232,7 @@ def get_state(driver):
         dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
         dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
         
-        # Пробуем определить, чей ход
+        # Определяем, чей ход
         player_active = False
         dealer_active = False
         try:
@@ -283,7 +285,6 @@ def format_message(table_id, state, is_final=False, t_num=None, table_number=Non
         specials = check_special_conditions(state['p_cards'], state['d_cards'], 
                                            state['p_score'], state['d_score'])
         
-        # Проверяем, не было ли это золотое очко с двумя тузами
         if specials:
             return f"#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {specials}"
         else:
@@ -299,6 +300,7 @@ def format_message(table_id, state, is_final=False, t_num=None, table_number=Non
             return f"⏰#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
+    """Мониторинг конкретного стола в отдельном потоке"""
     driver = None
     last_state = None
     msg_id = None
@@ -316,12 +318,17 @@ def monitor_table(table_url, table_id):
         return
 
     try:
+        # Создаем отдельный драйвер для этого стола
         driver = create_driver()
         if not driver:
             logging.error(f"Не удалось создать драйвер для стола {table_id}.")
             return
 
-        logging.info(f"Начало мониторинга стола {table_id}")
+        # Сохраняем драйвер в общем словаре
+        with lock:
+            table_drivers[table_id] = driver
+
+        logging.info(f"Начало мониторинга стола {table_id} в отдельном браузере")
         driver.get(table_url)
         time.sleep(5)  # Даем время на загрузку
 
@@ -347,10 +354,14 @@ def monitor_table(table_url, table_id):
                                               t_num=t_num, table_number=table_number)
                     
                     try:
-                        if msg_id:
-                            bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
-                        else:
-                            bot.send_message(CHANNEL_ID, final_msg)
+                        # Редактируем существующее сообщение или отправляем новое
+                        with lock:
+                            if msg_id:
+                                bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
+                            else:
+                                sent = bot.send_message(CHANNEL_ID, final_msg)
+                                msg_id = sent.message_id
+                                message_ids[table_id] = msg_id
                         
                         # Сохраняем завершенную игру
                         game_data.add_completed_game(table_id, final_msg, t_num)
@@ -367,11 +378,16 @@ def monitor_table(table_url, table_id):
                 if state != last_state:
                     msg = format_message(table_id, state, table_number=table_number)
                     try:
-                        if msg_id:
-                            bot.edit_message_text(msg, CHANNEL_ID, msg_id)
-                        else:
-                            sent = bot.send_message(CHANNEL_ID, msg)
-                            msg_id = sent.message_id
+                        with lock:
+                            if msg_id:
+                                # Редактируем существующее сообщение
+                                bot.edit_message_text(msg, CHANNEL_ID, msg_id)
+                            else:
+                                # Отправляем новое сообщение
+                                sent = bot.send_message(CHANNEL_ID, msg)
+                                msg_id = sent.message_id
+                                message_ids[table_id] = msg_id
+                        
                         last_state = state
                         
                         # Определяем, кто ходит для лога
@@ -395,7 +411,7 @@ def monitor_table(table_url, table_id):
         logging.error(f"Критическая ошибка мониторинга стола {table_id}: {e}")
     finally:
         # Гарантированное закрытие драйвера и очистка данных
-        safe_quit_driver(driver, table_id)
+        safe_quit_driver(table_id)
         
         with lock:
             if table_id in active_tables:
@@ -403,11 +419,13 @@ def monitor_table(table_url, table_id):
             if table_id in message_ids:
                 del message_ids[table_id]
         
-        logging.info(f"Мониторинг стола {table_id} завершен, ресурсы освобождены")
+        logging.info(f"Мониторинг стола {table_id} завершен, браузер закрыт")
 
 def scan_tables():
+    """Сканирование новых столов"""
     driver = None
     try:
+        # Создаем временный драйвер только для сканирования
         driver = create_driver()
         if not driver:
             logging.error("Не удалось создать драйвер для сканирования столов.")
@@ -450,6 +468,7 @@ def scan_tables():
                 if len(active_tables) >= MAX_BROWSERS:
                     break
                     
+            # Создаем отдельный поток для каждого стола
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
             thread.daemon = True
             thread.start()
@@ -457,7 +476,7 @@ def scan_tables():
             with lock:
                 active_tables[table_id] = thread
             
-            logging.info(f"Запущен мониторинг стола {table_id}")
+            logging.info(f"Запущен мониторинг стола {table_id} в отдельном потоке")
             time.sleep(3)
 
     except TimeoutException:
@@ -465,21 +484,30 @@ def scan_tables():
     except Exception as e:
         logging.error(f"Ошибка сканирования: {e}")
     finally:
+        # Закрываем временный драйвер для сканирования
         if driver:
             driver.quit()
 
 def clean_threads():
-    """Очистка завершенных потоков"""
+    """Очистка завершенных потоков и закрытие их браузеров"""
     with lock:
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
+            # Закрываем браузер для завершенного потока
+            if tid in table_drivers:
+                try:
+                    table_drivers[tid].quit()
+                except:
+                    pass
+                del table_drivers[tid]
+            
             del active_tables[tid]
             if tid in message_ids:
                 del message_ids[tid]
-            logging.info(f"Поток стола {tid} очищен")
+            logging.info(f"Поток и браузер стола {tid} очищены")
 
 def main():
-    logging.info("Чистый бот запущен с сохранением данных на 3 дня")
+    logging.info("Чистый бот запущен с отдельными браузерами для каждого стола")
     
     try:
         while True:
@@ -489,6 +517,7 @@ def main():
                 
                 with lock:
                     logging.info(f"Активных столов: {len(active_tables)}")
+                    logging.info(f"Активных браузеров: {len(table_drivers)}")
                 
                 # Периодическое сохранение данных
                 game_data.save_data()
@@ -502,15 +531,22 @@ def main():
                 logging.error(f"Ошибка в главном цикле: {e}")
                 time.sleep(60)
     finally:
-        # Сохранение данных и очистка ресурсов при завершении
-        logging.info("Завершение работы бота...")
+        # Закрываем все браузеры при завершении
+        logging.info("Завершение работы бота, закрытие всех браузеров...")
+        with lock:
+            for table_id, driver in table_drivers.items():
+                try:
+                    driver.quit()
+                    logging.info(f"Браузер стола {table_id} закрыт")
+                except:
+                    pass
+            
         game_data.save_data()
         
         with lock:
-            for table_id in list(active_tables.keys()):
-                logging.info(f"Ожидание завершения потока стола {table_id}")
             active_tables.clear()
             message_ids.clear()
+            table_drivers.clear()
 
 if __name__ == "__main__":
     main()
