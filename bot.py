@@ -18,7 +18,7 @@ import random
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 10
+MAX_BROWSERS = 3  # Уменьшил до 3 для стабильности
 CHECK_INTERVAL = 60
 
 # Настройка логирования
@@ -62,24 +62,35 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 processed_games = set()
 
-# Проверяем доступ к Telegram при старте
-try:
-    bot.send_message(CHANNEL_ID, "🤖 Бот запускается... Проверка связи")
-    logging.info("✅ Telegram работает")
-except Exception as e:
-    logging.error(f"❌ Telegram НЕ работает: {e}")
-
 def create_driver():
-    """Создает браузер"""
+    """Создает браузер с оптимизацией памяти"""
     logging.info("🔄 Создание браузера...")
     options = Options()
     
+    # Критические параметры для Railway
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
+    options.add_argument('--disable-software-rasterizer')
+    options.add_argument('--disable-features=VizDisplayCompositor')
+    options.add_argument('--disable-features=TranslateUI')
+    options.add_argument('--disable-features=BlinkGenPropertyTrees')
+    options.add_argument('--disable-logging')
+    options.add_argument('--log-level=3')
+    options.add_argument('--silent')
+    options.add_argument('--window-size=1920,1080')
     options.add_argument('--remote-debugging-port=9222')
     options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-setuid-sandbox')
+    
+    # Важно для памяти
+    options.add_argument('--memory-pressure-off')
+    options.add_argument('--single-process')
+    options.add_argument('--disable-component-extensions-with-background-pages')
+    options.add_argument('--disable-default-apps')
+    options.add_argument('--disable-sync')
     
     # Путь к Chromium
     chrome_paths = ['/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable']
@@ -110,20 +121,27 @@ def create_driver():
         logging.error("❌ Chromedriver не найден")
         return None
     
-    try:
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        logging.info("✅ Браузер успешно создан")
-        return driver
-    except Exception as e:
-        logging.error(f"❌ Ошибка создания браузера: {e}")
-        return None
+    # Пробуем создать драйвер с повторными попытками
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            driver = webdriver.Chrome(service=service, options=options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            driver.set_page_load_timeout(30)
+            logging.info("✅ Браузер успешно создан")
+            return driver
+        except Exception as e:
+            if attempt < max_attempts - 1:
+                logging.warning(f"⚠️ Попытка {attempt + 1} не удалась, пробуем снова...")
+                time.sleep(2)
+            else:
+                logging.error(f"❌ Ошибка создания браузера после {max_attempts} попыток: {e}")
+                return None
 
 def parse_card_from_element(card_element):
     """Из элемента карты достает масть и значение"""
     try:
         class_str = card_element.get_attribute('class')
-        logging.debug(f"Парсим карту с классом: {class_str}")
         
         suit = '?'
         for suit_class, suit_symbol in SUIT_MAP.items():
@@ -138,9 +156,7 @@ def parse_card_from_element(card_element):
         else:
             value = '?'
         
-        result = f"{value}{suit}"
-        logging.debug(f"Карта распознана: {result}")
-        return result
+        return f"{value}{suit}"
     except Exception as e:
         logging.error(f"Ошибка парсинга карты: {e}")
         return '??'
@@ -151,17 +167,13 @@ def monitor_table(table_url, table_id):
     start_time = time.time()
     
     try:
-        logging.info(f"🔄 Браузер для стола #{table_id} запущен, URL: {table_url}")
+        logging.info(f"🔄 Браузер для стола #{table_id} запущен")
         driver = create_driver()
         if not driver:
             return
-            
-        driver.set_page_load_timeout(30)
-        driver.get(table_url)
-        time.sleep(5)
         
-        # Проверяем что страница загрузилась
-        logging.info(f"✅ Стол #{table_id} загружен, заголовок: {driver.title}")
+        driver.get(table_url)
+        logging.info(f"✅ Стол #{table_id} загружен")
         
         while True:
             if time.time() - start_time > 3600:
@@ -169,81 +181,49 @@ def monitor_table(table_url, table_id):
                 break
             
             try:
-                # Ищем статус игры
-                status_elements = driver.find_elements(By.CSS_SELECTOR, SELECTORS['game_status'])
-                if not status_elements:
-                    logging.warning(f"⚠️ Стол #{table_id} - элемент статуса не найден")
-                    time.sleep(5)
-                    continue
-                
-                status_text = status_elements[0].text
+                # Проверяем статус
+                status_elem = driver.find_element(By.CSS_SELECTOR, SELECTORS['game_status'])
+                status_text = status_elem.text
                 logging.info(f"🎯 Стол #{table_id} статус: '{status_text}'")
                 
-                # Проверяем разные варианты завершения
                 if any(word in status_text.lower() for word in ['завершен', 'завершена', 'completed', 'finished']):
-                    logging.info(f"✅ Стол #{table_id} завершен! Начинаем парсинг карт")
+                    logging.info(f"✅ Стол #{table_id} завершен! Парсим карты")
                     
                     # Парсим игрока
-                    try:
-                        player_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['player_score']).text
-                        logging.info(f"📊 #{table_id} Счет игрока: {player_score}")
-                    except Exception as e:
-                        logging.error(f"❌ #{table_id} Не могу найти счет игрока: {e}")
-                        break
-                    
-                    try:
-                        player_card_elements = driver.find_elements(By.CSS_SELECTOR, SELECTORS['player_cards'])
-                        logging.info(f"🃏 #{table_id} Найдено карт игрока: {len(player_card_elements)}")
-                        player_cards = []
-                        for card in player_card_elements:
-                            card_str = parse_card_from_element(card)
-                            player_cards.append(card_str)
-                        logging.info(f"🃏 #{table_id} Карты игрока: {player_cards}")
-                    except Exception as e:
-                        logging.error(f"❌ #{table_id} Ошибка парсинга карт игрока: {e}")
-                        break
+                    player_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['player_score']).text
+                    player_cards = []
+                    for card in driver.find_elements(By.CSS_SELECTOR, SELECTORS['player_cards']):
+                        player_cards.append(parse_card_from_element(card))
                     
                     # Парсим дилера
-                    try:
-                        dealer_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['dealer_score']).text
-                        logging.info(f"📊 #{table_id} Счет дилера: {dealer_score}")
-                    except Exception as e:
-                        logging.error(f"❌ #{table_id} Не могу найти счет дилера: {e}")
-                        break
-                    
-                    try:
-                        dealer_card_elements = driver.find_elements(By.CSS_SELECTOR, SELECTORS['dealer_cards'])
-                        logging.info(f"🃏 #{table_id} Найдено карт дилера: {len(dealer_card_elements)}")
-                        dealer_cards = []
-                        for card in dealer_card_elements:
-                            card_str = parse_card_from_element(card)
-                            dealer_cards.append(card_str)
-                        logging.info(f"🃏 #{table_id} Карты дилера: {dealer_cards}")
-                    except Exception as e:
-                        logging.error(f"❌ #{table_id} Ошибка парсинга карт дилера: {e}")
-                        break
+                    dealer_score = driver.find_element(By.CSS_SELECTOR, SELECTORS['dealer_score']).text
+                    dealer_cards = []
+                    for card in driver.find_elements(By.CSS_SELECTOR, SELECTORS['dealer_cards']):
+                        dealer_cards.append(parse_card_from_element(card))
                     
                     # Формируем сообщение
                     player_cards_str = ''.join(player_cards)
                     dealer_cards_str = ''.join(dealer_cards)
-                    
                     t_number = random.randint(30, 60)
                     message = f"#{table_id}. {player_score}({player_cards_str}) - {dealer_score}({dealer_cards_str}) #T{t_number}"
                     
-                    logging.info(f"📝 #{table_id} Сообщение готово: {message}")
+                    logging.info(f"📝 Сообщение: {message}")
                     
-                    # Отправляем
+                    # Отправляем в Telegram
                     try:
                         bot.send_message(CHANNEL_ID, message)
-                        logging.info(f"✅ #{table_id} Сообщение отправлено в Telegram")
+                        logging.info(f"✅ Сообщение для стола #{table_id} отправлено")
                     except Exception as e:
-                        logging.error(f"❌ #{table_id} Ошибка отправки в Telegram: {e}")
+                        logging.error(f"❌ Ошибка отправки в Telegram: {e}")
                     
                     processed_games.add(table_id)
                     break
                 
                 time.sleep(3)
                 
+            except NoSuchElementException:
+                logging.warning(f"⚠️ Стол #{table_id} - элемент статуса не найден")
+                time.sleep(5)
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в столе #{table_id}: {e}")
                 time.sleep(5)
@@ -266,15 +246,11 @@ def scan_new_tables():
         driver = create_driver()
         if not driver:
             return
-            
-        driver.set_page_load_timeout(30)
+        
         driver.get(MAIN_PAGE_URL)
         time.sleep(5)
         
-        # Проверяем что страница загрузилась
-        logging.info(f"✅ Главная страница загружена, заголовок: {driver.title}")
-        
-        # Собираем все столы
+        # Собираем ссылки
         table_links = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_link'])
         table_ids = driver.find_elements(By.CSS_SELECTOR, SELECTORS['table_id'])
         
@@ -290,7 +266,6 @@ def scan_new_tables():
             if i < len(table_ids):
                 table_id = table_ids[i].text.strip()
                 href = link.get_attribute('href')
-                logging.info(f"🔍 Стол #{table_id}: {href}")
                 
                 if href and table_id and table_id not in processed_games and table_id not in active_tables:
                     new_tables.append((table_id, href))
@@ -299,12 +274,14 @@ def scan_new_tables():
         
         logging.info(f"🚀 Новых столов для запуска: {len(new_tables)}")
         
+        # Запускаем с задержкой между браузерами
         for table_id, href in new_tables:
             logging.info(f"🚀 Запускаем монитор для стола #{table_id}")
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
             thread.daemon = True
             thread.start()
             active_tables[table_id] = {'thread': thread, 'start_time': time.time()}
+            time.sleep(3)  # Задержка между запуском браузеров
             
     except Exception as e:
         logging.error(f"❌ Ошибка сканирования: {e}")
