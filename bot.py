@@ -3,6 +3,9 @@ import time
 import re
 import logging
 import random
+import json
+import os
+from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -16,8 +19,10 @@ import telebot
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 2
+MAX_BROWSERS = 3
 CHECK_INTERVAL = 30
+DATA_FILE = "game_data.json"
+MAX_DAYS = 3  # Хранение данных 3 дня
 # =====================
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -40,6 +45,101 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 message_ids = {}  # {table_id: message_id}
 lock = threading.Lock()
+
+# Глобальный счетчик игр (1-1440)
+game_counter = 1
+game_data = {}  # {game_number: {'timestamp': datetime, 'data': {...}}}
+
+def load_game_data():
+    """Загрузка данных игр из файла"""
+    global game_data, game_counter
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Конвертируем строки обратно в datetime
+                game_data = {}
+                for k, v in data.items():
+                    if 'timestamp' in v:
+                        v['timestamp'] = datetime.fromisoformat(v['timestamp'])
+                    game_data[int(k)] = v
+                
+                # Очистка старых данных (> 3 дней)
+                cleanup_old_data()
+                
+                # Определяем следующий номер игры
+                if game_data:
+                    last_game = max(game_data.keys())
+                    game_counter = (last_game % 1440) + 1
+                else:
+                    game_counter = 1
+                
+                logging.info(f"Загружены данные игр. Текущий счетчик: {game_counter}")
+    except Exception as e:
+        logging.error(f"Ошибка загрузки данных: {e}")
+        game_data = {}
+        game_counter = 1
+
+def save_game_data():
+    """Сохранение данных игр в файл"""
+    try:
+        # Конвертируем datetime в строки
+        data_to_save = {}
+        for k, v in game_data.items():
+            data_to_save[str(k)] = {
+                'timestamp': v['timestamp'].isoformat() if 'timestamp' in v else None,
+                'data': v.get('data', {})
+            }
+        
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        logging.info("Данные игр сохранены")
+    except Exception as e:
+        logging.error(f"Ошибка сохранения данных: {e}")
+
+def cleanup_old_data():
+    """Удаление данных старше 3 дней"""
+    global game_data
+    now = datetime.now()
+    cutoff = now - timedelta(days=MAX_DAYS)
+    
+    old_games = [g for g, data in game_data.items() 
+                 if 'timestamp' in data and data['timestamp'] < cutoff]
+    
+    for game in old_games:
+        del game_data[game]
+    
+    if old_games:
+        logging.info(f"Удалено {len(old_games)} старых игр")
+
+def get_next_game_number():
+    """Получение следующего номера игры (1-1440 циклично)"""
+    global game_counter
+    current = game_counter
+    game_counter = (game_counter % 1440) + 1
+    return current
+
+def calculate_total_bochkov(p_cards, d_cards):
+    """Подсчет общего количества бочков (всех карт)"""
+    return len(p_cards) + len(d_cards)
+
+def has_21(p_score, d_score):
+    """Проверка наличия 21 очка"""
+    return p_score == 21 or d_score == 21
+
+def is_instant_finish(p_cards, d_cards):
+    """Проверка мгновенного завершения (по 2 карты у обоих)"""
+    return len(p_cards) == 2 and len(d_cards) == 2
+
+def is_golden_point(p_cards, d_cards):
+    """Проверка золотого очка (два туза)"""
+    # Проверяем карты игрока
+    if len(p_cards) == 2 and p_cards[0][0] == 'A' and p_cards[1][0] == 'A':
+        return True
+    # Проверяем карты дилера
+    if len(d_cards) == 2 and d_cards[0][0] == 'A' and d_cards[1][0] == 'A':
+        return True
+    return False
 
 def create_driver():
     options = Options()
@@ -83,18 +183,15 @@ def format_cards(cards):
 def is_game_finished(driver):
     """Проверка завершения игры по различным признакам"""
     try:
-        # Проверка по таймеру/статусу
         status_element = driver.find_element(By.CSS_SELECTOR, '.ui-game-timer__label')
         status_text = status_element.text.lower()
         
-        # Ключевые слова завершения
         finished_keywords = ['завершен', 'завершена', 'finished', 'ended', 'game over']
         
         if any(keyword in status_text for keyword in finished_keywords):
             logging.info(f"Игра завершена по статусу: {status_text}")
             return True
             
-        # Проверка наличия кнопки "новая игра" или аналогичных элементов
         try:
             new_game_btn = driver.find_element(By.CSS_SELECTOR, '.ui-game-controls__button, .new-game-button, [class*="new"]')
             if new_game_btn and new_game_btn.is_displayed():
@@ -102,18 +199,35 @@ def is_game_finished(driver):
                 return True
         except NoSuchElementException:
             pass
-            
-        # Проверка, что карты больше не обновляются (опционально)
-        # Можно добавить дополнительную логику
         
     except NoSuchElementException:
-        # Если элемент статуса не найден, возможно страница изменилась
         logging.warning("Элемент статуса не найден")
         return True
     except Exception as e:
         logging.error(f"Ошибка проверки завершения игры: {e}")
         
     return False
+
+def is_player_turn(driver):
+    """Определение, чей ход (игрок или дилер добирает)"""
+    try:
+        # Ищем активного игрока (подсветка или специальный класс)
+        player_element = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child')
+        dealer_element = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child')
+        
+        player_class = player_element.get_attribute('class')
+        dealer_class = dealer_element.get_attribute('class')
+        
+        # Если у игрока есть класс active или highlight
+        if 'active' in player_class or 'highlight' in player_class:
+            return 'player'
+        elif 'active' in dealer_class or 'highlight' in dealer_class:
+            return 'dealer'
+    except:
+        pass
+    
+    # Если не удалось определить, возвращаем None
+    return None
 
 def safe_quit_driver(driver, table_id):
     """Безопасное закрытие драйвера"""
@@ -126,7 +240,6 @@ def safe_quit_driver(driver, table_id):
 
 def get_state(driver):
     try:
-        # Ждем загрузки основных элементов
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.live-twenty-one-field-player'))
         )
@@ -136,18 +249,21 @@ def get_state(driver):
         dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
         dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
         
-        # Пробуем получить статус, но не падаем если его нет
         try:
             status = driver.find_element(By.CSS_SELECTOR, '.ui-game-timer__label').text
         except:
             status = "Идет игра"
+            
+        # Определяем, чей ход
+        turn = is_player_turn(driver)
             
         return {
             'p_score': player_score,
             'p_cards': player_cards,
             'd_score': dealer_score,
             'd_cards': dealer_cards,
-            'status': status
+            'status': status,
+            'turn': turn
         }
     except TimeoutException:
         logging.error(f"Таймаут загрузки страницы")
@@ -156,21 +272,55 @@ def get_state(driver):
         logging.error(f"Ошибка получения состояния: {e}")
         return None
 
-def format_message(table_id, state, is_final=False, t_num=None):
+def format_message(table_id, state, is_final=False, game_number=None):
+    """Форматирование сообщения согласно требованиям"""
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
-    if is_final:
-        return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num}"
-    return f"⏰#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+    
+    # Базовый формат: #N{номер}. {счет игрока}({карты}) - {счет дилера}({карты})
+    base_msg = f"#N{game_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+    
+    if not is_final:
+        # Промежуточное сообщение с указанием, кто добирает
+        if state['turn'] == 'player':
+            return f"⏰{base_msg.replace(f"{state['p_score']}({p_cards})", f"▶ {state['p_score']}({p_cards})")}"
+        elif state['turn'] == 'dealer':
+            return f"⏰{base_msg.replace(f"{state['d_score']}({d_cards})", f"▶ {state['d_score']}({d_cards})")}"
+        else:
+            return f"⏰{base_msg}"
+    else:
+        # Финальное сообщение с тегами
+        tags = []
+        
+        # #T - общее количество бочков
+        total_bochkov = calculate_total_bochkov(state['p_cards'], state['d_cards'])
+        tags.append(f"#T{total_bochkov}")
+        
+        # #R - мгновенное завершение (по 2 карты)
+        if is_instant_finish(state['p_cards'], state['d_cards']):
+            tags.append("#R")
+        
+        # #O - наличие 21 очка
+        if has_21(int(state['p_score']), int(state['d_score'])):
+            tags.append("#O")
+        
+        # #G - золотое очко (два туза)
+        if is_golden_point(state['p_cards'], state['d_cards']):
+            tags.append("#G")
+        
+        # Сохраняем данные игры
+        save_game_data()
+        
+        return f"{base_msg} {' '.join(tags)}"
 
 def monitor_table(table_url, table_id):
     driver = None
     last_state = None
     msg_id = None
-    t_num = random.randint(30, 60)
     game_active = True
     no_response_count = 0
     max_no_response = 5
+    game_number = None
 
     try:
         driver = create_driver()
@@ -180,7 +330,12 @@ def monitor_table(table_url, table_id):
 
         logging.info(f"Начало мониторинга стола {table_id}")
         driver.get(table_url)
-        time.sleep(5)  # Даем время на загрузку
+        time.sleep(5)
+
+        # Получаем номер игры
+        with lock:
+            game_number = get_next_game_number()
+        logging.info(f"Стол {table_id} получил номер игры: {game_number}")
 
         while game_active:
             try:
@@ -194,20 +349,19 @@ def monitor_table(table_url, table_id):
                     time.sleep(2)
                     continue
                 
-                # Сброс счетчика при успешном получении состояния
                 no_response_count = 0
                 
                 # Проверка завершения игры
                 if is_game_finished(driver):
                     final_state = get_state(driver) or state
-                    final_msg = format_message(table_id, final_state, is_final=True, t_num=t_num)
+                    final_msg = format_message(table_id, final_state, is_final=True, game_number=game_number)
                     
                     try:
                         if msg_id:
                             bot.edit_message_text(final_msg, CHANNEL_ID, msg_id)
                         else:
                             bot.send_message(CHANNEL_ID, final_msg)
-                        logging.info(f"Стол {table_id} завершен, финальное сообщение отправлено")
+                        logging.info(f"Стол {table_id} (игра #{game_number}) завершен")
                     except Exception as e:
                         logging.error(f"Ошибка отправки финального сообщения для стола {table_id}: {e}")
                     
@@ -216,7 +370,7 @@ def monitor_table(table_url, table_id):
 
                 # Отправка/редактирование промежуточных результатов
                 if state != last_state:
-                    msg = format_message(table_id, state)
+                    msg = format_message(table_id, state, is_final=False, game_number=game_number)
                     try:
                         if msg_id:
                             bot.edit_message_text(msg, CHANNEL_ID, msg_id)
@@ -224,7 +378,7 @@ def monitor_table(table_url, table_id):
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
                         last_state = state
-                        logging.info(f"Стол {table_id} обновлен: {state['p_score']} - {state['d_score']}")
+                        logging.info(f"Стол {table_id} (игра #{game_number}) обновлен")
                     except Exception as e:
                         logging.error(f"Ошибка отправки сообщения для стола {table_id}: {e}")
 
@@ -241,7 +395,6 @@ def monitor_table(table_url, table_id):
     except Exception as e:
         logging.error(f"Критическая ошибка мониторинга стола {table_id}: {e}")
     finally:
-        # Гарантированное закрытие драйвера и очистка данных
         safe_quit_driver(driver, table_id)
         
         with lock:
@@ -250,7 +403,7 @@ def monitor_table(table_url, table_id):
             if table_id in message_ids:
                 del message_ids[table_id]
         
-        logging.info(f"Мониторинг стола {table_id} завершен, ресурсы освобождены")
+        logging.info(f"Мониторинг стола {table_id} (игра #{game_number}) завершен")
 
 def scan_tables():
     driver = None
@@ -264,7 +417,6 @@ def scan_tables():
         driver.get(MAIN_URL)
         time.sleep(5)
 
-        # Ждем загрузки блоков игр
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block__link'))
         )
@@ -294,7 +446,7 @@ def scan_tables():
                     break
                     
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
-            thread.daemon = True  # Поток будет завершен при завершении главной программы
+            thread.daemon = True
             thread.start()
             
             with lock:
@@ -324,6 +476,9 @@ def clean_threads():
 def main():
     logging.info("Чистый бот запущен")
     
+    # Загружаем данные игр при старте
+    load_game_data()
+    
     try:
         while True:
             try:
@@ -342,14 +497,9 @@ def main():
                 logging.error(f"Ошибка в главном цикле: {e}")
                 time.sleep(60)
     finally:
-        # Очистка ресурсов при завершении
+        # Сохраняем данные при завершении
+        save_game_data()
         logging.info("Завершение работы бота...")
-        with lock:
-            for table_id in list(active_tables.keys()):
-                logging.info(f"Ожидание завершения потока стола {table_id}")
-                # Потоки завершатся сами благодаря daemon=True
-            active_tables.clear()
-            message_ids.clear()
 
 if __name__ == "__main__":
     main()
