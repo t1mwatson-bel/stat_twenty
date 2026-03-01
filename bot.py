@@ -226,13 +226,9 @@ def safe_quit_driver(table_id):
     except Exception as e:
         logging.error(f"Ошибка при закрытии драйвера стола {table_id}: {e}")
 
-def get_state(driver):
+def get_state_fast(driver):
+    """Быстрое получение состояния без лишних проверок"""
     try:
-        # Ждем загрузки основных элементов
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '.live-twenty-one-field-player'))
-        )
-        
         player_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label').text
         player_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
         dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
@@ -242,7 +238,6 @@ def get_state(driver):
         player_active = False
         dealer_active = False
         try:
-            # Проверяем наличие активных кнопок или индикаторов
             player_area = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child')
             if 'active' in player_area.get_attribute('class').lower():
                 player_active = True
@@ -252,31 +247,31 @@ def get_state(driver):
                 dealer_active = True
         except:
             pass
-        
-        # Пробуем получить статус
-        try:
-            status = driver.find_element(By.CSS_SELECTOR, '.ui-game-timer__label').text
-        except:
-            status = "Идет игра"
             
         return {
             'p_score': player_score,
             'p_cards': player_cards,
             'd_score': dealer_score,
             'd_cards': dealer_cards,
-            'status': status,
             'player_active': player_active,
             'dealer_active': dealer_active
         }
-    except TimeoutException:
-        logging.error(f"Таймаут загрузки страницы")
-        return None
     except Exception as e:
-        logging.error(f"Ошибка получения состояния: {e}")
         return None
 
+def is_game_finished_fast(driver):
+    """Быстрая проверка завершения игры"""
+    try:
+        driver.find_element(By.CSS_SELECTOR, 
+            'span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
+        return True
+    except NoSuchElementException:
+        return False
+    except:
+        return False
+
 def format_message(table_id, state, is_final=False, t_num=None, table_number=None):
-    """Форматирование сообщения с учетом специальных условий"""
+    """Форматирование сообщения с учетом специальных условий и префикса N"""
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
     
@@ -286,24 +281,36 @@ def format_message(table_id, state, is_final=False, t_num=None, table_number=Non
         if table_number == 0:
             table_number = 1440
     
-    # Формируем основную часть сообщения
+    # Формируем основную часть сообщения с префиксом #N
     if is_final:
         specials = check_special_conditions(state['p_cards'], state['d_cards'], 
                                            state['p_score'], state['d_score'])
         
+        # Определяем, кто набрал 21 для лучшей читаемости
+        twenty_one_indicator = ""
+        if state['p_score'] == "21" and state['d_score'] == "21":
+            twenty_one_indicator = " 🔥ОБА 21🔥"
+        elif state['p_score'] == "21":
+            twenty_one_indicator = " 👆ИГРОК 21👆"
+        elif state['d_score'] == "21":
+            twenty_one_indicator = " 👇ДИЛЕР 21👇"
+        
+        base_msg = f"#N{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num}"
+        
         if specials:
-            return f"#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {specials}"
+            return f"{base_msg} {specials}{twenty_one_indicator}"
         else:
-            return f"#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num}"
+            return f"{base_msg}{twenty_one_indicator}"
     else:
-        # Определяем, кто сейчас ходит
+        # Определяем, кто сейчас ходит с явным указанием
         turn = determine_turn(state)
         if turn == 'player':
-            return f"⏰#{table_number}. ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+            return f"⏰#N{table_number}. 👆ИГРОК ДОБИРАЕТ👆 ▶ {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
         elif turn == 'dealer':
-            return f"⏰#{table_number}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards})"
+            return f"⏰#N{table_number}. {state['p_score']}({p_cards}) - ▶ {state['d_score']}({d_cards}) 👇ДИЛЕР ДОБИРАЕТ👇"
         else:
-            return f"⏰#{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
+            # Если ход не определен, показываем обычное сообщение
+            return f"⏰#N{table_number}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def send_telegram_message_with_retry(chat_id, text, reply_to_message_id=None, parse_mode=None):
     """Отправка сообщения с повторными попытками при ошибке 429"""
@@ -313,7 +320,6 @@ def send_telegram_message_with_retry(chat_id, text, reply_to_message_id=None, pa
             return bot.send_message(chat_id, text, reply_to_message_id=reply_to_message_id, parse_mode=parse_mode)
         except Exception as e:
             if "429" in str(e):
-                # Извлекаем время ожидания из сообщения об ошибке
                 retry_after = 15
                 match = re.search(r'retry after (\d+)', str(e))
                 if match:
@@ -322,7 +328,6 @@ def send_telegram_message_with_retry(chat_id, text, reply_to_message_id=None, pa
                 logging.warning(f"Ошибка 429 при отправке, ожидание {retry_after} сек (попытка {attempt + 1}/{max_retries})")
                 time.sleep(retry_after)
             else:
-                # Другие ошибки не повторяем
                 raise e
     
     raise Exception(f"Не удалось отправить сообщение после {max_retries} попыток")
@@ -335,7 +340,6 @@ def edit_telegram_message_with_retry(chat_id, message_id, text, parse_mode=None)
             return bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode)
         except Exception as e:
             if "429" in str(e):
-                # Извлекаем время ожидания из сообщения об ошибке
                 retry_after = 15
                 match = re.search(r'retry after (\d+)', str(e))
                 if match:
@@ -345,14 +349,13 @@ def edit_telegram_message_with_retry(chat_id, message_id, text, parse_mode=None)
                 time.sleep(retry_after)
             elif "400" in str(e) and "message is not modified" in str(e):
                 # Игнорируем ошибку "message is not modified"
-                logging.debug(f"Сообщение не изменилось для стола {chat_id}")
+                logging.debug(f"Сообщение не изменилось")
                 return None
             else:
-                # Другие ошибки не повторяем
                 logging.error(f"Ошибка при редактировании сообщения: {e}")
                 return None
     
-    logging.error(f"Не удалось отредактировать сообщение после {max_retries} попыток из-за ошибки 429")
+    logging.error(f"Не удалось отредактировать сообщение после {max_retries} попыток")
     return None
 
 def monitor_table(table_url, table_id):
@@ -368,7 +371,8 @@ def monitor_table(table_url, table_id):
     if table_number == 0:
         table_number = 1440
     last_send_time = 0
-    min_send_interval = 3  # Минимальный интервал между отправками в секундах
+    min_send_interval = 2
+    initial_load = True
 
     # Проверяем, не была ли уже завершена эта игра
     if game_data.is_game_completed(table_id):
@@ -376,127 +380,144 @@ def monitor_table(table_url, table_id):
         return
 
     try:
-        # Создаем отдельный драйвер для этого стола
         driver = create_driver()
         if not driver:
             logging.error(f"Не удалось создать драйвер для стола {table_id}.")
             return
 
-        # Сохраняем драйвер в общем словаре
         with lock:
             table_drivers[table_id] = driver
 
-        logging.info(f"Начало мониторинга стола {table_id} в отдельном браузере")
+        logging.info(f"Начало мониторинга стола {table_id}")
         driver.get(table_url)
-        time.sleep(5)  # Даем время на загрузку
+        
+        # Быстрая проверка загрузки карт
+        cards_loaded = False
+        wait_start = time.time()
+        max_wait = 10
+        check_interval = 0.5
+        
+        while not cards_loaded and (time.time() - wait_start) < max_wait:
+            try:
+                player_cards = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+                
+                if len(player_cards) > 0:
+                    cards_loaded = True
+                    logging.info(f"Карты загружены для стола {table_id}")
+                    break
+                    
+                if is_game_finished_fast(driver):
+                    logging.info(f"Игра на столе {table_id} уже завершена")
+                    game_active = False
+                    break
+                    
+                time.sleep(check_interval)
+            except Exception as e:
+                time.sleep(check_interval)
+        
+        logging.info(f"Старт мониторинга стола {table_id}")
 
         while game_active:
             try:
                 current_time = time.time()
                 
-                state = get_state(driver)
+                state = get_state_fast(driver)
                 
                 if not state:
                     no_response_count += 1
                     if no_response_count >= max_no_response:
-                        logging.warning(f"Стол {table_id} не отвечает, завершаем мониторинг")
+                        logging.warning(f"Стол {table_id} не отвечает")
                         break
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
                 
-                # Сброс счетчика при успешном получении состояния
                 no_response_count = 0
                 
-                # Проверка завершения игры по специальному селектору
-                if is_game_finished(driver):
-                    final_state = get_state(driver) or state
+                # Проверка завершения
+                if is_game_finished_fast(driver):
+                    final_state = get_state_fast(driver) or state
                     final_msg = format_message(table_id, final_state, is_final=True, 
                                               t_num=t_num, table_number=table_number)
                     
                     try:
                         with lock:
                             if msg_id:
-                                # Редактируем существующее сообщение
-                                result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
-                                if result is None and "message is not modified" not in str(result):
-                                    # Если редактирование не удалось по другой причине, отправляем новое
-                                    sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
-                                    msg_id = sent.message_id
-                                    message_ids[table_id] = msg_id
+                                edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
                             else:
-                                # Отправляем новое сообщение
                                 sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
                                 msg_id = sent.message_id
                                 message_ids[table_id] = msg_id
                         
-                        # Сохраняем завершенную игру
                         game_data.add_completed_game(table_id, final_msg, t_num)
                         game_data.update_last_number(table_number)
-                        
-                        logging.info(f"Стол {table_id} завершен, финальное сообщение отправлено")
+                        logging.info(f"Стол {table_id} завершен")
                     except Exception as e:
-                        logging.error(f"Ошибка отправки финального сообщения для стола {table_id}: {e}")
+                        logging.error(f"Ошибка отправки финального сообщения: {e}")
                     
                     game_active = False
                     break
 
-                # Отправка/редактирование промежуточных результатов
-                if state != last_state and (current_time - last_send_time) >= min_send_interval:
+                # Пропускаем пустые состояния
+                if len(state['p_cards']) == 0 and len(state['d_cards']) == 0:
+                    time.sleep(1)
+                    continue
+
+                # Отправка обновлений
+                if (state != last_state or initial_load) and (current_time - last_send_time) >= min_send_interval:
                     msg = format_message(table_id, state, table_number=table_number)
                     
-                    # Проверяем, не отправляем ли мы то же сообщение
                     with lock:
                         last_msg = last_messages.get(table_id)
-                        if last_msg == msg:
-                            logging.debug(f"Сообщение для стола {table_id} не изменилось, пропускаем")
-                            time.sleep(2)
+                        if last_msg == msg and not initial_load:
+                            time.sleep(1)
                             continue
                     
                     try:
                         with lock:
                             if msg_id:
-                                # Редактируем существующее сообщение
                                 result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
-                                if result is None:
-                                    # Если редактирование вернуло None (ошибка 400), просто продолжаем
-                                    pass
-                                else:
+                                if result is not None:
                                     last_messages[table_id] = msg
                             else:
-                                # Отправляем новое сообщение
-                                sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
-                                msg_id = sent.message_id
-                                message_ids[table_id] = msg_id
-                                last_messages[table_id] = msg
+                                if len(state['p_cards']) > 0 or len(state['d_cards']) > 0:
+                                    sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
+                                    msg_id = sent.message_id
+                                    message_ids[table_id] = msg_id
+                                    last_messages[table_id] = msg
+                                    logging.info(f"Стол {table_id}: первое сообщение #N{table_number}")
                         
-                        last_state = state
-                        last_send_time = current_time
+                        if msg_id:
+                            last_state = state
+                            last_send_time = current_time
+                            initial_load = False
                         
-                        # Определяем, кто ходит для лога
+                        # Лог с информацией о ходе
                         turn = determine_turn(state)
-                        turn_symbol = "▶" if turn else ""
-                        logging.info(f"Стол {table_id} обновлен: {turn_symbol} {state['p_score']} - {state['d_score']}")
+                        if turn == 'player':
+                            logging.info(f"Стол {table_id}: ИГРОК добирает - {state['p_score']}({len(state['p_cards'])} карт) - {state['d_score']}({len(state['d_cards'])} карт)")
+                        elif turn == 'dealer':
+                            logging.info(f"Стол {table_id}: ДИЛЕР добирает - {state['p_score']}({len(state['p_cards'])} карт) - {state['d_score']}({len(state['d_cards'])} карт)")
+                        else:
+                            logging.info(f"Стол {table_id}: {state['p_score']} - {state['d_score']}")
+                            
                     except Exception as e:
-                        logging.error(f"Ошибка отправки сообщения для стола {table_id}: {e}")
-                        # Увеличиваем интервал при ошибках
-                        time.sleep(5)
+                        logging.error(f"Ошибка отправки: {e}")
+                        time.sleep(2)
 
-                time.sleep(2)
+                time.sleep(1)
 
             except StaleElementReferenceException:
-                logging.warning(f"StaleElementReferenceException для стола {table_id}, обновляем страницу")
+                logging.warning(f"StaleElementReferenceException для стола {table_id}")
                 driver.refresh()
-                time.sleep(3)
-            except Exception as e:
-                logging.error(f"Ошибка в цикле мониторинга стола {table_id}: {e}")
                 time.sleep(2)
+            except Exception as e:
+                logging.error(f"Ошибка в цикле: {e}")
+                time.sleep(1)
 
     except Exception as e:
-        logging.error(f"Критическая ошибка мониторинга стола {table_id}: {e}")
+        logging.error(f"Критическая ошибка: {e}")
     finally:
-        # Гарантированное закрытие драйвера и очистка данных
         safe_quit_driver(table_id)
-        
         with lock:
             if table_id in active_tables:
                 del active_tables[table_id]
@@ -504,14 +525,12 @@ def monitor_table(table_url, table_id):
                 del message_ids[table_id]
             if table_id in last_messages:
                 del last_messages[table_id]
-        
-        logging.info(f"Мониторинг стола {table_id} завершен, браузер закрыт")
+        logging.info(f"Мониторинг стола {table_id} завершен")
 
 def scan_tables():
     """Сканирование новых столов"""
     driver = None
     try:
-        # Создаем временный драйвер только для сканирования
         driver = create_driver()
         if not driver:
             logging.error("Не удалось создать драйвер для сканирования столов.")
@@ -521,7 +540,6 @@ def scan_tables():
         driver.get(MAIN_URL)
         time.sleep(5)
 
-        # Ждем загрузки блоков игр
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block__link'))
         )
@@ -538,7 +556,6 @@ def scan_tables():
             table_id = match.group(1) if match else raw_id
             href = link.get_attribute('href')
 
-            # Пропускаем уже завершенные игры
             if game_data.is_game_completed(table_id):
                 continue
 
@@ -554,7 +571,6 @@ def scan_tables():
                 if len(active_tables) >= MAX_BROWSERS:
                     break
                     
-            # Создаем отдельный поток для каждого стола
             thread = threading.Thread(target=monitor_table, args=(href, table_id))
             thread.daemon = True
             thread.start()
@@ -562,7 +578,7 @@ def scan_tables():
             with lock:
                 active_tables[table_id] = thread
             
-            logging.info(f"Запущен мониторинг стола {table_id} в отдельном потоке")
+            logging.info(f"Запущен мониторинг стола {table_id}")
             time.sleep(3)
 
     except TimeoutException:
@@ -570,16 +586,14 @@ def scan_tables():
     except Exception as e:
         logging.error(f"Ошибка сканирования: {e}")
     finally:
-        # Закрываем временный драйвер для сканирования
         if driver:
             driver.quit()
 
 def clean_threads():
-    """Очистка завершенных потоков и закрытие их браузеров"""
+    """Очистка завершенных потоков"""
     with lock:
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
-            # Закрываем браузер для завершенного потока
             if tid in table_drivers:
                 try:
                     table_drivers[tid].quit()
@@ -592,10 +606,10 @@ def clean_threads():
                 del message_ids[tid]
             if tid in last_messages:
                 del last_messages[tid]
-            logging.info(f"Поток и браузер стола {tid} очищены")
+            logging.info(f"Поток стола {tid} очищен")
 
 def main():
-    logging.info("Чистый бот запущен с отдельными браузерами для каждого стола")
+    logging.info("Бот запущен с исправлениями: #N префикс и явная индикация хода")
     
     try:
         while True:
@@ -605,11 +619,8 @@ def main():
                 
                 with lock:
                     logging.info(f"Активных столов: {len(active_tables)}")
-                    logging.info(f"Активных браузеров: {len(table_drivers)}")
                 
-                # Периодическое сохранение данных
                 game_data.save_data()
-                
                 time.sleep(CHECK_INTERVAL)
                 
             except KeyboardInterrupt:
@@ -619,13 +630,11 @@ def main():
                 logging.error(f"Ошибка в главном цикле: {e}")
                 time.sleep(60)
     finally:
-        # Закрываем все браузеры при завершении
-        logging.info("Завершение работы бота, закрытие всех браузеров...")
+        logging.info("Завершение работы бота...")
         with lock:
-            for table_id, driver in table_drivers.items():
+            for driver in table_drivers.values():
                 try:
                     driver.quit()
-                    logging.info(f"Браузер стола {table_id} закрыт")
                 except:
                     pass
             
