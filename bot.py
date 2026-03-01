@@ -289,7 +289,7 @@ def format_message(table_id, state, is_final=False, t_num=None):
     
     if is_final:
         special_tags = check_special_conditions(state)
-        # #N - номер стола, #T - номер бочка
+        # #N - номер стола, #T - общее количство очков
         if special_tags:
             return f"#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards}) #T{t_num} {special_tags}"
         else:
