@@ -20,7 +20,7 @@ from telebot import apihelper
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
+MAX_BROWSERS = 2
 DATA_FILE = "game_data.pkl"
 DATA_RETENTION_DAYS = 3
 # =====================
@@ -49,7 +49,7 @@ active_tables = {}  # {table_id: thread}
 message_ids = {}    # {table_id: message_id}
 table_drivers = {}  # {table_id: driver}
 last_messages = {}  # {table_id: last_message_text}
-table_counter = 0   # Счетчик для последовательного выбора столов
+last_table_id = 0   # Последний взятый ID стола
 lock = threading.Lock()
 
 class GameData:
@@ -320,33 +320,47 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
     return None
 
 def get_next_table(driver):
-    """Получить следующий стол по порядку (циклически)"""
-    global table_counter
+    """Получить следующий новый стол (с большим ID)"""
+    global last_table_id
     
     try:
-        # Ждем загрузки столов
-        WebDriverWait(driver, 15).until(
+        logging.info("Ожидание загрузки страницы со столами...")
+        
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
         )
         
-        # Даем время на полную загрузку
-        time.sleep(3)
+        time.sleep(5)
         
-        # Получаем все столы
-        tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
-        logging.info(f"Найдено столов: {len(tables)}")
+        # Пробуем несколько раз получить столы
+        max_attempts = 3
+        tables = []
+        
+        for attempt in range(max_attempts):
+            tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
+            logging.info(f"Попытка {attempt + 1}: найдено столов: {len(tables)}")
+            
+            if len(tables) > 0:
+                break
+                
+            time.sleep(3)
         
         if not tables:
-            logging.warning("Нет доступных столов")
+            logging.warning("Нет доступных столов после нескольких попыток")
             return None, None
         
-        # Пробуем найти валидный стол (с ID)
+        # Собираем все валидные столы с ID
         valid_tables = []
         for table in tables:
             try:
                 id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
                 if id_element and id_element.text.strip():
-                    valid_tables.append(table)
+                    table_id_text = id_element.text.strip()
+                    match = re.search(r'(\d+)$', table_id_text)
+                    if match:
+                        table_num = int(match.group(1))
+                        valid_tables.append((table_num, table))
+                        logging.info(f"Найден стол: {table_num}")
             except:
                 continue
         
@@ -354,35 +368,41 @@ def get_next_table(driver):
             logging.warning("Нет валидных столов с ID")
             return None, None
         
-        logging.info(f"Валидных столов: {len(valid_tables)}")
+        # Сортируем по номеру стола (от меньшего к большему)
+        valid_tables.sort(key=lambda x: x[0])
         
-        # Если счетчик вышел за пределы, сбрасываем
-        if table_counter >= len(valid_tables):
-            table_counter = 0
-            logging.info("Сброс счетчика столов, начинаем сначала")
+        logging.info(f"Всего столов: {len(valid_tables)}, последний взятый: {last_table_id}")
         
-        # Берем следующий стол
-        table = valid_tables[table_counter]
-        current_index = table_counter
-        table_counter += 1
+        # Ищем первый стол с номером БОЛЬШЕ последнего взятого
+        selected_table = None
+        selected_id = None
         
-        # Получаем ID стола
-        id_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
-        table_id = id_element.text.strip()
+        for table_num, table in valid_tables:
+            if table_num > last_table_id:
+                selected_table = table
+                selected_id = table_num
+                break
+        
+        if not selected_table:
+            # Если нет новых столов, берем самый первый (на случай перезапуска)
+            selected_table = valid_tables[0][1]
+            selected_id = valid_tables[0][0]
+            logging.info(f"Новых столов нет, берем первый: {selected_id}")
+        else:
+            logging.info(f"Найден новый стол: {selected_id}")
+        
+        # Обновляем последний взятый ID
+        last_table_id = selected_id
         
         # Получаем ссылку
-        link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
+        link_element = selected_table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
         href = link_element.get_attribute('href')
         
-        # Извлекаем числовой ID
-        match = re.search(r'(\d+)$', table_id)
-        numeric_id = match.group(1) if match else table_id
-        
-        logging.info(f"Выбран следующий стол: ID {table_id} (индекс {current_index})")
-        return href, numeric_id
+        logging.info(f"✅ Выбран следующий стол: ID {selected_id}")
+        return href, str(selected_id)
         
     except TimeoutException:
-        logging.error("Таймаут при загрузке столов")
+        logging.error("Таймаут при загрузке столов - сайт не отвечает")
         return None, None
     except Exception as e:
         logging.error(f"Ошибка при поиске стола: {e}")
@@ -664,7 +684,7 @@ def monitor_table(table_url, table_id):
         logging.info(f"Мониторинг стола {table_id} завершен")
 
 def launch_new_table_monitor():
-    """Запустить мониторинг нового стола (следующий по порядку)"""
+    """Запустить мониторинг нового стола (следующий по номеру)"""
     with lock:
         if len(active_tables) >= MAX_BROWSERS:
             logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS})")
@@ -720,8 +740,8 @@ def clean_threads():
             logging.info(f"Поток стола {tid} очищен")
 
 def main():
-    global table_counter
-    table_counter = 0
+    global last_table_id
+    last_table_id = 0
     logging.info("🚀 Бот запущен с Selenium и последовательным выбором столов")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
