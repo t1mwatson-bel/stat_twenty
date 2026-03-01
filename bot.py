@@ -2,7 +2,6 @@ import threading
 import time
 import re
 import logging
-import os
 import random
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -45,9 +44,20 @@ def create_driver():
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-infobars')
+    options.add_argument('--disable-plugins')
+    options.add_argument('--disable-software-rasterizer')
     options.binary_location = '/usr/bin/chromium'
+    
     service = Service('/usr/bin/chromedriver')
-    return webdriver.Chrome(service=service, options=options)
+    
+    try:
+        driver = webdriver.Chrome(service=service, options=options)
+        return driver
+    except Exception as e:
+        logging.error(f"Ошибка создания драйвера: {e}")
+        return None
 
 def parse_cards(elements):
     cards = []
@@ -88,14 +98,17 @@ def format_message(table_id, state, is_final=False, t_num=None):
     return f"⏰#{table_id}. {state['p_score']}({p_cards}) - {state['d_score']}({d_cards})"
 
 def monitor_table(table_url, table_id):
-    driver = None
+    driver = create_driver()
     last_state = None
     msg_id = None
     t_num = random.randint(30, 60)
     game_active = True
 
+    if not driver:
+        logging.error(f"Не удалось создать драйвер для стола {table_id}.")
+        return
+
     try:
-        driver = create_driver()
         driver.get(table_url)
         time.sleep(3)
 
@@ -141,9 +154,12 @@ def monitor_table(table_url, table_id):
         message_ids.pop(table_id, None)
 
 def scan_tables():
-    driver = None
+    driver = create_driver()
     try:
-        driver = create_driver()
+        if not driver:
+            logging.error("Не удалось создать драйвер для сканирования столов.")
+            return
+        
         driver.get(MAIN_URL)
         time.sleep(5)
 
@@ -162,8 +178,6 @@ def scan_tables():
             if table_id in active_tables or table_id in message_ids:
                 continue
             new_tables.append((table_id, href))
-
-        driver.quit()
 
         for table_id, href in new_tables:
             if len(active_tables) >= MAX_BROWSERS:
