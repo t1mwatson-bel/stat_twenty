@@ -244,9 +244,8 @@ def is_game_finished(driver):
         status_elements = driver.find_elements(By.CSS_SELECTOR, '.scoreboard-card-games-board-status')
         if status_elements:
             status_text = status_elements[0].text.strip()
-            logging.info(f"Статус игры: '{status_text}'")
-            # Если есть любой непустой статус - игра завершена
-            if status_text:
+            # Только если есть слова Победа или Ничья
+            if "Победа" in status_text or "Ничья" in status_text:
                 logging.info(f"Игра завершена: {status_text}")
                 return True
     except:
