@@ -210,10 +210,18 @@ def is_turn_indicator(driver, player="player"):
 
 def get_state(driver):
     try:
-        player_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label').text
-        player_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
-        dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
-        dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
+        # Используем find_elements вместо find_element для избежания NoSuchElementException
+        player_score_elements = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        player_score = player_score_elements[0].text if player_score_elements else "0"
+        
+        player_cards_elements = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+        player_cards = parse_cards(player_cards_elements)
+        
+        dealer_score_elements = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
+        dealer_score = dealer_score_elements[0].text if dealer_score_elements else "0"
+        
+        dealer_cards_elements = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
+        dealer_cards = parse_cards(dealer_cards_elements)
         
         player_turn = is_turn_indicator(driver, "player")
         dealer_turn = is_turn_indicator(driver, "dealer")
