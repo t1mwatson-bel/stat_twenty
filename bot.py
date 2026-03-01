@@ -317,9 +317,11 @@ async def get_next_table(page):
     global table_counter
     
     try:
+        # Ждем загрузки столов
         await page.wait_for('.dashboard-game-block', timeout=15)
         await page.sleep(3)
         
+        # Получаем все столы
         tables = await page.select_all('.dashboard-game-block')
         logging.info(f"Найдено столов: {len(tables)}")
         
@@ -327,10 +329,11 @@ async def get_next_table(page):
             logging.warning("Нет доступных столов")
             return None, None
         
+        # Фильтруем столы с ID
         valid_tables = []
         for table in tables:
             try:
-                id_elem = await table.select('.dashboard-game-info__additional-info')
+                id_elem = await table.query_selector('.dashboard-game-info__additional-info')
                 if id_elem:
                     text = await id_elem.text_content()
                     if text and text.strip():
@@ -341,6 +344,46 @@ async def get_next_table(page):
         if not valid_tables:
             logging.warning("Нет валидных столов с ID")
             return None, None
+        
+        logging.info(f"Валидных столов: {len(valid_tables)}")
+        
+        # Если счетчик вышел за пределы, сбрасываем
+        if table_counter >= len(valid_tables):
+            table_counter = 0
+            logging.info("Сброс счетчика столов, начинаем сначала")
+        
+        # Берем следующий стол
+        table = valid_tables[table_counter]
+        current_index = table_counter
+        table_counter += 1
+        
+        # Получаем ID стола
+        id_elem = await table.query_selector('.dashboard-game-info__additional-info')
+        if not id_elem:
+            logging.error("Не найден элемент с ID стола")
+            return None, None
+            
+        table_id_text = await id_elem.text_content()
+        table_id = table_id_text.strip() if table_id_text else ""
+        
+        # Получаем ссылку
+        link_elem = await table.query_selector('.dashboard-game-block__link')
+        if not link_elem:
+            logging.error("Не найден элемент с ссылкой")
+            return None, None
+            
+        href = await link_elem.get_attribute('href')
+        
+        # Извлекаем числовой ID
+        match = re.search(r'(\d+)$', table_id)
+        numeric_id = match.group(1) if match else table_id
+        
+        logging.info(f"Выбран следующий стол: ID {table_id} (индекс {current_index})")
+        return href, numeric_id
+        
+    except Exception as e:
+        logging.error(f"Ошибка при поиске стола: {e}")
+        return None, None
         
         logging.info(f"Валидных столов: {len(valid_tables)}")
         
