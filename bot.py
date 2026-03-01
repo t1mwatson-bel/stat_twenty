@@ -178,35 +178,87 @@ def check_special_conditions(state):
     return ' '.join(tags)
 
 def is_turn_indicator(driver, player="player"):
+    """Улучшенное определение хода"""
     try:
+        # Для игрока (первый игрок)
         if player == "player":
+            # Ищем различные индикаторы хода у игрока
             selectors = [
+                '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:first-child [class*="turn"]',
-                '.live-twenty-one-field-player:first-child [class*="active"]'
+                '.live-twenty-one-field-player:first-child [class*="active"]',
+                '.live-twenty-one-field-player:first-child .ui-game-turn-indicator',
+                # Иногда ход обозначается подсветкой или миганием
+                '.live-twenty-one-field-player:first-child .live-twenty-one-field-score[class*="active"]',
+                '.live-twenty-one-field-player:first-child .scoreboard-card-games-card[class*="active"]'
             ]
+        # Для дилера (второй игрок)
         else:
             selectors = [
+                '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__turn',
                 '.live-twenty-one-field-player:last-child [class*="turn"]',
-                '.live-twenty-one-field-player:last-child [class*="active"]'
+                '.live-twenty-one-field-player:last-child [class*="active"]',
+                '.live-twenty-one-field-player:last-child .ui-game-turn-indicator',
+                '.live-twenty-one-field-player:last-child .live-twenty-one-field-score[class*="active"]',
+                '.live-twenty-one-field-player:last-child .scoreboard-card-games-card[class*="active"]'
             ]
         
         for selector in selectors:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            if elements:
+            for element in elements:
+                if element.is_displayed():
+                    # Проверяем, видим ли элемент
+                    return True
+                    
+        # Дополнительная проверка: если у игрока меньше карт, чем должно быть для хода
+        # Это может помочь определить ход по логике игры
+        if player == "player":
+            player_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
+            dealer_cards = len(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
+            
+            # Если у дилера карт меньше 2, а у игрока уже есть, то ход игрока
+            if dealer_cards < 2 and player_cards >= 2:
                 return True
-    except:
-        pass
+        
+    except Exception as e:
+        logging.debug(f"Ошибка определения хода для {player}: {e}")
+    
     return False
 
 def get_state(driver):
+    """Улучшенное получение состояния с определением хода"""
     try:
         player_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label').text
         player_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .scoreboard-card-games-card'))
         dealer_score = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label').text
         dealer_cards = parse_cards(driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .scoreboard-card-games-card'))
         
+        # Определяем ход
         player_turn = is_turn_indicator(driver, "player")
         dealer_turn = is_turn_indicator(driver, "dealer")
+        
+        # Логика разрешения конфликтов:
+        # Если оба True или оба False, пробуем определить по количеству карт
+        if player_turn == dealer_turn:
+            # По логике игры: ход у того, у кого меньше карт (если игра не завершена)
+            if len(player_cards) < len(dealer_cards):
+                player_turn = True
+                dealer_turn = False
+            elif len(dealer_cards) < len(player_cards):
+                player_turn = False
+                dealer_turn = True
+            else:
+                # Если карт поровну, смотрим на счет
+                try:
+                    p_score_int = int(player_score) if player_score.isdigit() else 0
+                    d_score_int = int(dealer_score) if dealer_score.isdigit() else 0
+                    
+                    # Если у игрока меньше 21 и у дилера меньше 17, то ход игрока
+                    if p_score_int < 21 and d_score_int < 17:
+                        player_turn = True
+                        dealer_turn = False
+                except:
+                    pass
         
         return {
             'p_score': player_score,
@@ -265,24 +317,30 @@ def monitor_table(table_url, table_id):
 
         logging.info(f"Мониторинг стола {table_id} (T{t_num})")
         driver.get(table_url)
-        time.sleep(5)
+        time.sleep(3)  # Небольшая задержка на загрузку страницы
 
         while game_active:
             try:
                 state = get_state(driver)
                 
                 if not state:
-                    time.sleep(2)
+                    time.sleep(1)  # Уменьшил до 1 секунды
                     continue
                 
-                # Ждем появления карт
+                # Проверяем появление карт - без задержки!
                 if not cards_appeared:
                     if state['p_cards'] or state['d_cards']:
                         cards_appeared = True
-                        logging.info(f"Стол {table_id}: появились карты")
-                    else:
-                        time.sleep(2)
-                        continue
+                        # Сразу отправляем первое сообщение с картами
+                        msg = format_message(table_id, state)
+                        try:
+                            sent = bot.send_message(CHANNEL_ID, msg)
+                            msg_id = sent.message_id
+                            last_state = state
+                            logging.info(f"Стол {table_id}: первое сообщение с картами")
+                        except Exception as e:
+                            logging.error(f"Ошибка отправки первого сообщения: {e}")
+                    continue  # Продолжаем цикл без задержки
                 
                 # Проверка завершения игры
                 if is_game_finished(driver):
@@ -307,11 +365,15 @@ def monitor_table(table_url, table_id):
                             sent = bot.send_message(CHANNEL_ID, msg)
                             msg_id = sent.message_id
                         last_state = state
-                        logging.info(f"Стол {table_id}: {state['p_score']}({len(state['p_cards'])} cards) - {state['d_score']}({len(state['d_cards'])} cards)")
+                        logging.info(f"Стол {table_id}: {state['p_score']} - {state['d_score']}")
                     except Exception as e:
                         logging.error(f"Ошибка отправки: {e}")
 
-                time.sleep(2)
+                time.sleep(1)  # Проверяем каждую секунду
+
+            except Exception as e:
+                logging.error(f"Ошибка в цикле: {e}")
+                time.sleep(1)
 
             except Exception as e:
                 logging.error(f"Ошибка в цикле: {e}")
