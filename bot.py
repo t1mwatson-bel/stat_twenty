@@ -282,6 +282,8 @@ def monitor_table(table_url, table_id):
     t_num = get_t_number(table_id)
     game_active = True
     cards_appeared = False
+    cards_appeared_time = None
+    max_lifetime = 120  # 2 минуты после появления карт
     crash_count = 0
     max_crashes = 3
 
@@ -318,6 +320,9 @@ def monitor_table(table_url, table_id):
                 if not cards_appeared:
                     if state['p_cards'] or state['d_cards']:
                         cards_appeared = True
+                        cards_appeared_time = time.time()
+                        logging.info(f"Стол {table_id}: карты появились, браузер будет жить 2 минуты")
+                        
                         msg = format_message(table_id, state)
                         try:
                             if msg_id:
@@ -334,6 +339,11 @@ def monitor_table(table_url, table_id):
                         except Exception as e:
                             logging.error(f"Ошибка отправки первого сообщения: {e}")
                     continue
+                
+                # Проверка времени жизни после появления карт
+                if cards_appeared and (time.time() - cards_appeared_time) > max_lifetime:
+                    logging.info(f"Стол {table_id}: 2 минуты истекли, закрываем браузер")
+                    break
                 
                 # Проверяем завершение игры
                 if is_game_finished(driver):
@@ -449,7 +459,7 @@ def clean_threads():
 
 def main():
     load_game_data()
-    logging.info(f"Бот запущен с {MAX_BROWSERS} браузерами")
+    logging.info(f"Бот запущен с {MAX_BROWSERS} браузерами, время жизни браузера 2 минуты после появления карт")
     
     while True:
         try:
