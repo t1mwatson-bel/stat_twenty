@@ -6,6 +6,8 @@ import os
 import sys
 import random
 import subprocess
+import socket
+import psutil
 from datetime import datetime
 
 from selenium import webdriver
@@ -17,13 +19,12 @@ from selenium.common.exceptions import (
     StaleElementReferenceException, InvalidSessionIdException
 )
 import telebot
-import psutil
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_PAGE_URL = "https://1xlite-7636770.bar/ru/live/twentyone/1643503-twentyone-game"
-MAX_BROWSERS = 3
+MAX_BROWSERS = 2
 CHECK_INTERVAL = 60
 
 logging.basicConfig(
@@ -66,15 +67,28 @@ active_tables = {}
 processed_games = set()
 # ==============================================
 
-def kill_all_chromes():
-    """Беспощадно убивает всё, что связано с chromium/chrome"""
+def kill_everything():
+    """Убивает всё: процессы, порты, сессии"""
     try:
+        # Жёсткое убийство процессов
         subprocess.run(["pkill", "-9", "-f", "chromium"], capture_output=True)
         subprocess.run(["pkill", "-9", "-f", "chrome"], capture_output=True)
         subprocess.run(["pkill", "-9", "-f", "chromedriver"], capture_output=True)
-        logging.info("💀 Все процессы Chromium убиты")
-    except:
-        pass
+        subprocess.run(["pkill", "-9", "-f", "selenium"], capture_output=True)
+        
+        # Найти и убить процессы, слушающие порты (типично для Chrome)
+        for conn in psutil.net_connections():
+            if conn.status == 'LISTEN' and conn.pid:
+                try:
+                    proc = psutil.Process(conn.pid)
+                    if 'chrome' in proc.name().lower() or 'chromium' in proc.name().lower():
+                        proc.kill()
+                except:
+                    pass
+        
+        logging.info("💀 Всё мертво")
+    except Exception as e:
+        logging.error(f"Ошибка при убийстве: {e}")
 
 def check_memory():
     try:
@@ -86,20 +100,20 @@ def check_memory():
         return True
 
 def create_driver(retries=2):
-    kill_all_chromes()  # чистим перед созданием
+    kill_everything()  # тотальная зачистка перед созданием
+    time.sleep(2)      # дать системе остыть
+    
     for attempt in range(retries):
         try:
             logging.info(f"🔄 Попытка {attempt+1} создания браузера...")
             options = Options()
 
+            # Минимально необходимые флаги (без лишнего)
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
             options.add_argument('--disable-software-rasterizer')
-            options.add_argument('--disable-features=VizDisplayCompositor')
-            options.add_argument('--disable-features=TranslateUI')
-            options.add_argument('--disable-features=BlinkGenPropertyTrees')
             options.add_argument('--disable-logging')
             options.add_argument('--log-level=3')
             options.add_argument('--silent')
@@ -124,7 +138,6 @@ def create_driver(retries=2):
             options.add_argument('--disable-popup-blocking')
             options.add_argument('--disable-prompt-on-repost')
             options.add_argument('--disable-renderer-backgrounding')
-            options.add_argument('--force-max-rate-commit-spans')
             options.add_argument('--enable-automation')
             options.add_argument('--password-store=basic')
             options.add_argument('--use-mock-keychain')
@@ -150,10 +163,10 @@ def create_driver(retries=2):
 
         except Exception as e:
             logging.warning(f"⚠️ Попытка {attempt+1} не удалась: {e}")
-            kill_all_chromes()
-            if attempt < retries - 1:
-                time.sleep(3)
-    logging.error("❌ Не удалось создать браузер")
+            kill_everything()
+            time.sleep(3)
+    
+    logging.error("❌ Не удалось создать браузер после всех попыток")
     return None
 
 def parse_card_from_element(card):
@@ -203,7 +216,7 @@ def get_game_state(driver, table_id):
             pass
         return state
     except InvalidSessionIdException:
-        logging.warning(f"⚠️ #{table_id}: сессия невалидна, выходим")
+        logging.warning(f"⚠️ #{table_id}: сессия невалидна")
         return None
     except Exception as e:
         logging.error(f"get_game_state #{table_id}: {e}")
@@ -266,8 +279,8 @@ def monitor_table(table_url, table_id):
 
                 time.sleep(2)
 
-            except (StaleElementReferenceException, InvalidSessionIdException):
-                logging.warning(f"⚠️ Stale/Invalid сессия #{table_id}, выход")
+            except (StaleElementReferenceException, InvalidSessionIdException, ConnectionError):
+                logging.warning(f"⚠️ Сбой сессии #{table_id}, выход")
                 break
             except Exception as e:
                 logging.error(f"⚠️ Ошибка в #{table_id}: {e}")
@@ -362,18 +375,18 @@ def clean_finished():
     for tid in dead:
         del active_tables[tid]
 
-    kill_all_chromes()
+    kill_everything()
     logging.info(f"🧹 Активных после чистки: {len(active_tables)}")
 
 def main():
     logging.info("="*50)
-    logging.info("🤖 ULTIMATE STABLE BOT (ZOMBIE KILLER V2)")
+    logging.info("🤖 FINAL BOT (ABSOLUTE ZOMBIE KILLER)")
     logging.info(f"📊 MAX_BROWSERS = {MAX_BROWSERS}")
     logging.info("="*50)
 
-    kill_all_chromes()
+    kill_everything()
     try:
-        bot.send_message(CHANNEL_ID, "🤖 Ультимативный бот запущен")
+        bot.send_message(CHANNEL_ID, "🤖 Финальный бот запущен")
     except:
         pass
 
@@ -388,7 +401,7 @@ def main():
         except Exception as e:
             err += 1
             logging.error(f"💥 Главный цикл, попытка {err}: {e}")
-            kill_all_chromes()
+            kill_everything()
             time.sleep(60)
 
 if __name__ == "__main__":
