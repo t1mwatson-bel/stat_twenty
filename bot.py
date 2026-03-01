@@ -530,7 +530,7 @@ def main():
             error_count = 0
             time.sleep(CHECK_INTERVAL)
             
-   except Exception as e:
+        except Exception as e:
             error_count += 1
             logging.error(f"💥 Ошибка в главном цикле (попытка {error_count}): {e}")
             time.sleep(60)
