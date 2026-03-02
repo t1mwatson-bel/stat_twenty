@@ -184,6 +184,7 @@ async def get_state_fast(page):
         return None
 
 async def is_game_truly_finished(page):
+    # Проверяем явные признаки завершения игры
     try:
         finished = await page.query_selector('span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
         if finished:
@@ -193,6 +194,7 @@ async def is_game_truly_finished(page):
     except:
         pass
     
+    # Проверяем наличие кнопки новой игры (самый надежный признак)
     try:
         new_btns = await page.query_selector_all('.ui-game-controls__button, .new-game-button, [class*="new"]')
         for btn in new_btns:
@@ -201,6 +203,52 @@ async def is_game_truly_finished(page):
     except:
         pass
     
+    # Проверяем, есть ли активный игрок или дилер
+    try:
+        player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
+        dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
+        
+        player_active = False
+        dealer_active = False
+        
+        if player_area:
+            class_name = await player_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                player_active = True
+        
+        if dealer_area:
+            class_name = await dealer_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                dealer_active = True
+        
+        # Если есть активный игрок или дилер - игра точно не завершена
+        if player_active or dealer_active:
+            return False
+    except:
+        pass
+    
+    # Проверяем счета (если оба > 21, то игра завершена)
+    try:
+        player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
+        
+        if player_score_el and dealer_score_el:
+            player_score = await player_score_el.text_content()
+            dealer_score = await dealer_score_el.text_content()
+            
+            if player_score and dealer_score:
+                try:
+                    p_score = int(player_score.strip())
+                    d_score = int(dealer_score.strip())
+                    # Если оба перебрали - игра завершена
+                    if p_score > 21 and d_score > 21:
+                        return True
+                except:
+                    pass
+    except:
+        pass
+    
+    # По умолчанию считаем, что игра не завершена
     return False
 
 def format_message(table_id, state, is_final=False, t_num=None, table_number=None):
@@ -362,130 +410,150 @@ async def monitor_table(table_url, table_id):
     initial_load = True
     no_response_count = 0
     max_no_response = 20
-    first_message_sent = False
+    browser = None
+    page = None
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
-    async with async_playwright() as p:
-        browser = await p.firefox.launch(
-            headless=True,
-            executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
-            args=["--no-sandbox"]
-        )
-        page = await browser.new_page()
-        
-        try:
-            await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(5000)
+    try:
+        async with async_playwright() as p:
+            browser = await p.firefox.launch(
+                headless=True,
+                executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
+                args=["--no-sandbox"]
+            )
+            page = await browser.new_page()
             
-            cards_loaded = False
-            wait_start = time.time()
-            max_wait = 30
-            
-            while not cards_loaded and (time.time() - wait_start) < max_wait:
-                player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-                if len(player_cards) > 0:
-                    cards_loaded = True
-                    logging.info(f"Карты загружены для стола {table_id}")
-                    break
+            try:
+                await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
                 
-                if await is_game_truly_finished(page):
-                    logging.info(f"Игра на столе {table_id} уже завершена")
-                    return
-                    
-                await page.wait_for_timeout(500)
-            
-            if not cards_loaded:
-                logging.warning(f"Стол {table_id}: карты не появились")
-                return
-            
-            logging.info(f"Старт мониторинга стола {table_id}")
-            
-            while game_active:
-                try:
-                    state = await get_state_fast(page)
-                    
-                    if not state:
-                        no_response_count += 1
-                        if no_response_count >= max_no_response:
-                            if await is_game_truly_finished(page):
-                                logging.info(f"Стол {table_id} завершен (таймаут)")
-                                game_active = False
-                                break
-                        await page.wait_for_timeout(1000)
-                        continue
-                    
-                    no_response_count = 0
-                    
-                    if await is_game_truly_finished(page):
-                        logging.info(f"Стол {table_id}: игра завершена")
-                        final_state = state
+                # Начинаем проверять карты сразу без задержки
+                cards_loaded = False
+                wait_start = time.time()
+                max_wait = 15
+                
+                while not cards_loaded and (time.time() - wait_start) < max_wait and game_active:
+                    try:
+                        player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+                        if len(player_cards) > 0:
+                            cards_loaded = True
+                            logging.info(f"Карты загружены для стола {table_id}")
+                            break
                         
-                        if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
-                            final_msg = format_message(table_id, final_state, is_final=True, 
-                                                      t_num=t_num, table_number=table_number)
+                        if await is_game_truly_finished(page):
+                            logging.info(f"Игра на столе {table_id} уже завершена")
+                            return
+                            
+                        await asyncio.sleep(0.3)  # быстрая проверка
+                    except Exception as e:
+                        logging.error(f"Ошибка при ожидании карт: {e}")
+                        break
+                
+                if not cards_loaded:
+                    logging.warning(f"Стол {table_id}: карты не появились")
+                    return
+                
+                logging.info(f"Старт мониторинга стола {table_id}")
+                
+                while game_active:
+                    try:
+                        if not page or page.is_closed():
+                            logging.warning(f"Стол {table_id}: страница закрыта, выходим")
+                            break
+                            
+                        state = await get_state_fast(page)
+                        
+                        if not state:
+                            no_response_count += 1
+                            if no_response_count >= max_no_response:
+                                if await is_game_truly_finished(page):
+                                    logging.info(f"Стол {table_id} завершен (таймаут)")
+                                    game_active = False
+                                    break
+                            await asyncio.sleep(0.5)
+                            continue
+                        
+                        no_response_count = 0
+                        
+                        player_active = state.get('player_active', False)
+                        dealer_active = state.get('dealer_active', False)
+                        
+                        if not player_active and not dealer_active and await is_game_truly_finished(page):
+                            logging.info(f"Стол {table_id}: игра завершена")
+                            final_state = state
+                            
+                            if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
+                                final_msg = format_message(table_id, final_state, is_final=True, 
+                                                          t_num=t_num, table_number=table_number)
+                                
+                                if msg_id:
+                                    edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                else:
+                                    sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
+                                    msg_id = sent.message_id
+                                    with lock:
+                                        message_ids[table_id] = msg_id
+                                
+                                game_data.add_completed_game(table_id, final_msg, t_num)
+                                game_data.update_last_number(table_number)
+                            
+                            game_active = False
+                            break
+                        
+                        has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
+                        
+                        if has_cards and (state != last_state or initial_load):
+                            msg = format_message(table_id, state, table_number=table_number)
+                            
+                            with lock:
+                                last_msg = last_messages.get(table_id)
+                                if last_msg == msg and not initial_load:
+                                    await asyncio.sleep(0.5)
+                                    continue
                             
                             if msg_id:
-                                edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
+                                if result is not None:
+                                    with lock:
+                                        last_messages[table_id] = msg
                             else:
-                                sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
+                                sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
                                 msg_id = sent.message_id
                                 with lock:
                                     message_ids[table_id] = msg_id
-                            
-                            game_data.add_completed_game(table_id, final_msg, t_num)
-                            game_data.update_last_number(table_number)
-                        
-                        game_active = False
-                        break
-                    
-                    # Отправляем сообщение только если есть карты
-                    has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
-                    
-                    if has_cards and (state != last_state or initial_load):
-                        msg = format_message(table_id, state, table_number=table_number)
-                        
-                        with lock:
-                            last_msg = last_messages.get(table_id)
-                            if last_msg == msg and not initial_load:
-                                await page.wait_for_timeout(500)
-                                continue
-                        
-                        if msg_id:
-                            result = edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
-                            if result is not None:
-                                with lock:
                                     last_messages[table_id] = msg
-                        else:
-                            # Первое сообщение - отправляем только если есть карты
-                            sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
-                            msg_id = sent.message_id
-                            with lock:
-                                message_ids[table_id] = msg_id
-                                last_messages[table_id] = msg
-                            logging.info(f"Стол {table_id}: первое сообщение с картами")
+                                logging.info(f"Стол {table_id}: первое сообщение с картами")
+                            
+                            last_state = state
+                            initial_load = False
                         
-                        last_state = state
-                        initial_load = False
+                        await asyncio.sleep(0.5)
+                        
+                    except Exception as e:
+                        if "closed" in str(e).lower():
+                            logging.warning(f"Стол {table_id}: браузер/страница закрыты, завершаем мониторинг")
+                            break
+                        else:
+                            logging.error(f"Ошибка в цикле стола {table_id}: {e}")
+                            await asyncio.sleep(1)
+            
+            except Exception as e:
+                logging.error(f"Критическая ошибка стола {table_id}: {e}")
+            finally:
+                if browser:
+                    await browser.close()
                     
-                    await page.wait_for_timeout(800)
-                    
-                except Exception as e:
-                    logging.error(f"Ошибка в цикле стола {table_id}: {e}")
-                    await page.wait_for_timeout(2000)
-        
-        except Exception as e:
-            logging.error(f"Критическая ошибка стола {table_id}: {e}")
-        finally:
-            await browser.close()
-            with lock:
-                if table_id in active_tables:
-                    del active_tables[table_id]
-                if table_id in message_ids:
-                    del message_ids[table_id]
-                if table_id in last_messages:
-                    del last_messages[table_id]
-            logging.info(f"Мониторинг стола {table_id} завершен")
+    except Exception as e:
+        logging.error(f"Ошибка при создании браузера для стола {table_id}: {e}")
+    finally:
+        with lock:
+            if table_id in active_tables:
+                del active_tables[table_id]
+            if table_id in message_ids:
+                del message_ids[table_id]
+            if table_id in last_messages:
+                del last_messages[table_id]
+        logging.info(f"Мониторинг стола {table_id} завершен")
 
 def run_async_monitor(table_url, table_id):
     asyncio.run(monitor_table(table_url, table_id))
