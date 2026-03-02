@@ -1,27 +1,28 @@
 FROM python:3.10-slim
 
-# Устанавливаем все необходимые библиотеки для Firefox
+# Устанавливаем зависимости для Playwright
 RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
     libnss3 \
     libatk-bridge2.0-0 \
     libdrm2 \
     libxkbcommon0 \
     libgbm1 \
     libasound2 \
-    libgtk-3-0 \
-    libgtk-4-1 \
-    libdbus-glib-1-2 \
-    libpulse0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Копируем requirements и устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Playwright и Firefox
+# Устанавливаем браузер Firefox для Playwright
 RUN playwright install firefox
 
+# Копируем код бота
 COPY . .
 
-CMD ["python", "bot.py"]
+# Запускаем бота
+CMD ["python", "21_classic_bot.py"]
