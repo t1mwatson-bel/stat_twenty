@@ -46,6 +46,7 @@ last_messages = {}
 last_table_id = 0
 lock = threading.Lock()
 tasks = {}
+bot_running = True  # Флаг для контроля работы бота
 
 class GameData:
     def __init__(self):
@@ -127,50 +128,6 @@ def determine_turn(state):
         return 'dealer'
     return None
 
-async def get_state_fast(page):
-    try:
-        # Получаем счет игрока
-        player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
-        player_score = await player_score_el.text_content() if player_score_el else '0'
-        
-        # Получаем карты игрока - улучшенный поиск
-        player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
-        
-        # Получаем счет дилера
-        dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
-        dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
-        
-        # Получаем карты дилера - улучшенный поиск
-        dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
-        
-        # Определяем активность
-        player_active = False
-        dealer_active = False
-        
-        player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
-        if player_area:
-            class_name = await player_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                player_active = True
-        
-        dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
-        if dealer_area:
-            class_name = await dealer_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                dealer_active = True
-        
-        return {
-            'p_score': player_score.strip(),
-            'p_cards': player_cards,
-            'd_score': dealer_score.strip(),
-            'd_cards': dealer_cards,
-            'player_active': player_active,
-            'dealer_active': dealer_active
-        }
-    except Exception as e:
-        logging.error(f"Ошибка в get_state_fast: {e}")
-        return None
-
 async def extract_cards(page, selector_prefix):
     """Улучшенная функция извлечения карт с поддержкой разных селекторов"""
     cards = []
@@ -239,6 +196,50 @@ async def extract_cards(page, selector_prefix):
     
     return cards
 
+async def get_state_fast(page):
+    try:
+        # Получаем счет игрока
+        player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        player_score = await player_score_el.text_content() if player_score_el else '0'
+        
+        # Получаем карты игрока
+        player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
+        
+        # Получаем счет дилера
+        dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
+        dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
+        
+        # Получаем карты дилера
+        dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
+        
+        # Определяем активность
+        player_active = False
+        dealer_active = False
+        
+        player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
+        if player_area:
+            class_name = await player_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                player_active = True
+        
+        dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
+        if dealer_area:
+            class_name = await dealer_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                dealer_active = True
+        
+        return {
+            'p_score': player_score.strip(),
+            'p_cards': player_cards,
+            'd_score': dealer_score.strip(),
+            'd_cards': dealer_cards,
+            'player_active': player_active,
+            'dealer_active': dealer_active
+        }
+    except Exception as e:
+        logging.error(f"Ошибка в get_state_fast: {e}")
+        return None
+
 async def has_active_player(page):
     """Проверяет, есть ли активный игрок или дилер"""
     try:
@@ -262,7 +263,6 @@ async def has_active_player(page):
 async def has_action_buttons(page):
     """Проверяет наличие кнопок действий"""
     try:
-        # Проверяем разные варианты кнопок
         button_selectors = [
             'button:has-text("Hit")',
             'button:has-text("STAND")',
@@ -314,9 +314,13 @@ async def dealer_has_hidden_cards(page):
     except:
         return False
 
-async def is_game_truly_finished(page):
-    """Улучшенная проверка завершения игры"""
+async def is_game_truly_finished(page, game_start_time=None):
+    """Улучшенная проверка завершения игры с защитой от ложных срабатываний"""
     try:
+        # Если игра только началась (меньше 8 секунд), не завершаем
+        if game_start_time and (time.time() - game_start_time) < 8:
+            return False
+        
         # 1. Проверяем наличие явного сообщения о завершении
         finished = await page.query_selector('span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
         if finished:
@@ -332,72 +336,65 @@ async def is_game_truly_finished(page):
                 logging.info("Обнаружена кнопка новой игры")
                 return True
         
-        # 3. Если есть активные элементы - игра точно не завершена
-        if await has_active_player(page):
-            return False
-        
-        # 4. Если есть кнопки действий - игра продолжается
-        if await has_action_buttons(page):
-            logging.info("Обнаружены кнопки действий - игра продолжается")
-            return False
-        
-        # 5. Если идет анимация раздачи - игра продолжается
-        if await has_dealing_animation(page):
-            logging.info("Обнаружена анимация раздачи")
-            return False
-        
-        # 6. Если у дилера есть скрытые карты - игра продолжается
-        if await dealer_has_hidden_cards(page):
-            logging.info("У дилера есть скрытые карты")
-            return False
-        
-        # 7. Проверяем счета, но с дополнительными условиями
-        player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
-        dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
-        
-        if player_score_el and dealer_score_el:
-            player_score = await player_score_el.text_content()
-            dealer_score = await dealer_score_el.text_content()
-            
-            if player_score and dealer_score:
-                try:
-                    p_score = int(player_score.strip())
-                    d_score = int(dealer_score.strip())
-                    
-                    # Получаем количество карт
-                    player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
-                    dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
-                    
-                    # Если у дилера 2 карты и одна скрыта - игра продолжается
-                    if len(dealer_cards) == 1 and await dealer_has_hidden_cards(page):
-                        return False
-                    
-                    # Если дилер активен или есть анимация - игра продолжается
-                    if await has_active_player(page) or await has_dealing_animation(page):
-                        return False
-                    
-                    # Проверяем, не добирает ли дилер
-                    if d_score < 17 and len(dealer_cards) < 5:
-                        # Проверяем, есть ли признаки того, что дилер еще добирает
-                        if not await has_action_buttons(page) and not await has_active_player(page):
-                            # Если дилер должен добирать, но нет активности - возможно пауза
-                            return False
-                    
-                except:
-                    pass
-        
-        # 8. Проверяем количество карт
+        # 3. Получаем текущие карты и счета
         player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
         dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
         
-        # Если у дилера мало карт и нет активности - возможно игра еще идет
-        if len(dealer_cards) <= 2 and not await has_active_player(page):
-            # Проверяем, не ждет ли дилер
-            if not await has_action_buttons(page):
-                return False
+        player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         
-        # 9. Если все проверки пройдены, но игра выглядит завершенной
-        # Проверяем, прошло ли достаточно времени без изменений
+        player_score = await player_score_el.text_content() if player_score_el else '0'
+        dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
+        
+        # 4. Проверяем активность
+        player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
+        dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
+        
+        player_active = False
+        dealer_active = False
+        
+        if player_area:
+            class_name = await player_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                player_active = True
+        
+        if dealer_area:
+            class_name = await dealer_area.get_attribute('class') or ''
+            if 'active' in class_name.lower():
+                dealer_active = True
+        
+        # 5. Если есть активность - игра точно не завершена
+        if player_active or dealer_active:
+            return False
+        
+        # 6. Проверяем наличие кнопок действий
+        if await has_action_buttons(page):
+            return False
+        
+        # 7. Проверяем анимацию
+        if await has_dealing_animation(page):
+            return False
+        
+        # 8. Проверяем скрытые карты
+        if await dealer_has_hidden_cards(page):
+            return False
+        
+        # 9. Если у дилера мало карт и счет меньше 17 - ждем
+        try:
+            d_score = int(dealer_score.strip())
+            if d_score < 17 and len(dealer_cards) < 5:
+                return False
+        except:
+            pass
+        
+        # 10. Проверяем, есть ли карты вообще
+        if len(player_cards) == 0 or len(dealer_cards) == 0:
+            return False
+        
+        # 11. Дополнительная проверка: если игра длится меньше 15 секунд - не завершаем
+        if game_start_time and (time.time() - game_start_time) < 15:
+            return False
+        
         return True
         
     except Exception as e:
@@ -565,6 +562,10 @@ async def monitor_table(table_url, table_id):
     last_state_change = time.time()
     last_card_update = time.time()
     no_activity_count = 0
+    game_start_time = time.time()
+    first_message_sent = False
+    error_count = 0
+    max_errors = 5
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
@@ -587,10 +588,7 @@ async def monitor_table(table_url, table_id):
                 
                 while not cards_loaded and (time.time() - wait_start) < max_wait:
                     try:
-                        # Проверяем наличие карт у игрока
                         player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
-                        
-                        # Проверяем наличие счета
                         player_score = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
                         
                         if len(player_cards) > 0 and player_score:
@@ -623,11 +621,13 @@ async def monitor_table(table_url, table_id):
                         last_messages[table_id] = msg
                     last_state = first_state
                     last_card_update = time.time()
+                    game_start_time = time.time()
+                    first_message_sent = True
                     logging.info(f"Стол {table_id}: первое сообщение отправлено: {msg}")
                 
                 logging.info(f"Старт мониторинга стола {table_id}")
                 
-                while game_active:
+                while game_active and bot_running:
                     try:
                         if not page or page.is_closed():
                             break
@@ -636,10 +636,16 @@ async def monitor_table(table_url, table_id):
                         state = await get_state_fast(page)
                         
                         if not state:
-                            await asyncio.sleep(0.3)
+                            error_count += 1
+                            if error_count > max_errors:
+                                logging.error(f"Стол {table_id}: слишком много ошибок, завершаю")
+                                break
+                            await asyncio.sleep(0.5)
                             continue
                         
-                        # Обновляем время последнего изменения карт
+                        error_count = 0
+                        
+                        # Обновляем время последнего изменения
                         if state != last_state:
                             last_state_change = time.time()
                             if (state['p_cards'] != last_state.get('p_cards', []) or 
@@ -652,22 +658,7 @@ async def monitor_table(table_url, table_id):
                         dealer_active = state.get('dealer_active', False)
                         
                         # Проверяем завершение игры
-                        is_finished = await is_game_truly_finished(page)
-                        
-                        # Логируем подозрительные ситуации
-                        if not player_active and not dealer_active and not is_finished:
-                            no_activity_count += 1
-                            if no_activity_count > 10:  # ~3 секунды без активности
-                                # Проверяем, не добирает ли дилер
-                                dealer_cards = state.get('d_cards', [])
-                                try:
-                                    dealer_score = int(state.get('d_score', 0))
-                                    # Если у дилера меньше 17 и мало карт - ждем
-                                    if dealer_score < 17 and len(dealer_cards) < 5:
-                                        logging.info(f"Стол {table_id}: дилер добирает ({dealer_score} очков, {len(dealer_cards)} карт), ждем")
-                                        no_activity_count = 0
-                                except:
-                                    pass
+                        is_finished = await is_game_truly_finished(page, game_start_time)
                         
                         # Если игра завершена
                         if is_finished:
@@ -698,13 +689,13 @@ async def monitor_table(table_url, table_id):
                                 game_active = False
                                 break
                         
-                        # Если есть активность (ход игрока или дилера) - игра продолжается
+                        # Если есть активность - игра продолжается
                         elif player_active or dealer_active:
                             game_finished_detected = False
                             no_activity_count = 0
                             
                             # Отправляем обновления при изменении состояния
-                            if state != last_state:
+                            if state != last_state and first_message_sent:
                                 msg = format_message(table_id, state, table_number=table_number)
                                 
                                 with lock:
@@ -719,21 +710,10 @@ async def monitor_table(table_url, table_id):
                                         with lock:
                                             last_messages[table_id] = msg
                                             last_state = state
-                                        logging.info(f"Стол {table_id}: обновлено: {msg}")
                                 
                                 await asyncio.sleep(0.2)
                         
-                        # Проверяем, не застряла ли игра
-                        elif time.time() - last_card_update > 20:
-                            logging.info(f"Стол {table_id}: нет изменений карт 20 сек, проверяю завершение")
-                            if await is_game_truly_finished(page):
-                                logging.info(f"Стол {table_id}: игра завершена (таймаут)")
-                                game_active = False
-                                break
-                            else:
-                                # Возможно, просто пауза
-                                last_card_update = time.time()
-                        
+                        # Небольшая пауза между итерациями
                         await asyncio.sleep(0.3)
                         
                     except Exception as e:
@@ -741,6 +721,9 @@ async def monitor_table(table_url, table_id):
                             break
                         else:
                             logging.error(f"Ошибка в цикле стола {table_id}: {e}")
+                            error_count += 1
+                            if error_count > max_errors:
+                                break
                             await asyncio.sleep(1)
             
             except Exception as e:
@@ -762,27 +745,34 @@ async def monitor_table(table_url, table_id):
         logging.info(f"Мониторинг стола {table_id} завершен")
 
 def run_async_monitor(table_url, table_id):
-    asyncio.run(monitor_table(table_url, table_id))
+    """Запуск мониторинга в отдельном потоке"""
+    try:
+        asyncio.run(monitor_table(table_url, table_id))
+    except Exception as e:
+        logging.error(f"Ошибка в потоке мониторинга стола {table_id}: {e}")
 
 def launch_new_table_monitor():
+    """Запуск нового монитора стола"""
     async def get_table():
         async with async_playwright() as p:
-            browser = await p.firefox.launch(
-                headless=True,
-                executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
-                args=["--no-sandbox"]
-            )
-            page = await browser.new_page()
+            browser = None
             try:
+                browser = await p.firefox.launch(
+                    headless=True,
+                    executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
+                    args=["--no-sandbox"]
+                )
+                page = await browser.new_page()
                 await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(5000)
                 url, tid = await get_next_table(page)
-                await browser.close()
                 return url, tid
             except Exception as e:
                 logging.error(f"Ошибка при загрузке MAIN_URL: {e}")
-                await browser.close()
                 return None, None
+            finally:
+                if browser:
+                    await browser.close()
     
     try:
         loop = asyncio.new_event_loop()
@@ -792,16 +782,19 @@ def launch_new_table_monitor():
         
         if table_url and table_id:
             with lock:
+                # Проверяем, не мониторится ли уже этот стол
                 if table_id in active_tables:
                     logging.info(f"Стол {table_id} уже мониторится, пропускаю")
                     return
                 
+                # Проверяем лимит браузеров
                 if len(active_tables) >= MAX_BROWSERS:
                     logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS}), стол {table_id} не запущен")
                     return
             
             logging.info(f"Найден следующий стол: {table_id}")
             
+            # Запускаем мониторинг в отдельном потоке
             thread = threading.Thread(target=run_async_monitor, args=(table_url, table_id))
             thread.daemon = True
             thread.start()
@@ -817,6 +810,7 @@ def launch_new_table_monitor():
         logging.error(f"Ошибка при запуске нового монитора: {e}")
 
 def clean_threads():
+    """Очистка завершенных потоков"""
     with lock:
         dead = [tid for tid, t in active_tables.items() if not t.is_alive()]
         for tid in dead:
@@ -827,47 +821,48 @@ def clean_threads():
                 del last_messages[tid]
             logging.info(f"Поток стола {tid} очищен")
 
-def get_next_game_time():
-    now = datetime.now()
-    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    return next_minute
-
-def wait_for_next_game():
-    next_game = get_next_game_time()
-    launch_time = next_game - timedelta(seconds=10)
-    
-    now = datetime.now()
-    if now < launch_time:
-        wait_seconds = (launch_time - now).total_seconds()
-        logging.info(f"Следующий запуск через {wait_seconds:.1f} сек (в {launch_time.strftime('%H:%M:%S')})")
-        time.sleep(wait_seconds)
-    else:
-        next_launch = launch_time + timedelta(minutes=1)
-        wait_seconds = (next_launch - now).total_seconds()
-        logging.info(f"Пропустили время запуска, ждем до {next_launch.strftime('%H:%M:%S')}")
-        time.sleep(wait_seconds)
-
-def main():
-    global last_table_id
+def monitor_loop():
+    """Основной цикл мониторинга"""
+    global bot_running, last_table_id
     last_table_id = 0
     logging.info("🚀 Бот запущен на Playwright с Firefox")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
-    while True:
+    check_interval = 30  # Проверяем каждые 30 секунд
+    last_check = time.time()
+    
+    while bot_running:
         try:
+            current_time = time.time()
+            
+            # Очищаем завершенные потоки
             clean_threads()
-            wait_for_next_game()
-            launch_new_table_monitor()
-            time.sleep(2)
+            
+            # Проверяем, нужно ли запустить новый монитор
+            if len(active_tables) < MAX_BROWSERS:
+                # Проверяем, прошло ли достаточно времени с последней проверки
+                if current_time - last_check >= check_interval:
+                    logging.info(f"Активных столов: {len(active_tables)}/{MAX_BROWSERS}, ищу новый...")
+                    launch_new_table_monitor()
+                    last_check = current_time
+            
+            # Небольшая пауза
+            time.sleep(5)
             
         except KeyboardInterrupt:
             logging.info("Получен сигнал завершения")
+            bot_running = False
             break
         except Exception as e:
-            logging.error(f"Ошибка в главном цикле: {e}")
-            time.sleep(5)
+            logging.error(f"Ошибка в основном цикле: {e}")
+            time.sleep(10)
     
     game_data.save_data()
+    logging.info("Бот остановлен")
+
+def main():
+    """Точка входа"""
+    monitor_loop()
 
 if __name__ == "__main__":
     main()
