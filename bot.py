@@ -296,7 +296,7 @@ async def get_next_table(page):
     
     try:
         logging.info("Ожидание загрузки страницы со столами...")
-        await page.wait_for_selector('.dashboard-game-block', timeout=30000)
+        await page.wait_for_selector('.dashboard-game-block', timeout=60000)
         await page.wait_for_timeout(3000)
         
         tables = await page.query_selector_all('.dashboard-game-block')
@@ -382,7 +382,7 @@ async def monitor_table(table_url, table_id):
         page = await browser.new_page()
         
         try:
-            await page.goto(table_url, timeout=30000)
+            await page.goto(table_url, timeout=60000)
             
             # Даём странице время на загрузку
             await page.wait_for_timeout(5000)
