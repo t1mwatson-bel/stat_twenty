@@ -412,6 +412,7 @@ async def monitor_table(table_url, table_id):
     max_no_response = 20
     browser = None
     page = None
+    inactive_start = None  # Для отслеживания времени без активности
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
@@ -444,7 +445,7 @@ async def monitor_table(table_url, table_id):
                             logging.info(f"Игра на столе {table_id} уже завершена")
                             return
                             
-                        await asyncio.sleep(0.3)  # быстрая проверка
+                        await asyncio.sleep(0.3)
                     except Exception as e:
                         logging.error(f"Ошибка при ожидании карт: {e}")
                         break
@@ -478,27 +479,41 @@ async def monitor_table(table_url, table_id):
                         player_active = state.get('player_active', False)
                         dealer_active = state.get('dealer_active', False)
                         
-                        if not player_active and not dealer_active and await is_game_truly_finished(page):
-                            logging.info(f"Стол {table_id}: игра завершена")
-                            final_state = state
-                            
-                            if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
-                                final_msg = format_message(table_id, final_state, is_final=True, 
-                                                          t_num=t_num, table_number=table_number)
-                                
-                                if msg_id:
-                                    edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
-                                else:
-                                    sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
-                                    msg_id = sent.message_id
-                                    with lock:
-                                        message_ids[table_id] = msg_id
-                                
-                                game_data.add_completed_game(table_id, final_msg, t_num)
-                                game_data.update_last_number(table_number)
-                            
-                            game_active = False
-                            break
+                        # Логика определения завершения игры с защитой от ложных срабатываний
+                        if not player_active and not dealer_active:
+                            # Нет активности - возможно переход хода или завершение
+                            if inactive_start is None:
+                                inactive_start = time.time()
+                                logging.info(f"Стол {table_id}: нет активности, начало отсчета")
+                            else:
+                                inactive_duration = time.time() - inactive_start
+                                # Если нет активности больше 3 секунд и игра действительно завершена
+                                if inactive_duration > 3 and await is_game_truly_finished(page):
+                                    logging.info(f"Стол {table_id}: игра завершена (неактивно {inactive_duration:.1f} сек)")
+                                    final_state = state
+                                    
+                                    if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
+                                        final_msg = format_message(table_id, final_state, is_final=True, 
+                                                                  t_num=t_num, table_number=table_number)
+                                        
+                                        if msg_id:
+                                            edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                        else:
+                                            sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
+                                            msg_id = sent.message_id
+                                            with lock:
+                                                message_ids[table_id] = msg_id
+                                        
+                                        game_data.add_completed_game(table_id, final_msg, t_num)
+                                        game_data.update_last_number(table_number)
+                                    
+                                    game_active = False
+                                    break
+                        else:
+                            # Активность есть - сбрасываем таймер
+                            if inactive_start is not None:
+                                logging.info(f"Стол {table_id}: активность возобновилась")
+                                inactive_start = None
                         
                         has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
                         
