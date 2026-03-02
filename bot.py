@@ -126,25 +126,25 @@ def get_game_number_by_time(dt=None):
     return game_number
 
 def get_next_game_time():
-    """Возвращает время следующей игры"""
     now = datetime.now()
-    start_of_day = now.replace(hour=3, minute=0, second=0, microsecond=0)
     
-    if now < start_of_day:
-        start_of_day = start_of_day - timedelta(days=1)
+    # Округляем до следующей чётной минуты
+    next_game_minute = ((now.minute // 2) * 2 + 2) % 60
+    next_game_hour = now.hour
     
-    minutes_from_start = (now - start_of_day).total_seconds() / 60
-    current_game = int(minutes_from_start // 2) + 1
-    current_game_start = start_of_day + timedelta(minutes=(current_game - 1) * 2)
+    if next_game_minute < now.minute:
+        next_game_hour = (next_game_hour + 1) % 24
     
-    if now >= current_game_start:
-        next_game_start = current_game_start + timedelta(minutes=2)
-    else:
-        next_game_start = current_game_start
+    next_game_time = now.replace(
+        hour=next_game_hour,
+        minute=next_game_minute,
+        second=0,
+        microsecond=0
+    )
     
-    seconds_to_start = max(0, (next_game_start - now).total_seconds() - 60)
+    seconds_to_start = (next_game_time - now).total_seconds() - 60
     
-    return next_game_start, seconds_to_start
+    return next_game_time, max(0, seconds_to_start)
 
 def format_cards(cards):
     return ''.join(cards)
