@@ -426,7 +426,6 @@ async def monitor_table(table_url, game_number, game_start_time):
         async with async_playwright() as p:
             browser = await p.firefox.launch(
                 headless=True,
-                executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
                 args=["--no-sandbox"]
             )
             page = await browser.new_page()
