@@ -296,7 +296,7 @@ async def get_next_table(page):
     
     try:
         logging.info("Ожидание загрузки страницы со столами...")
-        await page.wait_for_selector('.dashboard-game-block', timeout=60000)
+        await page.wait_for_selector('.dashboard-game-block', timeout=30000)
         await page.wait_for_timeout(3000)
         
         tables = await page.query_selector_all('.dashboard-game-block')
@@ -324,34 +324,23 @@ async def get_next_table(page):
             return None, None
         
         valid_tables.sort(key=lambda x: x[0])
-        logging.info(f"Всего столов: {len(valid_tables)}, последний взятый: {last_table_id}")
         
-        selected_table = None
-        selected_id = None
+        # ИСПРАВЛЕНИЕ: просто берем первый стол из списка
+        selected_table = valid_tables[0][1]
+        selected_id = valid_tables[0][0]
         
-        for table_num, table in valid_tables:
-            if table_num > last_table_id:
-                selected_table = table
-                selected_id = table_num
-                break
+        logging.info(f"Выбран стол: {selected_id}")
         
-        if not selected_table:
-            selected_table = valid_tables[0][1]
-            selected_id = valid_tables[0][0]
-            logging.info(f"Новых столов нет, берем первый: {selected_id}")
-        else:
-            logging.info(f"Найден новый стол: {selected_id}")
-        
-        last_table_id = selected_id
+        # Обновляем last_table_id для статистики (не влияет на выбор)
+        if selected_id > last_table_id:
+            last_table_id = selected_id
         
         link_element = await selected_table.query_selector('.dashboard-game-block__link')
         href = await link_element.get_attribute('href')
         
-        # Исправление: добавляем домен, если ссылка относительная
         if href and not href.startswith('http'):
             href = f"https://1xlite-7636770.bar{href}"
         
-        logging.info(f"✅ Выбран следующий стол: ID {selected_id}")
         return href, str(selected_id)
         
     except Exception as e:
@@ -382,7 +371,7 @@ async def monitor_table(table_url, table_id):
         page = await browser.new_page()
         
         try:
-            await page.goto(table_url, timeout=60000)
+            await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
             
             # Даём странице время на загрузку
             await page.wait_for_timeout(5000)
@@ -510,10 +499,16 @@ def launch_new_table_monitor():
                 args=["--no-sandbox"]
             )
             page = await browser.new_page()
-            await page.goto(MAIN_URL)
-            url, tid = await get_next_table(page)
-            await browser.close()
-            return url, tid
+            try:
+                await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(5000)
+                url, tid = await get_next_table(page)
+                await browser.close()
+                return url, tid
+            except Exception as e:
+                logging.error(f"Ошибка при загрузке MAIN_URL: {e}")
+                await browser.close()
+                return None, None
     
     try:
         loop = asyncio.new_event_loop()
@@ -572,7 +567,7 @@ def wait_for_next_game():
 def main():
     global last_table_id
     last_table_id = 0
-    logging.info("🚀 Бот запущен на Playwright")
+    logging.info("🚀 Бот запущен на Playwright с Firefox")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     while True:
