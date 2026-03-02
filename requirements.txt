@@ -1,2 +1,2 @@
-playwright
-telebot
+playwright==1.40.0
+pyTelegramBotAPI==4.16.0
