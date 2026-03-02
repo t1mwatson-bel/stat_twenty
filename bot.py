@@ -382,7 +382,7 @@ async def monitor_table(table_url, table_id):
             
             cards_loaded = False
             wait_start = time.time()
-            max_wait = 15
+            max_wait = 30
             
             while not cards_loaded and (time.time() - wait_start) < max_wait:
                 player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
