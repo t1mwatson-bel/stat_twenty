@@ -129,17 +129,14 @@ def determine_turn(state):
 
 async def get_state_fast(page):
     try:
-        # Получаем счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
-        # Получаем карты игрока - всегда свежий запрос
         player_cards_els = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
         player_cards = []
         for el in player_cards_els:
             try:
                 class_name = await el.get_attribute('class') or ''
-                # Определяем масть
                 suit = '?'
                 if 'suit-0' in class_name:
                     suit = '♠️'
@@ -150,39 +147,25 @@ async def get_state_fast(page):
                 elif 'suit-3' in class_name:
                     suit = '♥️'
                 
-                # Определяем значение
                 val_match = re.search(r'value-(\d+)', class_name)
                 if val_match:
                     val = val_match.group(1)
-                    if val == '11':
-                        value = 'J'
-                    elif val == '12':
-                        value = 'Q'
-                    elif val == '13':
-                        value = 'K'
-                    elif val == '14':
-                        value = 'A'
-                    else:
-                        value = val
+                    value = VALUE_MAP.get(f'value-{val}', val)
                 else:
                     value = '?'
                 
                 player_cards.append(f"{value}{suit}")
             except Exception as e:
-                # Если элемент устарел - просто пропускаем
                 continue
         
-        # Получаем счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
-        # Получаем карты дилера - всегда свежий запрос
         dealer_cards_els = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
         dealer_cards = []
         for el in dealer_cards_els:
             try:
                 class_name = await el.get_attribute('class') or ''
-                # Определяем масть
                 suit = '?'
                 if 'suit-0' in class_name:
                     suit = '♠️'
@@ -193,20 +176,10 @@ async def get_state_fast(page):
                 elif 'suit-3' in class_name:
                     suit = '♥️'
                 
-                # Определяем значение
                 val_match = re.search(r'value-(\d+)', class_name)
                 if val_match:
                     val = val_match.group(1)
-                    if val == '11':
-                        value = 'J'
-                    elif val == '12':
-                        value = 'Q'
-                    elif val == '13':
-                        value = 'K'
-                    elif val == '14':
-                        value = 'A'
-                    else:
-                        value = val
+                    value = VALUE_MAP.get(f'value-{val}', val)
                 else:
                     value = '?'
                 
@@ -214,21 +187,18 @@ async def get_state_fast(page):
             except Exception as e:
                 continue
         
-        # Определяем активность
         player_active = False
         dealer_active = False
         
         player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
         if player_area:
             class_name = await player_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                player_active = True
+            player_active = 'active' in class_name.lower()
         
         dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
         if dealer_area:
             class_name = await dealer_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                dealer_active = True
+            dealer_active = 'active' in class_name.lower()
         
         return {
             'p_score': player_score.strip(),
@@ -243,7 +213,6 @@ async def get_state_fast(page):
         return None
 
 async def is_game_truly_finished(page):
-    # Проверяем явные признаки завершения игры
     try:
         finished = await page.query_selector('span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
         if finished:
@@ -253,7 +222,6 @@ async def is_game_truly_finished(page):
     except:
         pass
     
-    # Проверяем наличие кнопки новой игры (самый надежный признак)
     try:
         new_btns = await page.query_selector_all('.ui-game-controls__button, .new-game-button, [class*="new"]')
         for btn in new_btns:
@@ -262,7 +230,6 @@ async def is_game_truly_finished(page):
     except:
         pass
     
-    # Проверяем, есть ли активный игрок или дилер
     try:
         player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
         dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
@@ -272,21 +239,17 @@ async def is_game_truly_finished(page):
         
         if player_area:
             class_name = await player_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                player_active = True
+            player_active = 'active' in class_name.lower()
         
         if dealer_area:
             class_name = await dealer_area.get_attribute('class') or ''
-            if 'active' in class_name.lower():
-                dealer_active = True
+            dealer_active = 'active' in class_name.lower()
         
-        # Если есть активный игрок или дилер - игра точно не завершена
         if player_active or dealer_active:
             return False
     except:
         pass
     
-    # Проверяем счета (если оба > 21, то игра завершена)
     try:
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
@@ -296,18 +259,13 @@ async def is_game_truly_finished(page):
             dealer_score = await dealer_score_el.text_content()
             
             if player_score and dealer_score:
-                try:
-                    p_score = int(player_score.strip())
-                    d_score = int(dealer_score.strip())
-                    # Если оба перебрали - игра завершена
-                    if p_score > 21 and d_score > 21:
-                        return True
-                except:
-                    pass
+                p_score = int(player_score.strip())
+                d_score = int(dealer_score.strip())
+                if p_score > 21 and d_score > 21:
+                    return True
     except:
         pass
     
-    # По умолчанию считаем, что игра не завершена
     return False
 
 def format_message(table_id, state, is_final=False, t_num=None, table_number=None):
@@ -432,7 +390,6 @@ async def get_next_table(page):
         
         valid_tables.sort(key=lambda x: x[0])
         
-        # Ищем столы, которые больше last_table_id
         new_tables = [t for t in valid_tables if t[0] > last_table_id]
         
         if new_tables:
@@ -488,7 +445,6 @@ async def monitor_table(table_url, table_id):
             try:
                 await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
                 
-                # Ждем появления карт с минимальной задержкой
                 cards_loaded = False
                 wait_start = time.time()
                 max_wait = 15
@@ -505,7 +461,6 @@ async def monitor_table(table_url, table_id):
                             logging.info(f"Игра на столе {table_id} уже завершена")
                             return
                             
-                        # Минимальная задержка для быстрой реакции
                         await asyncio.sleep(0.1)
                     except Exception as e:
                         logging.error(f"Ошибка при ожидании карт: {e}")
@@ -515,7 +470,6 @@ async def monitor_table(table_url, table_id):
                     logging.warning(f"Стол {table_id}: карты не появились")
                     return
                 
-                # Сразу отправляем первое сообщение с картами
                 first_state = await get_state_fast(page)
                 if first_state:
                     msg = format_message(table_id, first_state, table_number=table_number)
@@ -550,7 +504,6 @@ async def monitor_table(table_url, table_id):
                         
                         no_response_count = 0
                         
-                        # Проверяем, не застряло ли обновление карт
                         if last_state and state == last_state:
                             if time.time() - last_state_change > 10:
                                 logging.info(f"Стол {table_id}: состояние не меняется 10 сек, обновляю страницу")
@@ -567,7 +520,6 @@ async def monitor_table(table_url, table_id):
                         player_active = state.get('player_active', False)
                         dealer_active = state.get('dealer_active', False)
                         
-                        # Проверка завершения игры
                         if await is_game_truly_finished(page):
                             logging.info(f"Стол {table_id}: обнаружено явное завершение игры")
                             final_state = state
@@ -590,7 +542,6 @@ async def monitor_table(table_url, table_id):
                             game_active = False
                             break
                         
-                        # Если нет явных признаков, используем таймер
                         if not player_active and not dealer_active:
                             if inactive_start is None:
                                 inactive_start = time.time()
@@ -623,7 +574,6 @@ async def monitor_table(table_url, table_id):
                                 logging.info(f"Стол {table_id}: активность возобновилась")
                                 inactive_start = None
                         
-                        # Отправляем обновления, если состояние изменилось
                         if state != last_state:
                             msg = format_message(table_id, state, table_number=table_number)
                             
