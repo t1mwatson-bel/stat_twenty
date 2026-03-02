@@ -409,6 +409,11 @@ async def monitor_table(table_url, game_number, game_start_time):
     start_time = time.time()
     max_duration = 240
     
+    # Время реального старта игры
+    game_real_start = game_start_time.timestamp()
+    # Игнорируем завершение первые 15 секунд после старта
+    ignore_finish_until = game_real_start + 15
+    
     logging.info(f"Стол #{game_number}: начало мониторинга (игра в {game_start_time.strftime('%H:%M:%S')})")
     
     try:
@@ -427,7 +432,13 @@ async def monitor_table(table_url, game_number, game_start_time):
                     if page.is_closed():
                         break
                     
-                    is_finished = await is_game_truly_finished(page)
+                    # Проверяем, нужно ли игнорировать завершение
+                    current_time = time.time()
+                    if current_time < ignore_finish_until:
+                        # Первые 15 секунд после старта не реагируем на "завершено"
+                        is_finished = False
+                    else:
+                        is_finished = await is_game_truly_finished(page)
                     
                     if is_finished and not game_finished:
                         game_finished = True
