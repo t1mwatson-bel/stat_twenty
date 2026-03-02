@@ -106,57 +106,52 @@ class GameData:
 
 game_data = GameData()
 
-def parse_cards(elements):
+async def parse_cards(elements):
     cards = []
     for el in elements:
         try:
-            class_name = el.get_attribute('class') or ''
-            suit = next((s for c, s in SUIT_MAP.items() if c in class_name), '?')
+            # В Playwright get_attribute - асинхронный, нужен await
+            class_name = await el.get_attribute('class') or ''
+            
+            # Ищем масть
+            suit = '?'
+            for class_part, suit_char in SUIT_MAP.items():
+                if class_part in class_name:
+                    suit = suit_char
+                    break
+            
+            # Ищем значение
             val_match = re.search(r'value-(\d+)', class_name)
             if val_match:
                 value = VALUE_MAP.get(f'value-{val_match.group(1)}', val_match.group(1))
             else:
                 value = '?'
+            
             cards.append(f"{value}{suit}")
-        except:
+        except Exception as e:
+            logging.error(f"Ошибка парсинга карты: {e}")
             continue
     return cards
 
-def format_cards(cards):
-    return ''.join(cards)
-
-def check_special_conditions(player_cards, dealer_cards, player_score, dealer_score):
-    specials = []
-    if player_score == "21" and len(player_cards) == 2:
-        if all(card.startswith('A') for card in player_cards):
-            specials.append('#G')
-    if player_score == "21" or dealer_score == "21":
-        specials.append('#O')
-    if len(player_cards) == 2 and len(dealer_cards) == 2:
-        specials.append('#R')
-    return ' '.join(specials)
-
-def determine_turn(state):
-    if state.get('player_active', False):
-        return 'player'
-    elif state.get('dealer_active', False):
-        return 'dealer'
-    return None
-
 async def get_state_fast(page):
     try:
+        # Счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
+        # Карты игрока
         player_cards_els = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-        player_cards = parse_cards(player_cards_els)
+        player_cards = await parse_cards(player_cards_els)
         
+        # Счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
+        # Карты дилера
         dealer_cards_els = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
-        dealer_cards = parse_cards(dealer_cards_els)
+        dealer_cards = await parse_cards(dealer_cards_els)
         
+        # Активность
         player_active = False
         dealer_active = False
         
@@ -181,6 +176,7 @@ async def get_state_fast(page):
             'dealer_active': dealer_active
         }
     except Exception as e:
+        logging.error(f"Ошибка get_state_fast: {e}")
         return None
 
 async def is_game_truly_finished(page):
