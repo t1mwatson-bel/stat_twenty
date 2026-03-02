@@ -43,7 +43,6 @@ bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 message_ids = {}
 last_messages = {}
-launched_games = set()  # Множество для защиты от дублей
 lock = threading.Lock()
 bot_running = True
 
@@ -399,20 +398,7 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола"""
-    
-    # === ПЕРВАЯ ЗАЩИТА: проверяем не запущен ли уже этот стол ===
-    with lock:
-        if game_number in active_tables:
-            logging.warning(f"СТОЛ #{game_number}: уже мониторится (active_tables), второй браузер закрывается")
-            return
-        if game_number in launched_games:
-            logging.warning(f"СТОЛ #{game_number}: уже в launched_games, второй браузер закрывается")
-            return
-        
-        # Резервируем место
-        active_tables[game_number] = None
-        launched_games.add(game_number)
+    """Мониторинг конкретного стола - каждый браузер на свой стол"""
     
     msg_id = None
     last_state = None
@@ -457,7 +443,6 @@ async def monitor_table(table_url, game_number, game_start_time):
                                     logging.info(f"Стол #{game_number}: финал получен с {attempt+1} попытки")
                                     break
                             await asyncio.sleep(0.3)
-                            logging.info(f"Стол #{game_number}: ждем финал, попытка {attempt+1}/15")
                         
                         if final_state:
                             final_msg = format_message(game_number, final_state, is_final=True)
@@ -521,8 +506,6 @@ async def monitor_table(table_url, game_number, game_start_time):
                 del message_ids[game_number]
             if game_number in last_messages:
                 del last_messages[game_number]
-            if game_number in launched_games:
-                launched_games.remove(game_number)
         
         logging.info(f"Стол #{game_number}: мониторинг завершен")
 
@@ -566,14 +549,19 @@ def launch_next_game_monitor():
             logging.warning("Не удалось получить URL стола")
             return
         
-        # === ВТОРАЯ ЗАЩИТА: проверяем перед запуском ===
+        # Простая проверка - не запускаем если уже есть в active_tables
         with lock:
             if game_number in active_tables:
-                logging.info(f"Игра #{game_number} уже в active_tables, пропускаем")
-                return
-            if game_number in launched_games:
-                logging.info(f"Игра #{game_number} уже в launched_games, пропускаем")
-                return
+                # Проверяем, живой ли поток
+                old_thread = active_tables.get(game_number)
+                if old_thread and old_thread.is_alive():
+                    logging.info(f"Игра #{game_number} уже мониторится живым потоком, пропускаем")
+                    return
+                else:
+                    # Если поток мертв, удаляем его
+                    if game_number in active_tables:
+                        del active_tables[game_number]
+            
             if game_data.is_game_completed(game_number):
                 logging.info(f"Игра #{game_number} уже завершена, пропускаем")
                 return
@@ -608,8 +596,8 @@ def clean_threads():
                 logging.info(f"Поток игры #{gid} завершился")
                 continue
             
-            if hasattr(thread, '_started_at') and current_time - thread._started_at > 180:
-                logging.warning(f"Поток игры #{gid} работает больше 3 минут, принудительно завершаю")
+            if hasattr(thread, '_started_at') and current_time - thread._started_at > 240:
+                logging.warning(f"Поток игры #{gid} работает больше 4 минут, принудительно завершаю")
                 dead.append(gid)
         
         for gid in dead:
@@ -618,8 +606,6 @@ def clean_threads():
                 del message_ids[gid]
             if gid in last_messages:
                 del last_messages[gid]
-            if gid in launched_games:
-                launched_games.remove(gid)
         
         if dead:
             logging.info(f"Очищено {len(dead)} потоков, осталось {len(active_tables)}/{MAX_BROWSERS}")
@@ -630,7 +616,6 @@ def monitor_loop():
     logging.info("🚀 Бот 21 Classic запущен на Chromium")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     logging.info("Стрелки: 👈 игрок, 👉 дилер")
-    logging.info("Двойная защита от дублей: active_tables + launched_games")
     
     last_launch_time = 0
     
