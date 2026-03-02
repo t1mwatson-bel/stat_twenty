@@ -487,8 +487,8 @@ async def monitor_table(table_url, table_id):
                                 logging.info(f"Стол {table_id}: нет активности, начало отсчета")
                             else:
                                 inactive_duration = time.time() - inactive_start
-                                # Если нет активности больше 3 секунд и игра действительно завершена
-                                if inactive_duration > 3 and await is_game_truly_finished(page):
+                                # Ждем 25 секунд перед завершением (дилер может добирать долго)
+                                if inactive_duration > 25 and await is_game_truly_finished(page):
                                     logging.info(f"Стол {table_id}: игра завершена (неактивно {inactive_duration:.1f} сек)")
                                     final_state = state
                                     
