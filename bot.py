@@ -25,11 +25,6 @@ apihelper.MAX_RETRIES = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# Константа для смещения номеров столов (подбери правильное значение)
-# На сайте номер 495 соответствует #N554, значит разница 59
-# Проверь по другим играм, может быть +59 или -59
-TABLE_OFFSET = 59  # site_number = game_number - TABLE_OFFSET
-
 SUIT_MAP = {
     'suit-0': '♠️',
     'suit-1': '♣️',
@@ -394,16 +389,13 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола"""
+    """Мониторинг конкретного стола - ждем только завершения игры"""
     msg_id = None
     last_state = None
     browser = None
     page = None
-    session_start = time.time()
     game_finished = False
     first_message_sent = False
-    
-    SESSION_DURATION = 180
     
     logging.info(f"Стол #{game_number}: начало мониторинга (игра в {game_start_time.strftime('%H:%M:%S')})")
     
@@ -419,16 +411,11 @@ async def monitor_table(table_url, game_number, game_start_time):
             await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
             logging.info(f"Стол #{game_number}: страница загружена")
             
-            while time.time() - session_start < SESSION_DURATION and bot_running:
+            # Работаем пока игра не завершится
+            while not game_finished and bot_running:
                 try:
                     if page.is_closed():
                         break
-                    
-                    state = await get_state_fast(page)
-                    
-                    if not state:
-                        await asyncio.sleep(0.5)
-                        continue
                     
                     # Проверяем завершение игры
                     is_finished = await is_game_truly_finished(page)
@@ -437,11 +424,19 @@ async def monitor_table(table_url, game_number, game_start_time):
                         game_finished = True
                         logging.info(f"Стол #{game_number}: игра завершена")
                         
-                        # Даем время для финального обновления
-                        await asyncio.sleep(1)
+                        # Даем время на финальное обновление (несколько попыток)
+                        await asyncio.sleep(2)
                         
-                        # Получаем финальное состояние
-                        final_state = await get_state_fast(page)
+                        # Получаем финальное состояние с несколькими попытками
+                        final_state = None
+                        for attempt in range(10):
+                            final_state = await get_state_fast(page)
+                            if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
+                                # Проверяем, что у дилера есть карты (не пусто)
+                                if len(final_state['d_cards']) > 0 or len(final_state['p_cards']) > 0:
+                                    logging.info(f"Стол #{game_number}: финал получен с {attempt+1} попытки")
+                                    break
+                            await asyncio.sleep(0.5)
                         
                         if final_state:
                             final_msg = format_message(game_number, final_state, is_final=True)
@@ -456,21 +451,30 @@ async def monitor_table(table_url, game_number, game_start_time):
                             game_data.update_last_number(game_number)
                             
                             logging.info(f"Стол #{game_number}: финал: {final_msg}")
+                            
+                            # Выходим из цикла, браузер закроется в finally
+                            break
+                        else:
+                            logging.warning(f"Стол #{game_number}: не удалось получить финальное состояние")
                     
-                    elif not game_finished and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
-                        if state != last_state:
-                            msg = format_message(game_number, state, is_final=False)
-                            
-                            if msg_id and first_message_sent:
-                                edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
-                            elif not first_message_sent:
-                                if len(state['p_cards']) > 0 or len(state['d_cards']) > 0:
-                                    sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
-                                    msg_id = sent.message_id
-                                    first_message_sent = True
-                                    logging.info(f"Стол #{game_number}: первое сообщение: {msg}")
-                            
-                            last_state = state
+                    # Если игра еще идет - обновляем промежуточные состояния
+                    elif not game_finished:
+                        state = await get_state_fast(page)
+                        
+                        if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
+                            if state != last_state:
+                                msg = format_message(game_number, state, is_final=False)
+                                
+                                if msg_id and first_message_sent:
+                                    edit_telegram_message_with_retry(CHANNEL_ID, msg_id, msg)
+                                elif not first_message_sent:
+                                    if len(state['p_cards']) > 0 or len(state['d_cards']) > 0:
+                                        sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
+                                        msg_id = sent.message_id
+                                        first_message_sent = True
+                                        logging.info(f"Стол #{game_number}: первое сообщение: {msg}")
+                                
+                                last_state = state
                     
                     await asyncio.sleep(0.3)
                     
@@ -480,8 +484,6 @@ async def monitor_table(table_url, game_number, game_start_time):
                     else:
                         logging.error(f"Ошибка в цикле стола #{game_number}: {e}")
                         await asyncio.sleep(1)
-            
-            logging.info(f"Стол #{game_number}: сессия завершена (3 минуты)")
             
     except Exception as e:
         logging.error(f"Критическая ошибка стола #{game_number}: {e}")
@@ -584,7 +586,6 @@ def monitor_loop():
     global bot_running
     logging.info("🚀 Бот 21 Classic запущен на Chromium")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
-    logging.info(f"Смещение номеров столов: {TABLE_OFFSET}")
     
     check_interval = 10
     
