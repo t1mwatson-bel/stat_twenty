@@ -110,48 +110,53 @@ async def parse_cards(elements):
     cards = []
     for el in elements:
         try:
-            # В Playwright get_attribute - асинхронный, нужен await
             class_name = await el.get_attribute('class') or ''
-            
-            # Ищем масть
-            suit = '?'
-            for class_part, suit_char in SUIT_MAP.items():
-                if class_part in class_name:
-                    suit = suit_char
-                    break
-            
-            # Ищем значение
+            suit = next((s for c, s in SUIT_MAP.items() if c in class_name), '?')
             val_match = re.search(r'value-(\d+)', class_name)
             if val_match:
                 value = VALUE_MAP.get(f'value-{val_match.group(1)}', val_match.group(1))
             else:
                 value = '?'
-            
             cards.append(f"{value}{suit}")
-        except Exception as e:
-            logging.error(f"Ошибка парсинга карты: {e}")
+        except:
             continue
     return cards
 
+def format_cards(cards):
+    return ''.join(cards)
+
+def check_special_conditions(player_cards, dealer_cards, player_score, dealer_score):
+    specials = []
+    if player_score == "21" and len(player_cards) == 2:
+        if all(card.startswith('A') for card in player_cards):
+            specials.append('#G')
+    if player_score == "21" or dealer_score == "21":
+        specials.append('#O')
+    if len(player_cards) == 2 and len(dealer_cards) == 2:
+        specials.append('#R')
+    return ' '.join(specials)
+
+def determine_turn(state):
+    if state.get('player_active', False):
+        return 'player'
+    elif state.get('dealer_active', False):
+        return 'dealer'
+    return None
+
 async def get_state_fast(page):
     try:
-        # Счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
-        # Карты игрока
         player_cards_els = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
         player_cards = await parse_cards(player_cards_els)
         
-        # Счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
-        # Карты дилера
         dealer_cards_els = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
         dealer_cards = await parse_cards(dealer_cards_els)
         
-        # Активность
         player_active = False
         dealer_active = False
         
@@ -176,7 +181,6 @@ async def get_state_fast(page):
             'dealer_active': dealer_active
         }
     except Exception as e:
-        logging.error(f"Ошибка get_state_fast: {e}")
         return None
 
 async def is_game_truly_finished(page):
@@ -321,15 +325,18 @@ async def get_next_table(page):
         
         valid_tables.sort(key=lambda x: x[0])
         
-        # ИСПРАВЛЕНИЕ: просто берем первый стол из списка
-        selected_table = valid_tables[0][1]
-        selected_id = valid_tables[0][0]
+        # Ищем столы, которые больше last_table_id
+        new_tables = [t for t in valid_tables if t[0] > last_table_id]
         
-        logging.info(f"Выбран стол: {selected_id}")
-        
-        # Обновляем last_table_id для статистики (не влияет на выбор)
-        if selected_id > last_table_id:
+        if new_tables:
+            selected_table = new_tables[0][1]
+            selected_id = new_tables[0][0]
+            logging.info(f"Найден новый стол: {selected_id}")
             last_table_id = selected_id
+        else:
+            selected_table = valid_tables[0][1]
+            selected_id = valid_tables[0][0]
+            logging.info(f"Новых столов нет, беру первый: {selected_id}")
         
         link_element = await selected_table.query_selector('.dashboard-game-block__link')
         href = await link_element.get_attribute('href')
@@ -355,6 +362,7 @@ async def monitor_table(table_url, table_id):
     initial_load = True
     no_response_count = 0
     max_no_response = 20
+    first_message_sent = False
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
@@ -368,8 +376,6 @@ async def monitor_table(table_url, table_id):
         
         try:
             await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
-            
-            # Даём странице время на загрузку
             await page.wait_for_timeout(5000)
             
             cards_loaded = False
@@ -433,7 +439,10 @@ async def monitor_table(table_url, table_id):
                         game_active = False
                         break
                     
-                    if state != last_state or initial_load:
+                    # Отправляем сообщение только если есть карты
+                    has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
+                    
+                    if has_cards and (state != last_state or initial_load):
                         msg = format_message(table_id, state, table_number=table_number)
                         
                         with lock:
@@ -448,13 +457,13 @@ async def monitor_table(table_url, table_id):
                                 with lock:
                                     last_messages[table_id] = msg
                         else:
-                            if len(state['p_cards']) > 0 or len(state['d_cards']) > 0:
-                                sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
-                                msg_id = sent.message_id
-                                with lock:
-                                    message_ids[table_id] = msg_id
-                                    last_messages[table_id] = msg
-                                logging.info(f"Стол {table_id}: первое сообщение")
+                            # Первое сообщение - отправляем только если есть карты
+                            sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
+                            msg_id = sent.message_id
+                            with lock:
+                                message_ids[table_id] = msg_id
+                                last_messages[table_id] = msg
+                            logging.info(f"Стол {table_id}: первое сообщение с картами")
                         
                         last_state = state
                         initial_load = False
@@ -482,11 +491,6 @@ def run_async_monitor(table_url, table_id):
     asyncio.run(monitor_table(table_url, table_id))
 
 def launch_new_table_monitor():
-    with lock:
-        if len(active_tables) >= MAX_BROWSERS:
-            logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS})")
-            return
-    
     async def get_table():
         async with async_playwright() as p:
             browser = await p.firefox.launch(
@@ -513,6 +517,15 @@ def launch_new_table_monitor():
         loop.close()
         
         if table_url and table_id:
+            with lock:
+                if table_id in active_tables:
+                    logging.info(f"Стол {table_id} уже мониторится, пропускаю")
+                    return
+                
+                if len(active_tables) >= MAX_BROWSERS:
+                    logging.info(f"Достигнут лимит браузеров ({MAX_BROWSERS}), стол {table_id} не запущен")
+                    return
+            
             logging.info(f"Найден следующий стол: {table_id}")
             
             thread = threading.Thread(target=run_async_monitor, args=(table_url, table_id))
