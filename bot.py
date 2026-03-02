@@ -133,85 +133,15 @@ async def get_state_fast(page):
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
-        # Получаем карты игрока
-        player_cards_els = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-        player_cards = []
-        for el in player_cards_els:
-            try:
-                class_name = await el.get_attribute('class') or ''
-                # Определяем масть
-                suit = '?'
-                if 'suit-0' in class_name:
-                    suit = '♠️'
-                elif 'suit-1' in class_name:
-                    suit = '♣️'
-                elif 'suit-2' in class_name:
-                    suit = '♦️'
-                elif 'suit-3' in class_name:
-                    suit = '♥️'
-                
-                # Определяем значение
-                val_match = re.search(r'value-(\d+)', class_name)
-                if val_match:
-                    val = val_match.group(1)
-                    if val == '11':
-                        value = 'J'
-                    elif val == '12':
-                        value = 'Q'
-                    elif val == '13':
-                        value = 'K'
-                    elif val == '14':
-                        value = 'A'
-                    else:
-                        value = val
-                else:
-                    value = '?'
-                
-                player_cards.append(f"{value}{suit}")
-            except Exception as e:
-                continue
+        # Получаем карты игрока - улучшенный поиск
+        player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
         
         # Получаем счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
-        # Получаем карты дилера
-        dealer_cards_els = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
-        dealer_cards = []
-        for el in dealer_cards_els:
-            try:
-                class_name = await el.get_attribute('class') or ''
-                # Определяем масть
-                suit = '?'
-                if 'suit-0' in class_name:
-                    suit = '♠️'
-                elif 'suit-1' in class_name:
-                    suit = '♣️'
-                elif 'suit-2' in class_name:
-                    suit = '♦️'
-                elif 'suit-3' in class_name:
-                    suit = '♥️'
-                
-                # Определяем значение
-                val_match = re.search(r'value-(\d+)', class_name)
-                if val_match:
-                    val = val_match.group(1)
-                    if val == '11':
-                        value = 'J'
-                    elif val == '12':
-                        value = 'Q'
-                    elif val == '13':
-                        value = 'K'
-                    elif val == '14':
-                        value = 'A'
-                    else:
-                        value = val
-                else:
-                    value = '?'
-                
-                dealer_cards.append(f"{value}{suit}")
-            except Exception as e:
-                continue
+        # Получаем карты дилера - улучшенный поиск
+        dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
         
         # Определяем активность
         player_active = False
@@ -241,6 +171,74 @@ async def get_state_fast(page):
         logging.error(f"Ошибка в get_state_fast: {e}")
         return None
 
+async def extract_cards(page, selector_prefix):
+    """Улучшенная функция извлечения карт с поддержкой разных селекторов"""
+    cards = []
+    
+    # Пробуем разные селекторы для поиска карт
+    selectors = [
+        f'{selector_prefix} .scoreboard-card-games-card',
+        f'{selector_prefix} .card-item',
+        f'{selector_prefix} .game-card',
+        f'{selector_prefix} [class*="card"]'
+    ]
+    
+    for selector in selectors:
+        try:
+            card_elements = await page.query_selector_all(selector)
+            if card_elements:
+                for el in card_elements:
+                    try:
+                        class_name = await el.get_attribute('class') or ''
+                        
+                        # Пропускаем скрытые или рубашки
+                        if 'hidden' in class_name.lower() or 'face-down' in class_name.lower():
+                            continue
+                        
+                        # Определяем масть
+                        suit = '?'
+                        if 'suit-0' in class_name:
+                            suit = '♠️'
+                        elif 'suit-1' in class_name:
+                            suit = '♣️'
+                        elif 'suit-2' in class_name:
+                            suit = '♦️'
+                        elif 'suit-3' in class_name:
+                            suit = '♥️'
+                        
+                        # Определяем значение
+                        val_match = re.search(r'value-(\d+)', class_name)
+                        if val_match:
+                            val = val_match.group(1)
+                            if val == '11':
+                                value = 'J'
+                            elif val == '12':
+                                value = 'Q'
+                            elif val == '13':
+                                value = 'K'
+                            elif val == '14':
+                                value = 'A'
+                            else:
+                                value = val
+                        else:
+                            # Пробуем найти значение в тексте
+                            text = await el.text_content()
+                            if text and text.strip():
+                                value = text.strip()
+                            else:
+                                value = '?'
+                        
+                        cards.append(f"{value}{suit}")
+                    except:
+                        continue
+                
+                if cards:  # Если нашли карты, выходим
+                    break
+        except:
+            continue
+    
+    return cards
+
 async def has_active_player(page):
     """Проверяет, есть ли активный игрок или дилер"""
     try:
@@ -261,6 +259,61 @@ async def has_active_player(page):
     except:
         return False
 
+async def has_action_buttons(page):
+    """Проверяет наличие кнопок действий"""
+    try:
+        # Проверяем разные варианты кнопок
+        button_selectors = [
+            'button:has-text("Hit")',
+            'button:has-text("STAND")',
+            'button:has-text("Double")',
+            'button:has-text("Split")',
+            'button:has-text("Insurance")',
+            '.game-action-button',
+            '.action-button',
+            '[class*="action"] button'
+        ]
+        
+        for selector in button_selectors:
+            buttons = await page.query_selector_all(selector)
+            for btn in buttons:
+                if await btn.is_visible():
+                    return True
+        return False
+    except:
+        return False
+
+async def has_dealing_animation(page):
+    """Проверяет наличие анимации раздачи"""
+    try:
+        animation_selectors = [
+            '.card-dealing',
+            '.card-animation',
+            '.dealing',
+            '[class*="dealing"]',
+            '[class*="animated"]'
+        ]
+        
+        for selector in animation_selectors:
+            elements = await page.query_selector_all(selector)
+            if elements:
+                return True
+        return False
+    except:
+        return False
+
+async def dealer_has_hidden_cards(page):
+    """Проверяет, есть ли у дилера скрытые карты"""
+    try:
+        dealer_cards = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card, .live-twenty-one-field-player:last-child [class*="card"]')
+        for card in dealer_cards:
+            class_name = await card.get_attribute('class') or ''
+            if 'hidden' in class_name.lower() or 'face-down' in class_name.lower() or 'back' in class_name.lower():
+                return True
+        return False
+    except:
+        return False
+
 async def is_game_truly_finished(page):
     """Улучшенная проверка завершения игры"""
     try:
@@ -268,20 +321,37 @@ async def is_game_truly_finished(page):
         finished = await page.query_selector('span.ui-caption--size-xl.ui-caption--weight-700.ui-caption--color-clr-strong.ui-caption')
         if finished:
             text = await finished.text_content()
-            if text and 'Игра завершена' in text:
+            if text and ('Игра завершена' in text or 'Game over' in text):
+                logging.info("Обнаружено сообщение о завершении игры")
                 return True
         
         # 2. Проверяем наличие кнопки новой игры
-        new_btns = await page.query_selector_all('.ui-game-controls__button, button:has-text("Новая игра"), [class*="new-game"]')
+        new_btns = await page.query_selector_all('.ui-game-controls__button, button:has-text("Новая игра"), button:has-text("New game"), [class*="new-game"]')
         for btn in new_btns:
             if await btn.is_visible():
+                logging.info("Обнаружена кнопка новой игры")
                 return True
         
-        # 3. Проверяем, нет ли активных элементов
+        # 3. Если есть активные элементы - игра точно не завершена
         if await has_active_player(page):
             return False
         
-        # 4. Проверяем счета
+        # 4. Если есть кнопки действий - игра продолжается
+        if await has_action_buttons(page):
+            logging.info("Обнаружены кнопки действий - игра продолжается")
+            return False
+        
+        # 5. Если идет анимация раздачи - игра продолжается
+        if await has_dealing_animation(page):
+            logging.info("Обнаружена анимация раздачи")
+            return False
+        
+        # 6. Если у дилера есть скрытые карты - игра продолжается
+        if await dealer_has_hidden_cards(page):
+            logging.info("У дилера есть скрытые карты")
+            return False
+        
+        # 7. Проверяем счета, но с дополнительными условиями
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         
@@ -294,27 +364,41 @@ async def is_game_truly_finished(page):
                     p_score = int(player_score.strip())
                     d_score = int(dealer_score.strip())
                     
-                    # Если оба перебрали - игра завершена
-                    if p_score > 21 and d_score > 21:
-                        return True
+                    # Получаем количество карт
+                    player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
+                    dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
                     
-                    # Если у одного 21, а у другого меньше и нет активности
-                    if (p_score == 21 or d_score == 21) and not await has_active_player(page):
-                        return True
-                        
+                    # Если у дилера 2 карты и одна скрыта - игра продолжается
+                    if len(dealer_cards) == 1 and await dealer_has_hidden_cards(page):
+                        return False
+                    
+                    # Если дилер активен или есть анимация - игра продолжается
+                    if await has_active_player(page) or await has_dealing_animation(page):
+                        return False
+                    
+                    # Проверяем, не добирает ли дилер
+                    if d_score < 17 and len(dealer_cards) < 5:
+                        # Проверяем, есть ли признаки того, что дилер еще добирает
+                        if not await has_action_buttons(page) and not await has_active_player(page):
+                            # Если дилер должен добирать, но нет активности - возможно пауза
+                            return False
+                    
                 except:
                     pass
         
-        # 5. Проверяем карты
-        player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-        dealer_cards = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
+        # 8. Проверяем количество карт
+        player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
+        dealer_cards = await extract_cards(page, '.live-twenty-one-field-player:last-child')
         
-        # Если у обоих по 2+ карты и нет активности - вероятно игра завершена
-        if len(player_cards) >= 2 and len(dealer_cards) >= 2:
-            if not await has_active_player(page):
-                return True
+        # Если у дилера мало карт и нет активности - возможно игра еще идет
+        if len(dealer_cards) <= 2 and not await has_active_player(page):
+            # Проверяем, не ждет ли дилер
+            if not await has_action_buttons(page):
+                return False
         
-        return False
+        # 9. Если все проверки пройдены, но игра выглядит завершенной
+        # Проверяем, прошло ли достаточно времени без изменений
+        return True
         
     except Exception as e:
         logging.error(f"Ошибка в is_game_truly_finished: {e}")
@@ -480,6 +564,7 @@ async def monitor_table(table_url, table_id):
     game_finished_detected = False
     last_state_change = time.time()
     last_card_update = time.time()
+    no_activity_count = 0
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
@@ -498,12 +583,12 @@ async def monitor_table(table_url, table_id):
                 # Улучшенное ожидание загрузки карт
                 cards_loaded = False
                 wait_start = time.time()
-                max_wait = 15
+                max_wait = 20
                 
                 while not cards_loaded and (time.time() - wait_start) < max_wait:
                     try:
                         # Проверяем наличие карт у игрока
-                        player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
+                        player_cards = await extract_cards(page, '.live-twenty-one-field-player:first-child')
                         
                         # Проверяем наличие счета
                         player_score = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
@@ -512,10 +597,10 @@ async def monitor_table(table_url, table_id):
                             score_text = await player_score.text_content()
                             if score_text and score_text.strip() != '0':
                                 cards_loaded = True
-                                logging.info(f"Карты и счет загружены для стола {table_id}: {score_text}")
+                                logging.info(f"Карты и счет загружены для стола {table_id}: {score_text}, карты: {player_cards}")
                                 break
                         
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.3)
                     except Exception as e:
                         logging.error(f"Ошибка при ожидании карт: {e}")
                         break
@@ -538,7 +623,7 @@ async def monitor_table(table_url, table_id):
                         last_messages[table_id] = msg
                     last_state = first_state
                     last_card_update = time.time()
-                    logging.info(f"Стол {table_id}: первое сообщение отправлено")
+                    logging.info(f"Стол {table_id}: первое сообщение отправлено: {msg}")
                 
                 logging.info(f"Старт мониторинга стола {table_id}")
                 
@@ -560,6 +645,7 @@ async def monitor_table(table_url, table_id):
                             if (state['p_cards'] != last_state.get('p_cards', []) or 
                                 state['d_cards'] != last_state.get('d_cards', [])):
                                 last_card_update = time.time()
+                                no_activity_count = 0
                         
                         # Проверяем активность
                         player_active = state.get('player_active', False)
@@ -568,6 +654,21 @@ async def monitor_table(table_url, table_id):
                         # Проверяем завершение игры
                         is_finished = await is_game_truly_finished(page)
                         
+                        # Логируем подозрительные ситуации
+                        if not player_active and not dealer_active and not is_finished:
+                            no_activity_count += 1
+                            if no_activity_count > 10:  # ~3 секунды без активности
+                                # Проверяем, не добирает ли дилер
+                                dealer_cards = state.get('d_cards', [])
+                                try:
+                                    dealer_score = int(state.get('d_score', 0))
+                                    # Если у дилера меньше 17 и мало карт - ждем
+                                    if dealer_score < 17 and len(dealer_cards) < 5:
+                                        logging.info(f"Стол {table_id}: дилер добирает ({dealer_score} очков, {len(dealer_cards)} карт), ждем")
+                                        no_activity_count = 0
+                                except:
+                                    pass
+                        
                         # Если игра завершена
                         if is_finished:
                             if not game_finished_detected:
@@ -575,7 +676,7 @@ async def monitor_table(table_url, table_id):
                                 logging.info(f"Стол {table_id}: обнаружено завершение игры")
                                 
                                 # Даем время для отображения финальных карт
-                                await asyncio.sleep(1)
+                                await asyncio.sleep(1.5)
                                 
                                 # Получаем финальное состояние
                                 final_state = await get_state_fast(page)
@@ -586,6 +687,7 @@ async def monitor_table(table_url, table_id):
                                     
                                     if msg_id:
                                         edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                        logging.info(f"Стол {table_id}: финальное сообщение: {final_msg}")
                                     else:
                                         sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
                                         msg_id = sent.message_id
@@ -599,6 +701,7 @@ async def monitor_table(table_url, table_id):
                         # Если есть активность (ход игрока или дилера) - игра продолжается
                         elif player_active or dealer_active:
                             game_finished_detected = False
+                            no_activity_count = 0
                             
                             # Отправляем обновления при изменении состояния
                             if state != last_state:
@@ -616,16 +719,20 @@ async def monitor_table(table_url, table_id):
                                         with lock:
                                             last_messages[table_id] = msg
                                             last_state = state
+                                        logging.info(f"Стол {table_id}: обновлено: {msg}")
                                 
                                 await asyncio.sleep(0.2)
                         
-                        # Дополнительная проверка: если долго нет активности, но карты не меняются
-                        elif time.time() - last_card_update > 30:
-                            # Проверяем, может игра все же завершена
+                        # Проверяем, не застряла ли игра
+                        elif time.time() - last_card_update > 20:
+                            logging.info(f"Стол {table_id}: нет изменений карт 20 сек, проверяю завершение")
                             if await is_game_truly_finished(page):
-                                logging.info(f"Стол {table_id}: игра завершена (нет активности {30} сек)")
+                                logging.info(f"Стол {table_id}: игра завершена (таймаут)")
                                 game_active = False
                                 break
+                            else:
+                                # Возможно, просто пауза
+                                last_card_update = time.time()
                         
                         await asyncio.sleep(0.3)
                         
