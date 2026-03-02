@@ -27,26 +27,10 @@ apihelper.MAX_RETRIES = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# Маппинги для классической версии
-SUIT_MAP = {
-    'suit-0': '♠️',
-    'suit-1': '♣️',
-    'suit-2': '♦️',
-    'suit-3': '♥️'
-}
-
-VALUE_MAP = {
-    'value-11': 'J',
-    'value-12': 'Q',
-    'value-13': 'K',
-    'value-14': 'A'
-}
-
 bot = telebot.TeleBot(TOKEN)
 active_tables = {}
 message_ids = {}
 last_messages = {}
-table_schedule = {}  # Словарь для хранения времени начала игр {table_id: start_time}
 last_table_id = 0
 lock = threading.Lock()
 tasks = {}
@@ -135,7 +119,7 @@ def get_next_even_minute_start():
     # Находим ближайшую четную минуту
     if current_minute % 2 == 0:
         # Если сейчас четная минута, проверяем секунды
-        if now.second < 10:  # Если секунд меньше 10, возможно игра вот-вот начнется
+        if now.second < 10:  # Если секунд меньше 10, игра вот-вот начнется
             next_start = now.replace(second=0, microsecond=0)
         else:
             # Иначе следующая четная минута через 2 минуты
@@ -152,64 +136,197 @@ def get_next_even_minute_start():
     
     return next_start
 
+async def debug_page_structure(page):
+    """Отладочная функция для проверки структуры страницы"""
+    try:
+        logging.info("=== ОТЛАДКА СТРУКТУРЫ СТРАНИЦЫ ===")
+        
+        # Проверяем наличие основных элементов
+        player_area = await page.query_selector('.live-twenty-one-field__player:first-child')
+        if player_area:
+            logging.info("✓ Область игрока найдена")
+            
+            # Проверяем счет
+            player_score = await player_area.query_selector('.live-twenty-one-field-score__label')
+            if player_score:
+                score_text = await player_score.text_content()
+                logging.info(f"  Счет игрока: {score_text}")
+            
+            # Проверяем карты
+            cards_container = await player_area.query_selector('.live-twenty-one-cards')
+            if cards_container:
+                logging.info("  Контейнер карт найден")
+                cards = await cards_container.query_selector_all('.scoreboard-card-games-card')
+                logging.info(f"  Найдено карт: {len(cards)}")
+                
+                for i, card in enumerate(cards):
+                    class_name = await card.get_attribute('class')
+                    is_visible = await card.is_visible()
+                    logging.info(f"    Карта {i+1}: класс='{class_name}', видима={is_visible}")
+                    
+                    # Проверяем рубашку
+                    back = await card.query_selector('.scoreboard-card-games-card__back')
+                    if back:
+                        back_visible = await back.is_visible()
+                        logging.info(f"      Рубашка видима: {back_visible}")
+        else:
+            logging.info("✗ Область игрока НЕ найдена")
+        
+        # Аналогично для дилера
+        dealer_area = await page.query_selector('.live-twenty-one-field__player:last-child')
+        if dealer_area:
+            logging.info("✓ Область дилера найдена")
+            
+            dealer_score = await dealer_area.query_selector('.live-twenty-one-field-score__label')
+            if dealer_score:
+                score_text = await dealer_score.text_content()
+                logging.info(f"  Счет дилера: {score_text}")
+            
+            cards_container = await dealer_area.query_selector('.live-twenty-one-cards')
+            if cards_container:
+                cards = await cards_container.query_selector_all('.scoreboard-card-games-card')
+                logging.info(f"  Найдено карт дилера: {len(cards)}")
+        else:
+            logging.info("✗ Область дилера НЕ найдена")
+        
+        # Проверяем статус игры
+        status = await page.query_selector('.live-twenty-one-table-head__status')
+        if status:
+            status_text = await status.text_content()
+            logging.info(f"Статус игры: {status_text}")
+        
+        # Проверяем таймер
+        timer = await page.query_selector('.ui-game-timer__label')
+        if timer:
+            timer_text = await timer.text_content()
+            logging.info(f"Таймер: {timer_text}")
+        
+        logging.info("=== КОНЕЦ ОТЛАДКИ ===")
+        
+    except Exception as e:
+        logging.error(f"Ошибка в debug_page_structure: {e}")
+
 async def extract_cards(page, player_selector):
-    """Извлечение карт для классической версии"""
+    """Улучшенное извлечение карт с более надежным поиском"""
     cards = []
     
     try:
         # Проверяем, жива ли страница
         if page.is_closed():
             return cards
-            
+        
+        # Несколько способов найти карты для игрока/дилера
+        cards_found = False
+        
+        # Способ 1: Ищем через контейнер live-twenty-one-cards
         cards_container = await page.query_selector(f'{player_selector} .live-twenty-one-cards')
-        if not cards_container:
-            return cards
-        
-        card_elements = await cards_container.query_selector_all('.scoreboard-card-games-card')
-        
-        for el in card_elements:
-            try:
-                # Проверяем, не является ли карта рубашкой (скрытой)
-                back_element = await el.query_selector('.scoreboard-card-games-card__back')
-                if back_element:
-                    is_visible = await back_element.is_visible()
-                    if is_visible:
+        if cards_container:
+            card_elements = await cards_container.query_selector_all('.scoreboard-card-games-card')
+            if card_elements and len(card_elements) > 0:
+                cards_found = True
+                
+                for el in card_elements:
+                    try:
+                        # Проверяем видимость карты
+                        is_visible = await el.is_visible()
+                        if not is_visible:
+                            continue
+                        
+                        # Проверяем, не является ли карта рубашкой
+                        back_element = await el.query_selector('.scoreboard-card-games-card__back')
+                        if back_element:
+                            back_visible = await back_element.is_visible()
+                            if back_visible:
+                                # Это скрытая карта, пропускаем
+                                continue
+                        
+                        # Получаем все классы элемента
+                        class_name = await el.get_attribute('class') or ''
+                        
+                        # Определяем масть
+                        suit = '?'
+                        if 'scoreboard-card-games-card--suit-0' in class_name:
+                            suit = '♠️'
+                        elif 'scoreboard-card-games-card--suit-1' in class_name:
+                            suit = '♣️'
+                        elif 'scoreboard-card-games-card--suit-2' in class_name:
+                            suit = '♦️'
+                        elif 'scoreboard-card-games-card--suit-3' in class_name:
+                            suit = '♥️'
+                        
+                        # Определяем значение
+                        value = '?'
+                        value_match = re.search(r'value-(\d+)', class_name)
+                        if value_match:
+                            val = value_match.group(1)
+                            if val == '11':
+                                value = 'J'
+                            elif val == '12':
+                                value = 'Q'
+                            elif val == '13':
+                                value = 'K'
+                            elif val == '14':
+                                value = 'A'
+                            else:
+                                value = val
+                        
+                        # Если нашли хотя бы масть или значение, добавляем карту
+                        if suit != '?' or value != '?':
+                            cards.append(f"{value}{suit}")
+                    except Exception as e:
                         continue
-                
-                class_name = await el.get_attribute('class') or ''
-                
-                # Определяем масть
-                suit = '?'
-                if 'scoreboard-card-games-card--suit-0' in class_name:
-                    suit = '♠️'
-                elif 'scoreboard-card-games-card--suit-1' in class_name:
-                    suit = '♣️'
-                elif 'scoreboard-card-games-card--suit-2' in class_name:
-                    suit = '♦️'
-                elif 'scoreboard-card-games-card--suit-3' in class_name:
-                    suit = '♥️'
-                
-                # Определяем значение
-                value_match = re.search(r'value-(\d+)', class_name)
-                if value_match:
-                    val = value_match.group(1)
-                    if val == '11':
-                        value = 'J'
-                    elif val == '12':
-                        value = 'Q'
-                    elif val == '13':
-                        value = 'K'
-                    elif val == '14':
-                        value = 'A'
-                    else:
-                        value = val
-                else:
+        
+        # Способ 2: Если не нашли через контейнер, ищем все карты в области игрока
+        if not cards_found:
+            all_cards = await page.query_selector_all(f'{player_selector} .scoreboard-card-games-card')
+            
+            for el in all_cards:
+                try:
+                    is_visible = await el.is_visible()
+                    if not is_visible:
+                        continue
+                    
+                    class_name = await el.get_attribute('class') or ''
+                    
+                    # Определяем масть
+                    suit = '?'
+                    if 'suit-0' in class_name or 'scoreboard-card-games-card--suit-0' in class_name:
+                        suit = '♠️'
+                    elif 'suit-1' in class_name or 'scoreboard-card-games-card--suit-1' in class_name:
+                        suit = '♣️'
+                    elif 'suit-2' in class_name or 'scoreboard-card-games-card--suit-2' in class_name:
+                        suit = '♦️'
+                    elif 'suit-3' in class_name or 'scoreboard-card-games-card--suit-3' in class_name:
+                        suit = '♥️'
+                    
+                    # Определяем значение
                     value = '?'
-                
-                cards.append(f"{value}{suit}")
-            except Exception as e:
-                logging.error(f"Ошибка при обработке карты: {e}")
-                continue
+                    value_match = re.search(r'value-(\d+)', class_name)
+                    if value_match:
+                        val = value_match.group(1)
+                        if val == '11':
+                            value = 'J'
+                        elif val == '12':
+                            value = 'Q'
+                        elif val == '13':
+                            value = 'K'
+                        elif val == '14':
+                            value = 'A'
+                        else:
+                            value = val
+                    
+                    cards.append(f"{value}{suit}")
+                except:
+                    continue
+        
+        # Способ 3: Пробуем найти карты по их фону/изображению
+        if not cards:
+            card_images = await page.query_selector_all(f'{player_selector} .scoreboard-card-games-card__front')
+            if card_images:
+                # Если нашли изображения карт, значит карты есть, но мы не можем определить масть/значение
+                # В этом случае добавляем заглушки
+                for i, img in enumerate(card_images):
+                    cards.append(f"🃏")
         
     except Exception as e:
         if "closed" not in str(e).lower():
@@ -218,11 +335,11 @@ async def extract_cards(page, player_selector):
     return cards
 
 async def get_state_fast(page):
-    """Получение состояния игры"""
+    """Получение состояния игры с улучшенным логированием"""
     try:
         if page.is_closed():
             return None
-            
+        
         # Получаем статус игры из заголовка
         status_el = await page.query_selector('.live-twenty-one-table-head__status')
         game_status = await status_el.text_content() if status_el else ''
@@ -264,6 +381,9 @@ async def get_state_fast(page):
         if timer_text and 'завершена' in timer_text.lower():
             is_finished = True
         
+        # Логируем полученное состояние
+        logging.info(f"Состояние: P: {player_score} карты:{player_cards} | D: {dealer_score} карты:{dealer_cards} | Статус:{game_status}")
+        
         return {
             'p_score': player_score.strip(),
             'p_cards': player_cards,
@@ -301,7 +421,6 @@ async def is_game_truly_finished(page):
         if timer_el:
             timer_text = await timer_el.text_content()
             if timer_text and 'завершена' in timer_text.lower():
-                # Пробуем определить победителя по счету
                 return True, 'unknown'
         
         return False, None
@@ -420,7 +539,6 @@ async def get_next_table(page):
                         valid_tables.append((table_num, table))
                         logging.info(f"Найден стол 21 Classic: {table_num}")
             except Exception as e:
-                logging.error(f"Ошибка при парсинге стола: {e}")
                 continue
         
         if not valid_tables:
@@ -459,7 +577,6 @@ async def monitor_table(table_url, table_id):
     """Мониторинг стола с открытием за 20 секунд до игры (по четным минутам)"""
     msg_id = None
     t_num = random.randint(30, 60)
-    game_active = True
     table_number = int(table_id) % 1440
     if table_number == 0:
         table_number = 1440
@@ -504,10 +621,13 @@ async def monitor_table(table_url, table_id):
             logging.info(f"Стол {table_id}: загрузка страницы")
             await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
             
+            # Отлаживаем структуру страницы
+            await debug_page_structure(page)
+            
             # Ждем начала игры (появления карт или счета)
             game_started = False
             wait_start = time.time()
-            max_wait = 40  # Ждем до 40 секунд после открытия (учитывая возможную задержку)
+            max_wait = 40  # Ждем до 40 секунд после открытия
             
             while not game_started and (time.time() - wait_start) < max_wait:
                 if page.is_closed():
@@ -522,7 +642,7 @@ async def monitor_table(table_url, table_id):
                             logging.info(f"Стол {table_id}: игра началась, счет: {state['p_score']}, карты: {state['p_cards']}")
                             break
                         
-                        # Проверяем, не завершилась ли игра сразу (редкий случай)
+                        # Проверяем, не завершилась ли игра сразу
                         if state['is_finished']:
                             logging.info(f"Стол {table_id}: игра уже завершена при открытии")
                             game_started = True
@@ -530,7 +650,6 @@ async def monitor_table(table_url, table_id):
                 except Exception as e:
                     if "closed" in str(e).lower():
                         return
-                    logging.warning(f"Стол {table_id}: ошибка при проверке старта: {e}")
                 
                 await asyncio.sleep(1)
             
