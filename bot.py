@@ -338,14 +338,10 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
 async def get_table_url(page, game_number):
     """
     Получение URL конкретного стола по номеру игры
-    game_number - наш #N (например 554)
+    game_number - наш #N (например 651)
     """
     try:
-        # Вычисляем номер на сайте (подбери правильную формулу)
-        # site_number = game_number - TABLE_OFFSET
-        site_number = game_number - TABLE_OFFSET
-        
-        logging.info(f"Ищем стол #{site_number} (соответствует #N{game_number})...")
+        logging.info(f"Ищем стол №{game_number}...")
         
         await page.wait_for_selector('.dashboard-game-block', timeout=30000)
         await page.wait_for_timeout(2000)
@@ -367,14 +363,14 @@ async def get_table_url(page, game_number):
                 
                 current_site_number = int(match.group(1))
                 
-                # Проверяем, не завершена ли игра
-                completed = await table.query_selector('.dashboard-game-info__period:has-text("Игра завершена")')
-                if completed:
-                    logging.info(f"Стол #{current_site_number} уже завершен, пропускаем")
-                    continue
-                
                 # Если нашли нужный номер
-                if current_site_number == site_number:
+                if current_site_number == game_number:
+                    # Проверяем, не завершена ли игра
+                    completed = await table.query_selector('.dashboard-game-info__period:has-text("Игра завершена")')
+                    if completed:
+                        logging.info(f"Стол #{current_site_number} уже завершен")
+                        return None
+                    
                     link_element = await table.query_selector('.dashboard-game-block__link')
                     if link_element:
                         href = await link_element.get_attribute('href')
@@ -384,13 +380,13 @@ async def get_table_url(page, game_number):
                         logging.info(f"Найден нужный стол #{current_site_number}")
                         return href
                 else:
-                    logging.info(f"Стол #{current_site_number} не подходит, ищем #{site_number}")
+                    logging.info(f"Стол #{current_site_number} не подходит, ищем #{game_number}")
                     
             except Exception as e:
                 logging.error(f"Ошибка при обработке стола: {e}")
                 continue
         
-        logging.warning(f"Стол #{site_number} не найден")
+        logging.warning(f"Стол #{game_number} не найден")
         return None
         
     except Exception as e:
