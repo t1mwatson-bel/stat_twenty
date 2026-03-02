@@ -106,22 +106,6 @@ class GameData:
 
 game_data = GameData()
 
-async def parse_cards(elements):
-    cards = []
-    for el in elements:
-        try:
-            class_name = await el.get_attribute('class') or ''
-            suit = next((s for c, s in SUIT_MAP.items() if c in class_name), '?')
-            val_match = re.search(r'value-(\d+)', class_name)
-            if val_match:
-                value = VALUE_MAP.get(f'value-{val_match.group(1)}', val_match.group(1))
-            else:
-                value = '?'
-            cards.append(f"{value}{suit}")
-        except:
-            continue
-    return cards
-
 def format_cards(cards):
     return ''.join(cards)
 
@@ -145,18 +129,92 @@ def determine_turn(state):
 
 async def get_state_fast(page):
     try:
+        # Получаем счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
+        # Получаем карты игрока - всегда свежий запрос
         player_cards_els = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
-        player_cards = await parse_cards(player_cards_els)
+        player_cards = []
+        for el in player_cards_els:
+            try:
+                class_name = await el.get_attribute('class') or ''
+                # Определяем масть
+                suit = '?'
+                if 'suit-0' in class_name:
+                    suit = '♠️'
+                elif 'suit-1' in class_name:
+                    suit = '♣️'
+                elif 'suit-2' in class_name:
+                    suit = '♦️'
+                elif 'suit-3' in class_name:
+                    suit = '♥️'
+                
+                # Определяем значение
+                val_match = re.search(r'value-(\d+)', class_name)
+                if val_match:
+                    val = val_match.group(1)
+                    if val == '11':
+                        value = 'J'
+                    elif val == '12':
+                        value = 'Q'
+                    elif val == '13':
+                        value = 'K'
+                    elif val == '14':
+                        value = 'A'
+                    else:
+                        value = val
+                else:
+                    value = '?'
+                
+                player_cards.append(f"{value}{suit}")
+            except Exception as e:
+                # Если элемент устарел - просто пропускаем
+                continue
         
+        # Получаем счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
+        # Получаем карты дилера - всегда свежий запрос
         dealer_cards_els = await page.query_selector_all('.live-twenty-one-field-player:last-child .scoreboard-card-games-card')
-        dealer_cards = await parse_cards(dealer_cards_els)
+        dealer_cards = []
+        for el in dealer_cards_els:
+            try:
+                class_name = await el.get_attribute('class') or ''
+                # Определяем масть
+                suit = '?'
+                if 'suit-0' in class_name:
+                    suit = '♠️'
+                elif 'suit-1' in class_name:
+                    suit = '♣️'
+                elif 'suit-2' in class_name:
+                    suit = '♦️'
+                elif 'suit-3' in class_name:
+                    suit = '♥️'
+                
+                # Определяем значение
+                val_match = re.search(r'value-(\d+)', class_name)
+                if val_match:
+                    val = val_match.group(1)
+                    if val == '11':
+                        value = 'J'
+                    elif val == '12':
+                        value = 'Q'
+                    elif val == '13':
+                        value = 'K'
+                    elif val == '14':
+                        value = 'A'
+                    else:
+                        value = val
+                else:
+                    value = '?'
+                
+                dealer_cards.append(f"{value}{suit}")
+            except Exception as e:
+                continue
         
+        # Определяем активность
         player_active = False
         dealer_active = False
         
@@ -181,6 +239,7 @@ async def get_state_fast(page):
             'dealer_active': dealer_active
         }
     except Exception as e:
+        logging.error(f"Ошибка в get_state_fast: {e}")
         return None
 
 async def is_game_truly_finished(page):
@@ -412,7 +471,8 @@ async def monitor_table(table_url, table_id):
     max_no_response = 20
     browser = None
     page = None
-    inactive_start = None  # Для отслеживания времени без активности
+    inactive_start = None
+    last_state_change = time.time()
     
     logging.info(f"Начало мониторинга стола {table_id}")
     
@@ -428,12 +488,12 @@ async def monitor_table(table_url, table_id):
             try:
                 await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
                 
-                # Начинаем проверять карты сразу без задержки
+                # Ждем появления карт с минимальной задержкой
                 cards_loaded = False
                 wait_start = time.time()
                 max_wait = 15
                 
-                while not cards_loaded and (time.time() - wait_start) < max_wait and game_active:
+                while not cards_loaded and (time.time() - wait_start) < max_wait:
                     try:
                         player_cards = await page.query_selector_all('.live-twenty-one-field-player:first-child .scoreboard-card-games-card')
                         if len(player_cards) > 0:
@@ -445,7 +505,8 @@ async def monitor_table(table_url, table_id):
                             logging.info(f"Игра на столе {table_id} уже завершена")
                             return
                             
-                        await asyncio.sleep(0.3)
+                        # Минимальная задержка для быстрой реакции
+                        await asyncio.sleep(0.1)
                     except Exception as e:
                         logging.error(f"Ошибка при ожидании карт: {e}")
                         break
@@ -453,6 +514,19 @@ async def monitor_table(table_url, table_id):
                 if not cards_loaded:
                     logging.warning(f"Стол {table_id}: карты не появились")
                     return
+                
+                # Сразу отправляем первое сообщение с картами
+                first_state = await get_state_fast(page)
+                if first_state:
+                    msg = format_message(table_id, first_state, table_number=table_number)
+                    sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
+                    msg_id = sent.message_id
+                    with lock:
+                        message_ids[table_id] = msg_id
+                        last_messages[table_id] = msg
+                    last_state = first_state
+                    initial_load = False
+                    logging.info(f"Стол {table_id}: первое сообщение с картами")
                 
                 logging.info(f"Старт мониторинга стола {table_id}")
                 
@@ -471,23 +545,58 @@ async def monitor_table(table_url, table_id):
                                     logging.info(f"Стол {table_id} завершен (таймаут)")
                                     game_active = False
                                     break
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.2)
                             continue
                         
                         no_response_count = 0
                         
+                        # Проверяем, не застряло ли обновление карт
+                        if last_state and state == last_state:
+                            if time.time() - last_state_change > 10:
+                                logging.info(f"Стол {table_id}: состояние не меняется 10 сек, обновляю страницу")
+                                try:
+                                    await page.reload(timeout=30000)
+                                    await asyncio.sleep(2)
+                                    last_state_change = time.time()
+                                    continue
+                                except Exception as e:
+                                    logging.error(f"Ошибка при обновлении страницы: {e}")
+                        else:
+                            last_state_change = time.time()
+                        
                         player_active = state.get('player_active', False)
                         dealer_active = state.get('dealer_active', False)
                         
-                        # Логика определения завершения игры с защитой от ложных срабатываний
+                        # Проверка завершения игры
+                        if await is_game_truly_finished(page):
+                            logging.info(f"Стол {table_id}: обнаружено явное завершение игры")
+                            final_state = state
+                            
+                            if len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0:
+                                final_msg = format_message(table_id, final_state, is_final=True, 
+                                                          t_num=t_num, table_number=table_number)
+                                
+                                if msg_id:
+                                    edit_telegram_message_with_retry(CHANNEL_ID, msg_id, final_msg)
+                                else:
+                                    sent = send_telegram_message_with_retry(CHANNEL_ID, final_msg)
+                                    msg_id = sent.message_id
+                                    with lock:
+                                        message_ids[table_id] = msg_id
+                                
+                                game_data.add_completed_game(table_id, final_msg, t_num)
+                                game_data.update_last_number(table_number)
+                            
+                            game_active = False
+                            break
+                        
+                        # Если нет явных признаков, используем таймер
                         if not player_active and not dealer_active:
-                            # Нет активности - возможно переход хода или завершение
                             if inactive_start is None:
                                 inactive_start = time.time()
                                 logging.info(f"Стол {table_id}: нет активности, начало отсчета")
                             else:
                                 inactive_duration = time.time() - inactive_start
-                                # Ждем 25 секунд перед завершением (дилер может добирать долго)
                                 if inactive_duration > 25 and await is_game_truly_finished(page):
                                     logging.info(f"Стол {table_id}: игра завершена (неактивно {inactive_duration:.1f} сек)")
                                     final_state = state
@@ -510,20 +619,18 @@ async def monitor_table(table_url, table_id):
                                     game_active = False
                                     break
                         else:
-                            # Активность есть - сбрасываем таймер
                             if inactive_start is not None:
                                 logging.info(f"Стол {table_id}: активность возобновилась")
                                 inactive_start = None
                         
-                        has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
-                        
-                        if has_cards and (state != last_state or initial_load):
+                        # Отправляем обновления, если состояние изменилось
+                        if state != last_state:
                             msg = format_message(table_id, state, table_number=table_number)
                             
                             with lock:
                                 last_msg = last_messages.get(table_id)
-                                if last_msg == msg and not initial_load:
-                                    await asyncio.sleep(0.5)
+                                if last_msg == msg:
+                                    await asyncio.sleep(0.2)
                                     continue
                             
                             if msg_id:
@@ -531,18 +638,11 @@ async def monitor_table(table_url, table_id):
                                 if result is not None:
                                     with lock:
                                         last_messages[table_id] = msg
-                            else:
-                                sent = send_telegram_message_with_retry(CHANNEL_ID, msg)
-                                msg_id = sent.message_id
-                                with lock:
-                                    message_ids[table_id] = msg_id
-                                    last_messages[table_id] = msg
-                                logging.info(f"Стол {table_id}: первое сообщение с картами")
+                                        last_state = state
                             
-                            last_state = state
-                            initial_load = False
+                            await asyncio.sleep(0.2)
                         
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.3)
                         
                     except Exception as e:
                         if "closed" in str(e).lower():
