@@ -539,10 +539,10 @@ def launch_next_game_monitor():
             browser = None
             try:
                 browser = await p.firefox.launch(
-                    headless=True,
-                    executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",
-                    args=["--no-sandbox"]
-                )
+    headless=True,
+    # executable_path="/root/.cache/ms-playwright/firefox-1509/firefox/firefox",  # ← закомментируй
+    args=["--no-sandbox"]
+)
                 page = await browser.new_page()
                 await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(5000)
