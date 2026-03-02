@@ -25,4 +25,4 @@ RUN playwright install firefox
 COPY . .
 
 # Запускаем бота
-CMD ["python", "21_classic_bot.py"]
+CMD ["python", "bot.py"]
