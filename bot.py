@@ -347,6 +347,10 @@ async def get_next_table(page):
         link_element = await selected_table.query_selector('.dashboard-game-block__link')
         href = await link_element.get_attribute('href')
         
+        # Исправление: добавляем домен, если ссылка относительная
+        if href and not href.startswith('http'):
+            href = f"https://1xlite-7636770.bar{href}"
+        
         logging.info(f"✅ Выбран следующий стол: ID {selected_id}")
         return href, str(selected_id)
         
@@ -379,6 +383,9 @@ async def monitor_table(table_url, table_id):
         
         try:
             await page.goto(table_url, timeout=30000)
+            
+            # Даём странице время на загрузку
+            await page.wait_for_timeout(5000)
             
             cards_loaded = False
             wait_start = time.time()
