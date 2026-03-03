@@ -383,13 +383,14 @@ def edit_telegram_message(chat_id, message_id, text):
     return None
 
 def poll_game(table_url, game_number, game_start_time):
+    """Опрос игры - КАЖДЫЕ 2 СЕКУНДЫ"""
     msg_id = None
     last_state = None
     first_message_sent = False
     game_started = False
     start_time = time.time()
     
-    logging.info(f"🎮 Игра #{game_number}: начало опроса")
+    logging.info(f"🎮 Игра #{game_number}: НАЧАЛО ОПРОСА по URL: {table_url}")
     
     for attempt in range(MAX_POLL_ATTEMPTS):
         if not bot_running:
@@ -401,10 +402,12 @@ def poll_game(table_url, game_number, game_start_time):
         
         driver = None
         try:
+            # СОЗДАЕМ НОВЫЙ ДРАЙВЕР ДЛЯ КАЖДОЙ ПОПЫТКИ
             driver = create_driver()
             driver.get(table_url)
-            time.sleep(2)
+            time.sleep(2)  # Ждем загрузку
             
+            # ПОЛУЧАЕМ СОСТОЯНИЕ
             state = get_state_from_driver(driver)
             
             if not state:
@@ -416,33 +419,39 @@ def poll_game(table_url, game_number, game_start_time):
             has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
             is_finished = is_game_finished(driver)
             
+            # ЛОГИРУЕМ КАЖДУЮ ПОПЫТКУ
             logging.info(f"Игра #{game_number}: попытка {attempt+1}, карты: П:{len(state['p_cards'])} Д:{len(state['d_cards'])}, финиш: {is_finished}")
             
+            # ЕСЛИ ПОЯВИЛИСЬ КАРТЫ - ИГРА НАЧАЛАСЬ
             if has_cards and not game_started:
                 game_started = True
-                logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ!")
+                logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ! ПЕРВЫЙ РАЗ")
             
+            # ЕСЛИ ИГРА НАЧАЛАСЬ И СОСТОЯНИЕ ИЗМЕНИЛОСЬ - ОБНОВЛЯЕМ СООБЩЕНИЕ
             if game_started and state != last_state:
                 if not first_message_sent:
                     msg_text = format_message(game_number, state, is_final=False)
+                    logging.info(f"Игра #{game_number}: ОТПРАВЛЯЮ ПЕРВОЕ СООБЩЕНИЕ: {msg_text}")
                     sent = send_telegram_message(CHANNEL_ID, msg_text)
                     msg_id = sent.message_id
                     first_message_sent = True
-                    logging.info(f"Игра #{game_number}: ПЕРВОЕ СООБЩЕНИЕ")
                 else:
                     msg_text = format_message(game_number, state, is_final=False)
+                    logging.info(f"Игра #{game_number}: ОБНОВЛЯЮ СООБЩЕНИЕ: {msg_text}")
                     edit_telegram_message(CHANNEL_ID, msg_id, msg_text)
                 
                 last_state = state
             
+            # ЕСЛИ ИГРА ЗАВЕРШЕНА - ФИНАЛ
             if is_finished and game_started:
-                logging.info(f"Игра #{game_number}: ЗАВЕРШЕНА")
+                logging.info(f"Игра #{game_number}: ИГРА ЗАВЕРШЕНА!")
                 
                 time.sleep(1)
                 
                 final_state = get_state_from_driver(driver)
                 if final_state:
                     final_msg = format_message(game_number, final_state, is_final=True)
+                    logging.info(f"Игра #{game_number}: ОТПРАВЛЯЮ ФИНАЛ: {final_msg}")
                     
                     if msg_id:
                         edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
@@ -450,49 +459,60 @@ def poll_game(table_url, game_number, game_start_time):
                         sent = send_telegram_message(CHANNEL_ID, final_msg)
                     
                     game_data.add_completed_game(game_number, final_msg)
-                    logging.info(f"✅ Игра #{game_number}: ФИНАЛ ОТПРАВЛЕН")
                     driver.quit()
                     break
             
             driver.quit()
             
         except Exception as e:
-            logging.error(f"Игра #{game_number}: ошибка: {e}")
+            logging.error(f"Игра #{game_number}: ОШИБКА: {e}")
             if driver:
                 try:
                     driver.quit()
                 except:
                     pass
         
-        time.sleep(POLL_INTERVAL)
+        # ЖДЕМ 2 СЕКУНДЫ ДО СЛЕДУЮЩЕЙ ПОПЫТКИ
+        time.sleep(POLL_INterval)
     
     with lock:
         if game_number in active_games:
             del active_games[game_number]
     
-    logging.info(f"Игра #{game_number}: опрос завершен")
+    logging.info(f"Игра #{game_number}: ОПРОС ЗАВЕРШЕН")
 
 def launch_next_game():
+    """Запуск следующей игры - отдельный поток"""
     driver = None
+    table_url = None
+    game_number = None
+    game_time = None
+    
     try:
+        # СОЗДАЕМ ВРЕМЕННЫЙ ДРАЙВЕР ДЛЯ ПОИСКА СТОЛА
         driver = create_driver()
         driver.get(MAIN_URL)
         time.sleep(3)
         
-        next_game_time, _ = get_next_game_time()
-        game_number = get_game_number_by_time(next_game_time)
+        game_time, _ = get_next_game_time()
+        game_number = get_game_number_by_time(game_time)
         
+        # ИЩЕМ URL СТОЛА
         table_url = get_table_url(driver, game_number)
         
-        if not table_url or not game_number:
-            logging.warning("⚠️ Не удалось получить URL стола")
+        if not table_url:
+            logging.warning(f"⚠️ Не удалось получить URL для стола #{game_number}")
             return
         
+        logging.info(f"✅ Найден URL для стола #{game_number}: {table_url}")
+        
+        # ПРОВЕРЯЕМ ВРЕМЯ
         now = datetime.now()
-        if now < next_game_time - timedelta(seconds=2):
-            logging.info(f"Игра #{game_number}: еще рано (старт в {next_game_time.strftime('%H:%M:%S')})")
+        if now < game_time - timedelta(seconds=2):
+            logging.info(f"Игра #{game_number}: еще рано (старт в {game_time.strftime('%H:%M:%S')})")
             return
         
+        # ПРОВЕРЯЕМ НЕ ЗАПУЩЕНА ЛИ УЖЕ
         with lock:
             if game_number in active_games:
                 logging.info(f"Игра #{game_number} уже мониторится")
@@ -501,11 +521,12 @@ def launch_next_game():
                 logging.info(f"Игра #{game_number} уже завершена")
                 return
         
-        logging.info(f"🚀 Игра #{game_number}: запуск опроса")
+        # ЗАПУСКАЕМ ПОТОК ОПРОСА
+        logging.info(f"🚀 Игра #{game_number}: ЗАПУСК ПОТОКА ОПРОСА")
         
         thread = threading.Thread(
             target=poll_game, 
-            args=(table_url, game_number, next_game_time)
+            args=(table_url, game_number, game_time)
         )
         thread.daemon = True
         thread.start()
@@ -513,10 +534,11 @@ def launch_next_game():
         with lock:
             active_games[game_number] = {
                 'thread': thread,
-                'start_time': next_game_time
+                'start_time': game_time,
+                'url': table_url
             }
         
-        logging.info(f"✅ Игра #{game_number}: опрос запущен (активных: {len(active_games)}/{MAX_CONCURRENT_GAMES})")
+        logging.info(f"✅ Игра #{game_number}: ПОТОК ЗАПУЩЕН (активных: {len(active_games)}/{MAX_CONCURRENT_GAMES})")
         
     except Exception as e:
         logging.error(f"Ошибка при запуске опроса: {e}")
@@ -524,6 +546,7 @@ def launch_next_game():
         if driver:
             try:
                 driver.quit()
+                logging.info(f"Поисковый драйвер для #{game_number} закрыт")
             except:
                 pass
 
@@ -536,7 +559,7 @@ def clean_finished_games():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic ЗАПУЩЕН (Selenium)")
+    logging.info("🚀 Бот 21 Classic ЗАПУЩЕН (Selenium) - ПОЛНАЯ ВЕРСИЯ")
     logging.info(f"Максимум одновременных игр: {MAX_CONCURRENT_GAMES}")
     
     last_launch_time = 0
@@ -548,6 +571,7 @@ def monitor_loop():
             
             now = datetime.now()
             
+            # Запуск за 2 секунды до четной минуты
             if now.second >= 58 and now.minute % 2 == 1:
                 next_game_time, seconds_to_next = get_next_game_time()
                 
@@ -555,7 +579,7 @@ def monitor_loop():
                     game_number = get_game_number_by_time(next_game_time)
                     
                     if last_game_launched != game_number:
-                        logging.info(f"⏰ Запуск игры #{game_number}")
+                        logging.info(f"⏰ Запуск игры #{game_number} (до старта {seconds_to_next:.0f} сек)")
                         
                         if len(active_games) < MAX_CONCURRENT_GAMES:
                             launch_next_game()
