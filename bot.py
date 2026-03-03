@@ -494,10 +494,11 @@ async def monitor_game(browser, game_number, game_url, start_time):
         logging.error(f"Критическая ошибка в игре #{game_number}: {e}")
     finally:
         try:
-    await page.close()
-    await pool.release_browser(game_number)
+            await page.close()
         except:
             pass
+        await pool.release_browser(game_number)
+        logging.info(f"Игра #{game_number}: браузер освобожден")
         await pool.release_browser(game_number)
         logging.info(f"Игра #{game_number}: завершена, браузер освобожден")
 
