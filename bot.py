@@ -14,11 +14,11 @@ from telebot import apihelper
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/2092323-21-classics"
-MAX_CONCURRENT_GAMES = 5  # Максимум одновременных игр (можно увеличить, т.к. браузеры живут недолго)
+MAX_CONCURRENT_GAMES = 5
 DATA_FILE = "game_data.pkl"
 DATA_RETENTION_DAYS = 3
-POLL_INTERVAL = 2  # Интервал опроса в секундах
-MAX_POLL_ATTEMPTS = 30  # Максимум попыток опроса (30 * 2 = 60 секунд)
+POLL_INTERVAL = 2
+MAX_POLL_ATTEMPTS = 30
 # =====================
 
 apihelper.RETRY_ON_ERROR = True
@@ -26,23 +26,8 @@ apihelper.MAX_RETRIES = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# Словарь для мастей и значений карт
-SUIT_MAP = {
-    'suit-0': '♠️',
-    'suit-1': '♣️',
-    'suit-2': '♦️',
-    'suit-3': '♥️'
-}
-
-VALUE_MAP = {
-    'value-11': 'J',
-    'value-12': 'Q',
-    'value-13': 'K',
-    'value-14': 'A'
-}
-
 bot = telebot.TeleBot(TOKEN)
-active_games = {}  # game_number -> {thread, msg_id, last_state}
+active_games = {}
 lock = threading.Lock()
 bot_running = True
 
@@ -105,24 +90,32 @@ class GameData:
 game_data = GameData()
 
 def get_game_number_by_time(dt=None):
-    """Расчет номера игры по времени"""
+    """Расчет номера игры по времени (игры в четные минуты)"""
     if dt is None:
         dt = datetime.now()
     
     start_of_day = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     minutes_passed = (dt - start_of_day).total_seconds() / 60
-    game_number = int(minutes_passed // 2) + 1
+    
+    if dt.minute % 2 == 0:
+        game_number = int(minutes_passed // 2) + 1
+    else:
+        game_number = int((minutes_passed - 1) // 2) + 1
     
     return game_number
 
 def get_next_game_time():
-    """Возвращает время следующей игры"""
+    """Возвращает время следующей игры (в четную минуту)"""
     now = datetime.now()
     
-    next_game_minute = ((now.minute // 2) * 2 + 2) % 60
-    next_game_hour = now.hour
+    if now.minute % 2 == 0:
+        next_game_minute = now.minute + 2
+    else:
+        next_game_minute = now.minute + 1
     
-    if next_game_minute < now.minute:
+    next_game_hour = now.hour
+    if next_game_minute >= 60:
+        next_game_minute = next_game_minute % 60
         next_game_hour = (next_game_hour + 1) % 24
     
     next_game_time = now.replace(
@@ -132,7 +125,7 @@ def get_next_game_time():
         microsecond=0
     )
     
-    seconds_to_start = (next_game_time - now).total_seconds() - 30
+    seconds_to_start = (next_game_time - now).total_seconds()
     
     return next_game_time, max(0, seconds_to_start)
 
@@ -157,26 +150,8 @@ def determine_winner(p_score, d_score):
     except:
         return 'UNKNOWN'
 
-def determine_turn_by_state(state):
-    """Определение, чей ход на основе состояния игры"""
-    try:
-        p_score = int(state['p_score'])
-        p_cards_count = len(state['p_cards'])
-        d_cards_count = len(state['d_cards'])
-        
-        # Если у дилера еще нет карт или только одна карта, и игрок не закончил - ход игрока
-        if d_cards_count <= 1 and p_score < 21 and p_score < 17:
-            return 'player'
-        # Если игрок закончил (>=17 или перебор) и у дилера мало карт - ход дилера
-        elif (p_score >= 17 or p_score > 21) and d_cards_count <= 2:
-            return 'dealer'
-        # По умолчанию - None
-        return None
-    except:
-        return None
-
 def format_message(game_number, state, is_final=False):
-    """Форматирование сообщения для Telegram"""
+    """Форматирование сообщения для Telegram (БЕЗ СТРЕЛОЧЕК)"""
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
     
@@ -197,15 +172,8 @@ def format_message(game_number, state, is_final=False):
         
         return f"#N{game_number} {score_part}  #{winner} #T{total_score}"
     else:
-        # Определяем ход для отображения стрелочки
-        turn = determine_turn_by_state(state)
-        
-        if turn == 'player':
-            return f"#N{game_number} {state['p_score']}({p_cards}) 👈 {state['d_score']}({d_cards}) #T{total_score}"
-        elif turn == 'dealer':
-            return f"#N{game_number} {state['p_score']}({p_cards}) 👉 {state['d_score']}({d_cards}) #T{total_score}"
-        else:
-            return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
+        # ПРОСТОЙ ФОРМАТ БЕЗ СТРЕЛОЧЕК
+        return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
 async def extract_cards_from_container(container):
     """Извлечение карт из контейнера"""
@@ -257,19 +225,15 @@ async def extract_cards_from_container(container):
 async def get_state_from_page(page):
     """Получение состояния игры со страницы"""
     try:
-        # Получаем счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
-        # Получаем карты игрока
         player_cards_container = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
         player_cards = await extract_cards_from_container(player_cards_container)
         
-        # Получаем счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
-        # Получаем карты дилера
         dealer_cards_container = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-cards')
         dealer_cards = await extract_cards_from_container(dealer_cards_container)
         
@@ -286,21 +250,18 @@ async def get_state_from_page(page):
 async def is_game_finished(page):
     """Проверка, завершена ли игра"""
     try:
-        # Проверка через таймер
         timer_div = await page.query_selector('.ui-game-timer__label')
         if timer_div:
             text = await timer_div.text_content()
             if text and "Игра завершена" in text:
                 return True
         
-        # Проверка через статус
         status = await page.query_selector('.live-twenty-one-table-head__status')
         if status:
             text = await status.text_content()
             if 'Победа' in text or 'победил' in text.lower():
                 return True
         
-        # Проверка через кнопку повтора
         replay_btn = await page.query_selector('.ui-game-replay__btn')
         if replay_btn:
             return True
@@ -366,7 +327,6 @@ async def get_table_url(page, target_game_number):
         
         for table in tables:
             try:
-                # Пробуем получить номер игры
                 info_elem = await table.query_selector('.dashboard-game-info__additional-info')
                 if info_elem:
                     text = await info_elem.text_content()
@@ -400,7 +360,9 @@ async def poll_game(table_url, game_number, game_start_time):
     last_state = None
     first_message_sent = False
     game_finished = False
+    game_started = False
     start_time = time.time()
+    max_wait_for_start = 30
     
     logging.info(f"🎮 Игра #{game_number}: начало опроса (старт в {game_start_time.strftime('%H:%M:%S')})")
     
@@ -410,7 +372,6 @@ async def poll_game(table_url, game_number, game_start_time):
             
         browser = None
         try:
-            # Запускаем браузер только на время опроса
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
@@ -421,68 +382,69 @@ async def poll_game(table_url, game_number, game_start_time):
                 
                 await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
                 
-                # Получаем текущее состояние
                 state = await get_state_from_page(page)
                 
                 if not state:
-                    logging.warning(f"Игра #{game_number}: не удалось получить состояние, попытка {attempt + 1}")
+                    logging.warning(f"Игра #{game_number}: не удалось получить состояние")
                     continue
                 
-                # Проверяем, есть ли карты (игра началась)
                 has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
                 
-                # Проверяем, завершена ли игра
+                if has_cards and not game_started:
+                    game_started = True
+                    logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ! П:{len(state['p_cards'])} Д:{len(state['d_cards'])}")
+                
                 is_finished = await is_game_finished(page)
                 
-                # Логируем текущее состояние
-                cards_info = f"П:{len(state['p_cards'])} Д:{len(state['d_cards'])}"
-                logging.info(f"Игра #{game_number}: попытка {attempt + 1}, карты: {cards_info}, финиш: {is_finished}")
-                
-                # Если состояние изменилось, обновляем сообщение
-                if has_cards and state != last_state:
-                    if not first_message_sent:
-                        # Отправляем первое сообщение
-                        msg_text = format_message(game_number, state, is_final=False)
-                        sent = send_telegram_message(CHANNEL_ID, msg_text)
-                        msg_id = sent.message_id
-                        first_message_sent = True
-                        logging.info(f"Игра #{game_number}: первое сообщение отправлено")
-                    else:
-                        # Редактируем существующее
-                        msg_text = format_message(game_number, state, is_final=False)
-                        edit_telegram_message(CHANNEL_ID, msg_id, msg_text)
-                    
-                    last_state = state
-                
-                # Если игра завершена, отправляем финал и выходим
-                if is_finished and has_cards:
-                    logging.info(f"Игра #{game_number}: обнаружено завершение")
-                    
-                    # Даем время на финальное обновление
-                    await asyncio.sleep(1)
-                    
-                    # Обновляем состояние еще раз
-                    final_state = await get_state_from_page(page)
-                    
-                    if final_state:
-                        final_msg = format_message(game_number, final_state, is_final=True)
-                        
-                        if msg_id:
-                            edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
-                        else:
-                            sent = send_telegram_message(CHANNEL_ID, final_msg)
+                if game_started:
+                    if state != last_state:
+                        if not first_message_sent:
+                            msg_text = format_message(game_number, state, is_final=False)
+                            sent = send_telegram_message(CHANNEL_ID, msg_text)
                             msg_id = sent.message_id
+                            first_message_sent = True
+                            logging.info(f"Игра #{game_number}: ПЕРВОЕ СООБЩЕНИЕ: {msg_text}")
+                        else:
+                            msg_text = format_message(game_number, state, is_final=False)
+                            edit_telegram_message(CHANNEL_ID, msg_id, msg_text)
+                            logging.info(f"Игра #{game_number}: ОБНОВЛЕНО: {msg_text}")
                         
-                        game_data.add_completed_game(game_number, final_msg)
-                        game_data.update_last_number(game_number)
+                        last_state = state
+                    
+                    if is_finished:
+                        logging.info(f"Игра #{game_number}: обнаружено завершение")
+                        await asyncio.sleep(1)
                         
-                        logging.info(f"✅ Игра #{game_number}: ФИНАЛ ОТПРАВЛЕН")
-                        game_finished = True
-                        break
+                        final_state = await get_state_from_page(page)
+                        if final_state:
+                            final_msg = format_message(game_number, final_state, is_final=True)
+                            
+                            if msg_id:
+                                edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
+                            else:
+                                sent = send_telegram_message(CHANNEL_ID, final_msg)
+                            
+                            game_data.add_completed_game(game_number, final_msg)
+                            game_data.update_last_number(game_number)
+                            
+                            logging.info(f"✅ Игра #{game_number}: ФИНАЛ: {final_msg}")
+                            game_finished = True
+                            break
+                else:
+                    logging.info(f"Игра #{game_number}: ожидание начала... ({attempt + 1}/{MAX_POLL_ATTEMPTS})")
+                    
+                    if time.time() - game_start_time.timestamp() > max_wait_for_start:
+                        logging.warning(f"Игра #{game_number}: игра не началась через {max_wait_for_start} сек")
+                        # Пробуем обновить URL
+                        new_url = await get_table_url(page, game_number)
+                        if new_url and new_url != table_url:
+                            logging.info(f"Игра #{game_number}: получен новый URL, продолжаем")
+                            table_url = new_url
+                        else:
+                            break
                 
-                # Проверяем, не превышено ли общее время (защита от бесконечного цикла)
-                if time.time() - start_time > 120:  # 2 минуты максимум
-                    logging.warning(f"Игра #{game_number}: превышено общее время опроса")
+                if time.time() - start_time > 120:
+                    logging.warning(f"Игра #{game_number}: превышено общее время")
                     break
                 
         except Exception as e:
@@ -491,17 +453,16 @@ async def poll_game(table_url, game_number, game_start_time):
             if browser:
                 await browser.close()
         
-        # Ждем перед следующим опросом
         await asyncio.sleep(POLL_INTERVAL)
     
-    # Если игра не завершилась, но попытки кончились
-    if not game_finished and first_message_sent and last_state:
-        logging.warning(f"Игра #{game_number}: попытки кончились, отправляем последнее известное состояние как финал")
+    if not game_started and not first_message_sent:
+        logging.warning(f"Игра #{game_number}: игра не началась, сообщение не отправлено")
+    elif not game_finished and first_message_sent and last_state:
+        logging.warning(f"Игра #{game_number}: принудительный финал")
         final_msg = format_message(game_number, last_state, is_final=True)
         edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
         game_data.add_completed_game(game_number, final_msg)
     
-    # Очищаем данные игры
     with lock:
         if game_number in active_games:
             del active_games[game_number]
@@ -589,45 +550,61 @@ def clean_finished_games():
         for game_number in finished:
             del active_games[game_number]
             logging.info(f"Игра #{game_number} очищена")
-        
-        if finished:
-            logging.info(f"Очищено {len(finished)} завершенных игр")
+
+def check_stuck_games():
+    """Проверка зависших игр"""
+    with lock:
+        for game_number, game_info in list(active_games.items()):
+            if hasattr(game_info, 'start_time'):
+                elapsed = (datetime.now() - game_info['start_time']).total_seconds()
+                if elapsed > 120:
+                    logging.warning(f"Игра #{game_number} возможно зависла ({elapsed:.0f} сек)")
 
 def monitor_loop():
     """Основной цикл мониторинга"""
     global bot_running
     logging.info("🚀 Бот 21 Classic (polling mode) запущен")
+    logging.info("🎯 Игры начинаются в четные минуты (0,2,4,6...)")
     logging.info(f"Максимум одновременных игр: {MAX_CONCURRENT_GAMES}")
     logging.info(f"Интервал опроса: {POLL_INTERVAL} сек")
     
     last_launch_time = 0
+    last_game_launched = None
     
     while bot_running:
         try:
             clean_finished_games()
             
             now = datetime.now()
+            current_minute = now.minute
+            current_second = now.second
             
-            # Запускаем новые игры в нечетные минуты
-            if now.minute % 2 == 1:
+            if current_second == 0:
+                logging.info(f"⏰ Текущее время: {now.strftime('%H:%M:%S')}, минута: {current_minute}")
+            
+            if (current_minute % 2 == 1) and current_second >= 55:
                 next_game_time, seconds_to_next = get_next_game_time()
                 current_time = time.time()
                 
-                # Запускаем за 30 секунд до начала
-                if seconds_to_next <= 35 and (current_time - last_launch_time) > 25:
+                if seconds_to_next <= 10 and (current_time - last_launch_time) > 55:
                     game_number = get_game_number_by_time(next_game_time)
-                    logging.info(f"⏰ До игры #{game_number} осталось {seconds_to_next:.0f} сек")
                     
-                    # Проверяем, не превышен ли лимит одновременных игр
-                    if len(active_games) < MAX_CONCURRENT_GAMES:
-                        launch_next_game()
-                        last_launch_time = current_time
-                    else:
-                        logging.warning(f"Достигнут лимит одновременных игр ({MAX_CONCURRENT_GAMES})")
-                    
-                    time.sleep(40)
+                    if last_game_launched != game_number:
+                        logging.info(f"⏰ До игры #{game_number} осталось {seconds_to_next:.0f} сек")
+                        
+                        if len(active_games) < MAX_CONCURRENT_GAMES:
+                            launch_next_game()
+                            last_launch_time = current_time
+                            last_game_launched = game_number
+                        else:
+                            logging.warning(f"⚠️ Достигнут лимит одновременных игр ({MAX_CONCURRENT_GAMES})")
+                        
+                        time.sleep(5)
             
-            time.sleep(5)
+            if current_second % 10 == 0:
+                check_stuck_games()
+            
+            time.sleep(1)
             
         except KeyboardInterrupt:
             logging.info("Получен сигнал завершения")
@@ -635,7 +612,7 @@ def monitor_loop():
             break
         except Exception as e:
             logging.error(f"Ошибка в основном цикле: {e}")
-            time.sleep(10)
+            time.sleep(5)
     
     game_data.save_data()
     logging.info("Бот остановлен")
