@@ -192,12 +192,17 @@ def format_message(game_number, state, turn=None, is_final=False):
         else:
             return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
-async def extract_cards_from_container(container):
+async def extract_cards_from_container(page, player_type):
+    """Извлечение карт с полными селекторами"""
     cards = []
-    if not container:
-        return cards
     
-    card_elements = await container.query_selector_all('.scoreboard-card-games-card')
+    # Селектор в зависимости от игрока
+    if player_type == 'player':
+        selector = '.live-twenty-one__table .live-twenty-one-field .live-twenty-one-field-player:first-child .live-twenty-one-cards .scoreboard-card-games-card'
+    else:  # dealer
+        selector = '.live-twenty-one__table .live-twenty-one-field .live-twenty-one-field-player:last-child .live-twenty-one-cards .scoreboard-card-games-card'
+    
+    card_elements = await page.query_selector_all(selector)
     
     for el in card_elements:
         try:
@@ -240,17 +245,19 @@ async def extract_cards_from_container(container):
 
 async def get_state_fast(page):
     try:
+        # Счет игрока
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
         
-        player_cards_container = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
-        player_cards = await extract_cards_from_container(player_cards_container)
+        # Карты игрока через полный селектор
+        player_cards = await extract_cards_from_container(page, 'player')
         
+        # Счет дилера
         dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
         
-        dealer_cards_container = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-cards')
-        dealer_cards = await extract_cards_from_container(dealer_cards_container)
+        # Карты дилера через полный селектор
+        dealer_cards = await extract_cards_from_container(page, 'dealer')
         
         return {
             'p_score': player_score.strip(),
