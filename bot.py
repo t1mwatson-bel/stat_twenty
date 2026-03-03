@@ -167,7 +167,7 @@ def format_message(game_number, state, is_final=False):
         return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
 def create_driver():
-    """Создание драйвера с жестким путем к Chromium"""
+    """Создание драйвера с АВТОМАТИЧЕСКИМ определением версии Chromium"""
     
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -185,31 +185,36 @@ def create_driver():
     if os.path.exists(chromium_path):
         chrome_options.binary_location = chromium_path
         logging.info(f"Использую Chromium: {chromium_path}")
+        
+        # ПОЛУЧАЕМ ВЕРСИЮ CHROMIUM
+        try:
+            result = subprocess.run([chromium_path, "--version"], capture_output=True, text=True)
+            version_str = result.stdout.strip()
+            logging.info(f"Версия Chromium: {version_str}")
+            
+            # Парсим версию (пример: "Chromium 145.0.7632.116")
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)', version_str)
+            if match:
+                chrome_version = match.group(1)
+                logging.info(f"Определена версия: {chrome_version}")
+                # Качаем драйвер под эту версию
+                service = Service(ChromeDriverManager(driver_version=chrome_version).install())
+            else:
+                logging.warning("Не удалось определить версию, качаем последний драйвер")
+                service = Service(ChromeDriverManager().install())
+        except Exception as e:
+            logging.error(f"Ошибка при определении версии: {e}")
+            service = Service(ChromeDriverManager().install())
     else:
         logging.error(f"Chromium НЕ НАЙДЕН по пути: {chromium_path}")
-        # Пробуем найти через which
-        try:
-            result = subprocess.run(["which", "chromium"], capture_output=True, text=True)
-            if result.stdout.strip():
-                chrome_options.binary_location = result.stdout.strip()
-                logging.info(f"Найден через which: {result.stdout.strip()}")
-        except:
-            pass
+        service = Service(ChromeDriverManager().install())
     
     try:
-        service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(15)
         return driver
     except Exception as e:
         logging.error(f"Ошибка создания драйвера: {e}")
-        # Печатаем содержимое /usr/bin для отладки
-        try:
-            print("Содержимое /usr/bin:")
-            result = subprocess.run(["ls", "-la", "/usr/bin/ | grep chrom"], shell=True, capture_output=True, text=True)
-            print(result.stdout)
-        except:
-            pass
         raise e
 
 def extract_cards_from_container(driver, container_selector):
