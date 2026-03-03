@@ -3,7 +3,13 @@ import time
 import re
 import logging
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright  # <-- СИНХРОННАЯ ВЕРСИЯ
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 import telebot
 import pickle
 import os
@@ -160,69 +166,91 @@ def format_message(game_number, state, is_final=False):
     else:
         return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
-def extract_cards_from_container(container):
+def create_driver():
+    """Создание драйвера Chrome"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--single-process")
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.set_page_load_timeout(15)
+    
+    return driver
+
+def extract_cards_from_container(driver, container_selector):
+    """Извлечение карт из контейнера"""
     cards = []
-    if not container:
-        return cards
-    
-    card_elements = container.query_selector_all('.scoreboard-card-games-card')
-    
-    for el in card_elements:
-        try:
-            class_name = el.get_attribute('class') or ''
-            
-            if 'hidden' in class_name.lower() or 'face-down' in class_name.lower():
-                continue
-            
-            suit = '?'
-            if 'suit-0' in class_name:
-                suit = '♠️'
-            elif 'suit-1' in class_name:
-                suit = '♣️'
-            elif 'suit-2' in class_name:
-                suit = '♦️'
-            elif 'suit-3' in class_name:
-                suit = '♥️'
-            
-            val_match = re.search(r'value-(\d+)', class_name)
-            if val_match:
-                val = val_match.group(1)
-                if val == '11':
-                    value = 'J'
-                elif val == '12':
-                    value = 'Q'
-                elif val == '13':
-                    value = 'K'
-                elif val == '14':
-                    value = 'A'
+    try:
+        container = driver.find_element(By.CSS_SELECTOR, container_selector)
+        card_elements = container.find_elements(By.CSS_SELECTOR, '.scoreboard-card-games-card')
+        
+        for el in card_elements:
+            try:
+                class_name = el.get_attribute('class') or ''
+                
+                if 'hidden' in class_name.lower() or 'face-down' in class_name.lower():
+                    continue
+                
+                # Масть
+                suit = '?'
+                if 'suit-0' in class_name:
+                    suit = '♠️'
+                elif 'suit-1' in class_name:
+                    suit = '♣️'
+                elif 'suit-2' in class_name:
+                    suit = '♦️'
+                elif 'suit-3' in class_name:
+                    suit = '♥️'
+                
+                # Значение
+                val_match = re.search(r'value-(\d+)', class_name)
+                if val_match:
+                    val = val_match.group(1)
+                    if val == '11':
+                        value = 'J'
+                    elif val == '12':
+                        value = 'Q'
+                    elif val == '13':
+                        value = 'K'
+                    elif val == '14':
+                        value = 'A'
+                    else:
+                        value = val
                 else:
-                    value = val
-            else:
-                value = '?'
-            
-            cards.append(f"{value}{suit}")
-        except:
-            continue
+                    value = '?'
+                
+                cards.append(f"{value}{suit}")
+            except:
+                continue
+    except:
+        pass
     
     return cards
 
-def get_state_from_page(page):
+def get_state_from_driver(driver):
+    """Получение состояния игры"""
     try:
         # Счет игрока
-        player_score_el = page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
-        player_score = player_score_el.text_content() if player_score_el else '0'
+        player_score_el = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
+        player_score = player_score_el.text if player_score_el else '0'
         
         # Карты игрока
-        player_cards_container = page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
-        player_cards = extract_cards_from_container(player_cards_container)
+        player_cards_container = '.live-twenty-one-field-player:first-child .live-twenty-one-cards'
+        player_cards = extract_cards_from_container(driver, player_cards_container)
         
         # Счет дилера
-        dealer_score_el = page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
-        dealer_score = dealer_score_el.text_content() if dealer_score_el else '0'
+        dealer_score_el = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
+        dealer_score = dealer_score_el.text if dealer_score_el else '0'
         
         # Карты дилера
-        dealer_cards_container = page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-cards')
-        dealer_cards = extract_cards_from_container(dealer_cards_container)
+        dealer_cards_container = '.live-twenty-one-field-player:last-child .live-twenty-one-cards'
+        dealer_cards = extract_cards_from_container(driver, dealer_cards_container)
         
         return {
             'p_score': player_score.strip(),
@@ -231,21 +259,22 @@ def get_state_from_page(page):
             'd_cards': dealer_cards
         }
     except Exception as e:
-        logging.error(f"Ошибка в get_state_from_page: {e}")
+        logging.error(f"Ошибка в get_state_from_driver: {e}")
         return None
 
-def is_game_finished(page):
+def is_game_finished(driver):
+    """Проверка завершения игры"""
     try:
-        timer = page.query_selector('.live-twenty-one-table-footer__timer .ui-game-timer__label')
-        if timer:
-            text = timer.text_content()
-            if text and "Игра завершена" in text:
+        # Проверка через таймер
+        timers = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-table-footer__timer .ui-game-timer__label')
+        for timer in timers:
+            if timer.text and "Игра завершена" in timer.text:
                 return True
         
-        status = page.query_selector('.live-twenty-one-table-head__status')
-        if status:
-            text = status.text_content()
-            if 'Победа' in text:
+        # Проверка через статус
+        statuses = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-table-head__status')
+        for status in statuses:
+            if status.text and 'Победа' in status.text:
                 return True
         
         return False
@@ -253,27 +282,29 @@ def is_game_finished(page):
         logging.error(f"Ошибка в is_game_finished: {e}")
         return False
 
-def get_table_url(page, target_game_number):
+def get_table_url(driver, target_game_number):
+    """Получение URL стола"""
     try:
         logging.info(f"🔍 Ищем стол №{target_game_number}...")
         
-        page.wait_for_selector('.dashboard-game-block', timeout=30000)
-        page.wait_for_timeout(2000)
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
+        )
         
-        tables = page.query_selector_all('.dashboard-game-block')
+        tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
         logging.info(f"📊 Всего столов на странице: {len(tables)}")
         
         for table in tables:
             try:
-                info_elem = table.query_selector('.dashboard-game-info__additional-info')
+                info_elem = table.find_element(By.CSS_SELECTOR, '.dashboard-game-info__additional-info')
                 if info_elem:
-                    text = info_elem.text_content()
+                    text = info_elem.text
                     match = re.search(r'(\d+)', text)
                     if match:
                         current_number = int(match.group(1))
                         
                         if current_number == target_game_number:
-                            link_element = table.query_selector('.dashboard-game-block__link')
+                            link_element = table.find_element(By.CSS_SELECTOR, '.dashboard-game-block__link')
                             if link_element:
                                 href = link_element.get_attribute('href')
                                 if href and not href.startswith('http'):
@@ -333,7 +364,7 @@ def edit_telegram_message(chat_id, message_id, text):
     return None
 
 def poll_game(table_url, game_number, game_start_time):
-    """Синхронный опрос игры"""
+    """Опрос игры через Selenium"""
     
     msg_id = None
     last_state = None
@@ -350,72 +381,71 @@ def poll_game(table_url, game_number, game_start_time):
         if time.time() - start_time > 120:
             logging.warning(f"Игра #{game_number}: превышено время опроса")
             break
-            
+        
+        driver = None
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"]
-                )
-                page = browser.new_page()
-                page.set_default_timeout(15000)
+            driver = create_driver()
+            driver.get(table_url)
+            time.sleep(2)  # Ждем загрузку
+            
+            state = get_state_from_driver(driver)
+            
+            if not state:
+                logging.warning(f"Игра #{game_number}: не удалось получить состояние")
+                driver.quit()
+                time.sleep(POLL_INTERVAL)
+                continue
+            
+            has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
+            is_finished = is_game_finished(driver)
+            
+            logging.info(f"Игра #{game_number}: попытка {attempt+1}, карты: П:{len(state['p_cards'])} Д:{len(state['d_cards'])}, финиш: {is_finished}")
+            
+            if has_cards and not game_started:
+                game_started = True
+                logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ!")
+            
+            if game_started and state != last_state:
+                if not first_message_sent:
+                    msg_text = format_message(game_number, state, is_final=False)
+                    sent = send_telegram_message(CHANNEL_ID, msg_text)
+                    msg_id = sent.message_id
+                    first_message_sent = True
+                    logging.info(f"Игра #{game_number}: ПЕРВОЕ СООБЩЕНИЕ")
+                else:
+                    msg_text = format_message(game_number, state, is_final=False)
+                    edit_telegram_message(CHANNEL_ID, msg_id, msg_text)
                 
-                page.goto(table_url, timeout=15000, wait_until="domcontentloaded")
-                page.wait_for_timeout(1000)
+                last_state = state
+            
+            if is_finished and game_started:
+                logging.info(f"Игра #{game_number}: ЗАВЕРШЕНА")
                 
-                state = get_state_from_page(page)
+                time.sleep(1)
                 
-                if not state:
-                    logging.warning(f"Игра #{game_number}: не удалось получить состояние")
-                    browser.close()
-                    time.sleep(POLL_INTERVAL)
-                    continue
-                
-                has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
-                is_finished = is_game_finished(page)
-                
-                logging.info(f"Игра #{game_number}: попытка {attempt+1}, карты: П:{len(state['p_cards'])} Д:{len(state['d_cards'])}, финиш: {is_finished}")
-                
-                if has_cards and not game_started:
-                    game_started = True
-                    logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ!")
-                
-                if game_started and state != last_state:
-                    if not first_message_sent:
-                        msg_text = format_message(game_number, state, is_final=False)
-                        sent = send_telegram_message(CHANNEL_ID, msg_text)
-                        msg_id = sent.message_id
-                        first_message_sent = True
-                        logging.info(f"Игра #{game_number}: ПЕРВОЕ СООБЩЕНИЕ")
+                final_state = get_state_from_driver(driver)
+                if final_state:
+                    final_msg = format_message(game_number, final_state, is_final=True)
+                    
+                    if msg_id:
+                        edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
                     else:
-                        msg_text = format_message(game_number, state, is_final=False)
-                        edit_telegram_message(CHANNEL_ID, msg_id, msg_text)
+                        sent = send_telegram_message(CHANNEL_ID, final_msg)
                     
-                    last_state = state
-                
-                if is_finished and game_started:
-                    logging.info(f"Игра #{game_number}: ЗАВЕРШЕНА")
-                    
-                    time.sleep(1)
-                    
-                    final_state = get_state_from_page(page)
-                    if final_state:
-                        final_msg = format_message(game_number, final_state, is_final=True)
-                        
-                        if msg_id:
-                            edit_telegram_message(CHANNEL_ID, msg_id, final_msg)
-                        else:
-                            sent = send_telegram_message(CHANNEL_ID, final_msg)
-                        
-                        game_data.add_completed_game(game_number, final_msg)
-                        logging.info(f"✅ Игра #{game_number}: ФИНАЛ ОТПРАВЛЕН")
-                        browser.close()
-                        break
-                
-                browser.close()
-                
+                    game_data.add_completed_game(game_number, final_msg)
+                    logging.info(f"✅ Игра #{game_number}: ФИНАЛ ОТПРАВЛЕН")
+                    driver.quit()
+                    break
+            
+            driver.quit()
+            
         except Exception as e:
             logging.error(f"Игра #{game_number}: ошибка: {e}")
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
         
         time.sleep(POLL_INTERVAL)
     
@@ -427,60 +457,60 @@ def poll_game(table_url, game_number, game_start_time):
 
 def launch_next_game():
     """Запуск следующей игры"""
+    driver = None
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"]
-            )
-            page = browser.new_page()
-            
-            page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-            
-            next_game_time, _ = get_next_game_time()
-            game_number = get_game_number_by_time(next_game_time)
-            
-            table_url = get_table_url(page, game_number)
-            browser.close()
-            
-            if not table_url or not game_number:
-                logging.warning("⚠️ Не удалось получить URL стола")
+        driver = create_driver()
+        driver.get(MAIN_URL)
+        time.sleep(3)
+        
+        next_game_time, _ = get_next_game_time()
+        game_number = get_game_number_by_time(next_game_time)
+        
+        table_url = get_table_url(driver, game_number)
+        
+        if not table_url or not game_number:
+            logging.warning("⚠️ Не удалось получить URL стола")
+            return
+        
+        # Проверяем время
+        now = datetime.now()
+        if now < next_game_time - timedelta(seconds=2):
+            logging.info(f"Игра #{game_number}: еще рано (старт в {next_game_time.strftime('%H:%M:%S')})")
+            return
+        
+        with lock:
+            if game_number in active_games:
+                logging.info(f"Игра #{game_number} уже мониторится")
                 return
-            
-            # Проверяем время
-            now = datetime.now()
-            if now < next_game_time - timedelta(seconds=2):
-                logging.info(f"Игра #{game_number}: еще рано (старт в {next_game_time.strftime('%H:%M:%S')})")
+            if game_data.is_game_completed(game_number):
+                logging.info(f"Игра #{game_number} уже завершена")
                 return
-            
-            with lock:
-                if game_number in active_games:
-                    logging.info(f"Игра #{game_number} уже мониторится")
-                    return
-                if game_data.is_game_completed(game_number):
-                    logging.info(f"Игра #{game_number} уже завершена")
-                    return
-            
-            logging.info(f"🚀 Игра #{game_number}: запуск опроса")
-            
-            thread = threading.Thread(
-                target=poll_game, 
-                args=(table_url, game_number, next_game_time)
-            )
-            thread.daemon = True
-            thread.start()
-            
-            with lock:
-                active_games[game_number] = {
-                    'thread': thread,
-                    'start_time': next_game_time
-                }
-            
-            logging.info(f"✅ Игра #{game_number}: опрос запущен (активных: {len(active_games)}/{MAX_CONCURRENT_GAMES})")
-            
+        
+        logging.info(f"🚀 Игра #{game_number}: запуск опроса")
+        
+        thread = threading.Thread(
+            target=poll_game, 
+            args=(table_url, game_number, next_game_time)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        with lock:
+            active_games[game_number] = {
+                'thread': thread,
+                'start_time': next_game_time
+            }
+        
+        logging.info(f"✅ Игра #{game_number}: опрос запущен (активных: {len(active_games)}/{MAX_CONCURRENT_GAMES})")
+        
     except Exception as e:
         logging.error(f"Ошибка при запуске опроса: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
 
 def clean_finished_games():
     with lock:
@@ -491,7 +521,7 @@ def clean_finished_games():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic ЗАПУЩЕН (синхронный режим)")
+    logging.info("🚀 Бот 21 Classic ЗАПУЩЕН (Selenium)")
     logging.info(f"Максимум одновременных игр: {MAX_CONCURRENT_GAMES}")
     
     last_launch_time = 0
