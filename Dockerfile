@@ -1,10 +1,23 @@
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+FROM python:3.10-slim
 
-WORKDIR /app
+# Устанавливаем Chromium и зависимости
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
 
+# Устанавливаем Python зависимости
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py .
+# Копируем код бота
+COPY . .
 
+# Указываем путь к Chromium
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
+
+# Запускаем бота
 CMD ["python", "bot.py"]
