@@ -15,6 +15,32 @@ import telebot
 import pickle
 from telebot import apihelper
 
+# ===== ПОИСК CHROMIUM =====
+print("="*50)
+print("ПОИСК CHROMIUM НА СИСТЕМЕ:")
+try:
+    result = subprocess.run(["find", "/nix/store", "-name", "chromium", "-type", "f"], 
+                           capture_output=True, text=True, timeout=10)
+    print("В /nix/store найдено:")
+    print(result.stdout if result.stdout else "ничего не найдено")
+except:
+    print("Ошибка поиска в /nix/store")
+
+try:
+    result2 = subprocess.run(["which", "chromium"], capture_output=True, text=True, timeout=5)
+    print("which chromium:", result2.stdout.strip() if result2.stdout else "не найден")
+except:
+    print("which chromium: ошибка")
+
+try:
+    result3 = subprocess.run(["which", "chromium-browser"], capture_output=True, text=True, timeout=5)
+    print("which chromium-browser:", result3.stdout.strip() if result3.stdout else "не найден")
+except:
+    pass
+
+print("="*50)
+# ===========================
+
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
@@ -179,33 +205,53 @@ def create_driver():
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-setuid-sandbox")
     
-    # Ищем Chromium (не Chrome!)
-    chromium_paths = [
-        "/nix/store/*/bin/chromium",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-    ]
+    # Пробуем найти Chromium
+    chromium_path = None
     
-    chromium_found = False
-    for path_pattern in chromium_paths:
+    # Сначала через which
+    try:
+        result = subprocess.run(["which", "chromium"], capture_output=True, text=True)
+        if result.stdout.strip():
+            chromium_path = result.stdout.strip()
+            logging.info(f"Найден Chromium через which: {chromium_path}")
+    except:
+        pass
+    
+    # Потом через find в nix/store
+    if not chromium_path:
         try:
-            if "*" in path_pattern:
-                matches = glob.glob(path_pattern)
-                if matches:
-                    chrome_options.binary_location = matches[0]
-                    logging.info(f"Найден Chromium: {matches[0]}")
-                    chromium_found = True
-                    break
-            else:
-                if os.path.exists(path_pattern):
-                    chrome_options.binary_location = path_pattern
-                    logging.info(f"Найден Chromium: {path_pattern}")
-                    chromium_found = True
-                    break
+            result = subprocess.run(["find", "/nix/store", "-name", "chromium", "-type", "f", "-print", "-quit"], 
+                                   capture_output=True, text=True)
+            if result.stdout.strip():
+                chromium_path = result.stdout.strip()
+                logging.info(f"Найден Chromium в nix/store: {chromium_path}")
         except:
-            continue
+            pass
     
-    if not chromium_found:
+    # Стандартные пути
+    if not chromium_path:
+        standard_paths = [
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/nix/store/*/bin/chromium"
+        ]
+        
+        for path in standard_paths:
+            if "*" in path:
+                matches = glob.glob(path)
+                if matches:
+                    chromium_path = matches[0]
+                    logging.info(f"Найден Chromium по шаблону: {chromium_path}")
+                    break
+            elif os.path.exists(path):
+                chromium_path = path
+                logging.info(f"Найден Chromium: {path}")
+                break
+    
+    if chromium_path:
+        chrome_options.binary_location = chromium_path
+        logging.info(f"Использую Chromium: {chromium_path}")
+    else:
         logging.warning("Chromium не найден, пробуем без указания пути")
     
     try:
