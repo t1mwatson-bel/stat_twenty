@@ -10,7 +10,7 @@ import pickle
 import os
 from telebot import apihelper
 
-# ===== ПУЛ БРАУЗЕРОВ (прямо здесь) =====
+# ===== ПУЛ БРАУЗЕРОВ =====
 class BrowserPool:
     def __init__(self, size=3):
         self.size = size
@@ -22,15 +22,26 @@ class BrowserPool:
         self.running = True
     
     async def start(self):
-        self.playwright = await async_playwright().start()
-        for i in range(self.size):
-            browser = await self.playwright.chromium.launch(
-                headless=True,
-                args=["--no-sandbox"]
-            )
-            self.browsers.append(browser)
-            self.available.append(browser)
-        print(f"✅ Запущено {self.size} браузеров")
+        """Запускает пул и создает браузеры"""
+        try:
+            self.playwright = await async_playwright().start()
+            for i in range(self.size):
+                try:
+                    browser = await self.playwright.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox"]
+                    )
+                    self.browsers.append(browser)
+                    self.available.append(browser)
+                    logging.info(f"✅ Браузер {i+1}/{self.size} запущен")
+                except Exception as e:
+                    logging.error(f"Ошибка запуска браузера {i+1}: {e}")
+            
+            logging.info(f"✅ Всего запущено: {len(self.browsers)}/{self.size} браузеров")
+            return len(self.browsers) > 0
+        except Exception as e:
+            logging.error(f"Ошибка запуска пула: {e}")
+            return False
     
     async def get_browser(self, game_number):
         with self.lock:
@@ -45,16 +56,19 @@ class BrowserPool:
             if game_number in self.busy:
                 browser = self.busy.pop(game_number)
                 self.available.append(browser)
-                print(f"🔄 Браузер для игры #{game_number} освобожден")
+                logging.info(f"🔄 Браузер для игры #{game_number} освобожден")
     
     async def stop_all(self):
         self.running = False
         for browser in self.browsers:
-            await browser.close()
+            try:
+                await browser.close()
+            except:
+                pass
         if self.playwright:
             await self.playwright.stop()
-        print("🛑 Все браузеры закрыты")
-# ======================================
+        logging.info("🛑 Все браузеры закрыты")
+# =========================
 
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
@@ -190,11 +204,9 @@ def format_message(game_number, state, turn=None, is_final=False):
         return f"#N{game_number} {score_part}  #{winner} #T{total_score}"
     else:
         if turn == 'player':
-            return f"#N{game_number} {state['p_score']}({p_cards}) 👈 {state['d_score']}({d_cards}) #T{total_score}"
-        elif turn == 'dealer':
-            return f"#N{game_number} {state['p_score']}({p_cards}) 👉 {state['d_score']}({d_cards}) #T{total_score}"
-        else:
-            return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
+    return f"#N{game_number} {state['p_score']}({p_cards}) ⬅️ {state['d_score']}({d_cards}) #T{total_score}"
+elif turn == 'dealer':
+    return f"#N{game_number} {state['p_score']}({p_cards}) ➡️ {state['d_score']}({d_cards}) #T{total_score}"
 
 async def extract_cards_from_container(container):
     cards = []
@@ -429,9 +441,12 @@ async def monitor_game(browser, game_number, game_url, start_time):
                     
                     final_state = None
                     for attempt in range(15):
-                        final_state = await get_state_fast(page)
-                        if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
-                            break
+                        try:
+                            final_state = await get_state_fast(page)
+                            if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
+                                break
+                        except:
+                            pass
                         await asyncio.sleep(0.3)
                     
                     if final_state:
@@ -468,66 +483,96 @@ async def monitor_game(browser, game_number, game_url, start_time):
                 await asyncio.sleep(0.3)
                 
             except Exception as e:
+                if "closed" in str(e).lower():
+                    break
                 logging.error(f"Ошибка в игре #{game_number}: {e}")
                 await asyncio.sleep(1)
     
+    except Exception as e:
+        logging.error(f"Критическая ошибка в игре #{game_number}: {e}")
     finally:
-        await page.close()
+        try:
+            await page.close()
+        except:
+            pass
         await pool.release_browser(game_number)
-        logging.info(f"Игра #{game_number}: страница закрыта, браузер освобожден")
+        logging.info(f"Игра #{game_number}: завершена, браузер освобожден")
 
 async def watcher():
-    global pool
+    global pool, bot_running
+    logging.info("👀 Наблюдатель запускается...")
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
-        
-        while bot_running:
-            try:
-                await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
-                tables = await get_active_tables(page)
+    retry_count = 0
+    max_retries = 10
+    
+    while bot_running and retry_count < max_retries:
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+                page = await browser.new_page()
+                logging.info("👀 Наблюдатель: браузер запущен")
                 
-                for table in tables:
-                    game_num = table['number']
-                    
-                    if table['completed']:
-                        continue
-                    
-                    with lock:
-                        if game_num in active_games:
-                            continue
-                        if game_data.is_game_completed(game_num):
-                            continue
-                    
-                    timer = table['timer']
-                    if timer and timer != "00:00" and ':' in timer:
-                        minutes, seconds = map(int, timer.split(':'))
-                        total_seconds = minutes * 60 + seconds
+                # Сбрасываем счетчик ошибок при успешном запуске
+                retry_count = 0
+                
+                while bot_running:
+                    try:
+                        await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
+                        tables = await get_active_tables(page)
                         
-                        if total_seconds <= 40 and total_seconds > 0:
-                            browser_worker = await pool.get_browser(game_num)
+                        for table in tables:
+                            game_num = table['number']
                             
-                            if browser_worker:
-                                logging.info(f"🎯 Игра #{game_num}: старт через {total_seconds} сек")
-                                
-                                with lock:
-                                    active_games[game_num] = True
-                                
-                                start_time = time.time() + total_seconds
-                                asyncio.create_task(
-                                    monitor_game(browser_worker, game_num, table['url'], start_time)
-                                )
-                            else:
-                                logging.warning(f"⚠️ Нет свободных браузеров для игры #{game_num}")
+                            if table['completed']:
+                                continue
+                            
+                            with lock:
+                                if game_num in active_games:
+                                    continue
+                                if game_data.is_game_completed(game_num):
+                                    continue
+                            
+                            timer = table['timer']
+                            if timer and timer != "00:00" and ':' in timer:
+                                try:
+                                    minutes, seconds = map(int, timer.split(':'))
+                                    total_seconds = minutes * 60 + seconds
+                                    
+                                    if total_seconds <= 40 and total_seconds > 0:
+                                        browser_worker = await pool.get_browser(game_num)
+                                        
+                                        if browser_worker:
+                                            logging.info(f"🎯 Игра #{game_num}: старт через {total_seconds} сек")
+                                            
+                                            with lock:
+                                                active_games[game_num] = True
+                                            
+                                            start_time = time.time() + total_seconds
+                                            asyncio.create_task(
+                                                monitor_game(browser_worker, game_num, table['url'], start_time)
+                                            )
+                                        else:
+                                            logging.warning(f"⚠️ Нет свободных браузеров для игры #{game_num}")
+                                except:
+                                    pass
+                        
+                        await asyncio.sleep(5)
+                        
+                    except Exception as e:
+                        logging.error(f"Ошибка наблюдателя: {e}")
+                        await asyncio.sleep(10)
+                        break  # перезапустим браузер
                 
-                await asyncio.sleep(5)
+                await browser.close()
+                logging.info("👀 Наблюдатель: браузер закрыт, перезапуск...")
                 
-            except Exception as e:
-                logging.error(f"Ошибка наблюдателя: {e}")
-                await asyncio.sleep(10)
-        
-        await browser.close()
+        except Exception as e:
+            logging.error(f"Критическая ошибка наблюдателя: {e}")
+            retry_count += 1
+            logging.info(f"Попытка перезапуска {retry_count}/{max_retries}")
+            await asyncio.sleep(30)
+    
+    logging.error("👀 Наблюдатель остановлен после 10 попыток")
 
 def run_watcher():
     asyncio.run(watcher())
@@ -537,20 +582,51 @@ def main():
     
     logging.info("🚀 Запуск бота с пулом браузеров")
     
+    # Сначала создаем пул
     pool = BrowserPool(size=3)
-    asyncio.run(pool.start())
+    try:
+        # Запускаем пул в отдельном цикле событий
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        success = loop.run_until_complete(pool.start())
+        loop.close()
+        
+        if not success:
+            logging.error("❌ Не удалось запустить пул браузеров")
+            return
+        logging.info("✅ Пул браузеров запущен")
+    except Exception as e:
+        logging.error(f"❌ Ошибка запуска пула: {e}")
+        return
     
+    # Потом запускаем наблюдателя
     watcher_thread = threading.Thread(target=run_watcher)
     watcher_thread.daemon = True
     watcher_thread.start()
+    logging.info("👀 Наблюдатель запущен в отдельном потоке")
     
+    # Основной цикл
     try:
         while bot_running:
             time.sleep(10)
+            # Проверяем, жив ли наблюдатель
+            if not watcher_thread.is_alive():
+                logging.error("👀 Наблюдатель умер, перезапускаем...")
+                watcher_thread = threading.Thread(target=run_watcher)
+                watcher_thread.daemon = True
+                watcher_thread.start()
     except KeyboardInterrupt:
         logging.info("Получен сигнал завершения")
         bot_running = False
-        asyncio.run(pool.stop_all())
+    
+    # Останавливаем пул
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(pool.stop_all())
+        loop.close()
+    except:
+        pass
     
     game_data.save_data()
     logging.info("Бот остановлен")
