@@ -332,42 +332,98 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
                 return None
     return None
 
-async def get_table_url(page, game_number):
-    """Получение URL стола по номеру игры"""
+async def get_table_url(page, target_game_number):
+    """УЛУЧШЕННАЯ: Получение URL стола по номеру игры"""
     try:
-        logging.info(f"Ищем стол №{game_number}...")
+        logging.info(f"🔍 Ищем стол №{target_game_number}...")
         
+        # Ждем загрузки столов
         await page.wait_for_selector('.dashboard-game-block', timeout=30000)
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)  # Увеличил задержку для полной загрузки
         
+        # Пробуем найти через все возможные селекторы
         tables = await page.query_selector_all('.dashboard-game-block')
-        logging.info(f"Всего столов: {len(tables)}")
+        logging.info(f"📊 Всего столов на странице: {len(tables)}")
         
+        # Сначала собираем все номера столов для отладки
+        all_numbers = []
         for table in tables:
             try:
+                # Пробуем разные селекторы для номера игры
+                number = None
+                
+                # Селектор 1: дополнительная информация
                 info_elem = await table.query_selector('.dashboard-game-info__additional-info')
                 if info_elem:
                     text = await info_elem.text_content()
                     match = re.search(r'(\d+)', text)
                     if match:
-                        current_number = int(match.group(1))
+                        number = int(match.group(1))
+                
+                # Селектор 2: прямой селектор номера
+                if not number:
+                    num_elem = await table.query_selector('.dashboard-game-info__number')
+                    if num_elem:
+                        text = await num_elem.text_content()
+                        match = re.search(r'#?(\d+)', text)
+                        if match:
+                            number = int(match.group(1))
+                
+                # Селектор 3: любой текст с номером
+                if not number:
+                    all_text = await table.text_content()
+                    match = re.search(r'#?(\d+)', all_text)
+                    if match:
+                        number = int(match.group(1))
+                
+                if number:
+                    all_numbers.append(number)
+                    
+                    if number == target_game_number:
+                        # Нашли нужный стол
+                        link_element = await table.query_selector('.dashboard-game-block__link')
+                        if not link_element:
+                            link_element = await table.query_selector('a')
                         
-                        if current_number == game_number:
-                            link_element = await table.query_selector('.dashboard-game-block__link')
-                            if link_element:
-                                href = await link_element.get_attribute('href')
-                                if href and not href.startswith('http'):
+                        if link_element:
+                            href = await link_element.get_attribute('href')
+                            if href:
+                                if not href.startswith('http'):
                                     href = f"https://1xlite-7636770.bar{href}"
                                 
-                                logging.info(f"Найден нужный стол #{current_number}")
+                                logging.info(f"✅ Найден стол #{number}, URL получен")
                                 return href
                         else:
-                            logging.info(f"Стол #{current_number} не подходит, ищем #{game_number}")
-                    
+                            logging.warning(f"⚠️ Стол #{number} найден, но нет ссылки")
+                            
             except Exception as e:
                 continue
         
-        logging.warning(f"Стол #{game_number} не найден")
+        logging.info(f"📋 Доступные номера столов: {sorted(all_numbers)}")
+        
+        # Если не нашли точный номер, пробуем найти ближайший больший
+        if all_numbers:
+            future_numbers = [n for n in all_numbers if n > target_game_number]
+            if future_numbers:
+                closest = min(future_numbers)
+                logging.warning(f"⚠️ Точный номер {target_game_number} не найден. Используем #{closest}")
+                
+                # Ищем этот стол
+                for table in tables:
+                    try:
+                        text = await table.text_content()
+                        if str(closest) in text:
+                            link_element = await table.query_selector('.dashboard-game-block__link') or await table.query_selector('a')
+                            if link_element:
+                                href = await link_element.get_attribute('href')
+                                if href:
+                                    if not href.startswith('http'):
+                                        href = f"https://1xlite-7636770.bar{href}"
+                                    return href
+                    except:
+                        continue
+        
+        logging.warning(f"❌ Стол #{target_game_number} не найден")
         return None
         
     except Exception as e:
@@ -384,33 +440,37 @@ async def monitor_table(table_url, game_number, game_start_time):
     game_finished = False
     first_message_sent = False
     start_time = time.time()
-    max_duration = 240
+    max_duration = 300  # Увеличил до 5 минут
     
     # Время реального старта игры
     game_real_start = game_start_time.timestamp()
     ignore_finish_until = game_real_start + 15
     
-    logging.info(f"Стол #{game_number}: начало мониторинга (игра в {game_start_time.strftime('%H:%M:%S')})")
+    logging.info(f"🎮 Стол #{game_number}: начало мониторинга (игра в {game_start_time.strftime('%H:%M:%S')})")
     
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox"]
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
             )
             page = await browser.new_page()
+            
+            # Устанавливаем таймаут навигации
+            page.set_default_timeout(60000)
             
             await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
             logging.info(f"Стол #{game_number}: страница загружена")
             
-            # Ждем появления карт
-            for i in range(10):
+            # Улучшенное ожидание появления карт
+            for i in range(20):  # Увеличил до 20 попыток
                 state = await get_state_fast(page)
                 if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
                     logging.info(f"Стол #{game_number}: карты появились через {i+1} сек")
                     break
                 await asyncio.sleep(1)
             
+            # Основной цикл мониторинга
             while not game_finished and (time.time() - start_time) < max_duration:
                 try:
                     if page.is_closed():
@@ -418,24 +478,27 @@ async def monitor_table(table_url, game_number, game_start_time):
                     
                     current_time = time.time()
                     
-                    if current_time < ignore_finish_until:
-                        is_finished = False
-                    else:
+                    # Проверка завершения игры
+                    if current_time >= ignore_finish_until:
                         is_finished = await is_game_truly_finished(page)
+                    else:
+                        is_finished = False
                     
                     if is_finished and not game_finished:
                         game_finished = True
                         logging.info(f"Стол #{game_number}: игра завершена")
                         
-                        await asyncio.sleep(2)
+                        # Даем время на финальное обновление
+                        await asyncio.sleep(3)
                         
+                        # Получаем финальное состояние
                         final_state = None
-                        for attempt in range(15):
+                        for attempt in range(20):
                             final_state = await get_state_fast(page)
                             if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
                                 logging.info(f"Стол #{game_number}: финал получен с {attempt+1} попытки")
                                 break
-                            await asyncio.sleep(0.3)
+                            await asyncio.sleep(0.5)
                         
                         if final_state:
                             final_msg = format_message(game_number, final_state, is_final=True)
@@ -449,10 +512,10 @@ async def monitor_table(table_url, game_number, game_start_time):
                             game_data.add_completed_game(game_number, final_msg)
                             game_data.update_last_number(game_number)
                             
-                            logging.info(f"Стол #{game_number}: ФИНАЛ ОТПРАВЛЕН: {final_msg}")
+                            logging.info(f"✅ Стол #{game_number}: ФИНАЛ ОТПРАВЛЕН: {final_msg}")
                             break
                         else:
-                            logging.error(f"Стол #{game_number}: НЕ УДАЛОСЬ ПОЛУЧИТЬ ФИНАЛ!!!")
+                            logging.error(f"❌ Стол #{game_number}: НЕ УДАЛОСЬ ПОЛУЧИТЬ ФИНАЛ!!!")
                     
                     elif not game_finished:
                         state = await get_state_fast(page)
@@ -473,7 +536,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                                 
                                 last_state = state
                     
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.5)  # Увеличил интервал
                     
                 except Exception as e:
                     if "closed" in str(e).lower():
@@ -483,7 +546,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                         await asyncio.sleep(1)
             
             if not game_finished:
-                logging.warning(f"Стол #{game_number}: превышено время ожидания ({max_duration} сек)")
+                logging.warning(f"⚠️ Стол #{game_number}: превышено время ожидания ({max_duration} сек)")
             
     except Exception as e:
         logging.error(f"Критическая ошибка стола #{game_number}: {e}")
@@ -515,11 +578,13 @@ def launch_next_game_monitor():
             try:
                 browser = await p.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox"]
+                    args=["--no-sandbox", "--disable-dev-shm-usage"]
                 )
                 page = await browser.new_page()
+                page.set_default_timeout(60000)
+                
                 await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(5000)  # Увеличил задержку
                 
                 next_game_time, _ = get_next_game_time()
                 game_number = get_game_number_by_time(next_game_time)
@@ -538,7 +603,7 @@ def launch_next_game_monitor():
         table_url, game_number, game_time = asyncio.run(get_table())
         
         if not table_url or not game_number:
-            logging.warning("Не удалось получить URL стола")
+            logging.warning("⚠️ Не удалось получить URL стола")
             return
         
         with lock:
@@ -549,7 +614,7 @@ def launch_next_game_monitor():
                 logging.info(f"Игра #{game_number} уже завершена, пропускаем")
                 return
         
-        logging.info(f"Игра #{game_number}: запуск мониторинга (старт в {game_time.strftime('%H:%M:%S')})")
+        logging.info(f"🚀 Игра #{game_number}: запуск мониторинга (старт в {game_time.strftime('%H:%M:%S')})")
         
         thread = threading.Thread(
             target=run_async_monitor, 
@@ -561,7 +626,7 @@ def launch_next_game_monitor():
         with lock:
             active_tables[game_number] = thread
         
-        logging.info(f"Игра #{game_number}: мониторинг запущен (активных: {len(active_tables)}/{MAX_BROWSERS})")
+        logging.info(f"✅ Игра #{game_number}: мониторинг запущен (активных: {len(active_tables)}/{MAX_BROWSERS})")
             
     except Exception as e:
         logging.error(f"Ошибка при запуске монитора: {e}")
@@ -583,23 +648,33 @@ def monitor_loop():
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_launch_time = 0
+    missed_games = []
     
     while bot_running:
         try:
             clean_threads()
             
-            # Проверяем только в нечетные минуты
             now = datetime.now()
+            
+            # Проверяем запуск новых игр
             if now.minute % 2 == 1:  # нечетная минута
                 next_game_time, seconds_to_next = get_next_game_time()
                 current_time = time.time()
                 
-                if seconds_to_next <= 30 and (current_time - last_launch_time) > 25:
+                # Запускаем за 30 секунд до начала
+                if seconds_to_next <= 35 and (current_time - last_launch_time) > 25:
                     game_number = get_game_number_by_time(next_game_time)
-                    logging.info(f"До игры #{game_number} осталось {seconds_to_next:.0f} сек")
+                    
+                    # Проверяем, не пропущена ли игра
+                    if game_number - 1 not in active_tables and game_number - 1 not in game_data.completed_games:
+                        if game_number - 1 not in missed_games:
+                            missed_games.append(game_number - 1)
+                            logging.warning(f"⚠️ Возможно пропущена игра #{game_number - 1}")
+                    
+                    logging.info(f"⏰ До игры #{game_number} осталось {seconds_to_next:.0f} сек")
                     launch_next_game_monitor()
                     last_launch_time = current_time
-                    time.sleep(35)
+                    time.sleep(40)  # Увеличил паузу после запуска
             
             time.sleep(5)
             
