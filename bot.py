@@ -494,7 +494,7 @@ async def monitor_game(browser, game_number, game_url, start_time):
         logging.error(f"Критическая ошибка в игре #{game_number}: {e}")
     finally:
         try:
-    finally:
+        finally:
     await page.close()
     await pool.release_browser(game_number)
         except:
