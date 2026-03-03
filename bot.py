@@ -2,13 +2,12 @@ import threading
 import time
 import re
 import logging
+import subprocess
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import telebot
 import pickle
@@ -166,25 +165,71 @@ def format_message(game_number, state, is_final=False):
     else:
         return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
+def find_chrome():
+    """Ищет где лежит Chrome на системе"""
+    possible_paths = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/nix/store/*/bin/chromium",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable"
+    ]
+    
+    for path_pattern in possible_paths:
+        try:
+            if "*" in path_pattern:
+                # Для nix store используем find
+                result = subprocess.run(
+                    ["find", "/nix/store", "-name", "chromium", "-type", "f", "-print", "-quit"],
+                    capture_output=True, text=True
+                )
+                if result.stdout.strip():
+                    return result.stdout.strip()
+            else:
+                if os.path.exists(path_pattern):
+                    return path_pattern
+        except:
+            continue
+    
+    # Если ничего не нашли, пробуем which
+    try:
+        result = subprocess.run(["which", "chromium"], capture_output=True, text=True)
+        if result.stdout.strip():
+            return result.stdout.strip()
+    except:
+        pass
+    
+    return None
+
 def create_driver():
-    """Создание драйвера Chrome"""
+    """Создание драйвера Chrome с правильным путем"""
+    chrome_path = find_chrome()
+    logging.info(f"Найден Chrome: {chrome_path}")
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-software-rasterizer")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--single-process")
     
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.set_page_load_timeout(15)
+    if chrome_path:
+        chrome_options.binary_location = chrome_path
     
-    return driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(15)
+        return driver
+    except Exception as e:
+        logging.error(f"Ошибка создания драйвера: {e}")
+        # Пробуем без указания пути
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(15)
+        return driver
 
 def extract_cards_from_container(driver, container_selector):
-    """Извлечение карт из контейнера"""
     cards = []
     try:
         container = driver.find_element(By.CSS_SELECTOR, container_selector)
@@ -197,7 +242,6 @@ def extract_cards_from_container(driver, container_selector):
                 if 'hidden' in class_name.lower() or 'face-down' in class_name.lower():
                     continue
                 
-                # Масть
                 suit = '?'
                 if 'suit-0' in class_name:
                     suit = '♠️'
@@ -208,7 +252,6 @@ def extract_cards_from_container(driver, container_selector):
                 elif 'suit-3' in class_name:
                     suit = '♥️'
                 
-                # Значение
                 val_match = re.search(r'value-(\d+)', class_name)
                 if val_match:
                     val = val_match.group(1)
@@ -234,21 +277,16 @@ def extract_cards_from_container(driver, container_selector):
     return cards
 
 def get_state_from_driver(driver):
-    """Получение состояния игры"""
     try:
-        # Счет игрока
         player_score_el = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = player_score_el.text if player_score_el else '0'
         
-        # Карты игрока
         player_cards_container = '.live-twenty-one-field-player:first-child .live-twenty-one-cards'
         player_cards = extract_cards_from_container(driver, player_cards_container)
         
-        # Счет дилера
         dealer_score_el = driver.find_element(By.CSS_SELECTOR, '.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
         dealer_score = dealer_score_el.text if dealer_score_el else '0'
         
-        # Карты дилера
         dealer_cards_container = '.live-twenty-one-field-player:last-child .live-twenty-one-cards'
         dealer_cards = extract_cards_from_container(driver, dealer_cards_container)
         
@@ -263,15 +301,12 @@ def get_state_from_driver(driver):
         return None
 
 def is_game_finished(driver):
-    """Проверка завершения игры"""
     try:
-        # Проверка через таймер
         timers = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-table-footer__timer .ui-game-timer__label')
         for timer in timers:
             if timer.text and "Игра завершена" in timer.text:
                 return True
         
-        # Проверка через статус
         statuses = driver.find_elements(By.CSS_SELECTOR, '.live-twenty-one-table-head__status')
         for status in statuses:
             if status.text and 'Победа' in status.text:
@@ -283,14 +318,10 @@ def is_game_finished(driver):
         return False
 
 def get_table_url(driver, target_game_number):
-    """Получение URL стола"""
     try:
         logging.info(f"🔍 Ищем стол №{target_game_number}...")
         
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '.dashboard-game-block'))
-        )
-        
+        driver.implicitly_wait(10)
         tables = driver.find_elements(By.CSS_SELECTOR, '.dashboard-game-block')
         logging.info(f"📊 Всего столов на странице: {len(tables)}")
         
@@ -364,8 +395,6 @@ def edit_telegram_message(chat_id, message_id, text):
     return None
 
 def poll_game(table_url, game_number, game_start_time):
-    """Опрос игры через Selenium"""
-    
     msg_id = None
     last_state = None
     first_message_sent = False
@@ -386,7 +415,7 @@ def poll_game(table_url, game_number, game_start_time):
         try:
             driver = create_driver()
             driver.get(table_url)
-            time.sleep(2)  # Ждем загрузку
+            time.sleep(2)
             
             state = get_state_from_driver(driver)
             
@@ -456,7 +485,6 @@ def poll_game(table_url, game_number, game_start_time):
     logging.info(f"Игра #{game_number}: опрос завершен")
 
 def launch_next_game():
-    """Запуск следующей игры"""
     driver = None
     try:
         driver = create_driver()
@@ -472,7 +500,6 @@ def launch_next_game():
             logging.warning("⚠️ Не удалось получить URL стола")
             return
         
-        # Проверяем время
         now = datetime.now()
         if now < next_game_time - timedelta(seconds=2):
             logging.info(f"Игра #{game_number}: еще рано (старт в {next_game_time.strftime('%H:%M:%S')})")
@@ -533,7 +560,6 @@ def monitor_loop():
             
             now = datetime.now()
             
-            # Запуск за 2 секунды до четной минуты
             if now.second >= 58 and now.minute % 2 == 1:
                 next_game_time, seconds_to_next = get_next_game_time()
                 
