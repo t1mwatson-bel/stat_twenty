@@ -9,7 +9,52 @@ import telebot
 import pickle
 import os
 from telebot import apihelper
-from pool import BrowserPool  # импортируем наш пул
+
+# ===== ПУЛ БРАУЗЕРОВ (прямо здесь) =====
+class BrowserPool:
+    def __init__(self, size=3):
+        self.size = size
+        self.browsers = []
+        self.available = []
+        self.busy = {}
+        self.lock = threading.Lock()
+        self.playwright = None
+        self.running = True
+    
+    async def start(self):
+        self.playwright = await async_playwright().start()
+        for i in range(self.size):
+            browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox"]
+            )
+            self.browsers.append(browser)
+            self.available.append(browser)
+        print(f"✅ Запущено {self.size} браузеров")
+    
+    async def get_browser(self, game_number):
+        with self.lock:
+            if not self.available:
+                return None
+            browser = self.available.pop()
+            self.busy[game_number] = browser
+            return browser
+    
+    async def release_browser(self, game_number):
+        with self.lock:
+            if game_number in self.busy:
+                browser = self.busy.pop(game_number)
+                self.available.append(browser)
+                print(f"🔄 Браузер для игры #{game_number} освобожден")
+    
+    async def stop_all(self):
+        self.running = False
+        for browser in self.browsers:
+            await browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+        print("🛑 Все браузеры закрыты")
+# ======================================
 
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
@@ -39,12 +84,12 @@ VALUE_MAP = {
 }
 
 bot = telebot.TeleBot(TOKEN)
-active_games = {}  # какие игры сейчас мониторятся
+active_games = {}
 message_ids = {}
 last_messages = {}
 lock = threading.Lock()
 bot_running = True
-pool = None  # будет инициализирован позже
+pool = None
 
 class GameData:
     def __init__(self):
@@ -108,7 +153,6 @@ def format_cards(cards):
     return ''.join(cards)
 
 def determine_winner(p_score, d_score):
-    """Определение победителя"""
     try:
         p = int(p_score)
         d = int(d_score)
@@ -125,7 +169,6 @@ def determine_winner(p_score, d_score):
         return 'UNKNOWN'
 
 def format_message(game_number, state, turn=None, is_final=False):
-    """Форматирование сообщения"""
     p_cards = format_cards(state['p_cards'])
     d_cards = format_cards(state['d_cards'])
     
@@ -154,7 +197,6 @@ def format_message(game_number, state, turn=None, is_final=False):
             return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
 async def extract_cards_from_container(container):
-    """Извлекает карты из контейнера .live-twenty-one-cards"""
     cards = []
     if not container:
         return cards
@@ -201,7 +243,6 @@ async def extract_cards_from_container(container):
     return cards
 
 async def get_state_fast(page):
-    """Получение текущего состояния игры"""
     try:
         player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
         player_score = await player_score_el.text_content() if player_score_el else '0'
@@ -226,7 +267,6 @@ async def get_state_fast(page):
         return None
 
 async def determine_turn(page):
-    """Определяет, чей сейчас ход"""
     try:
         player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
         if player_area:
@@ -246,7 +286,6 @@ async def determine_turn(page):
         return None
 
 async def is_game_truly_finished(page):
-    """Проверка завершения игры"""
     try:
         timer_div = await page.query_selector('.live-twenty-one-table-footer__timer .ui-game-timer__label')
         if timer_div:
@@ -307,7 +346,6 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
     return None
 
 async def get_active_tables(page):
-    """Получает список всех столов с главной"""
     tables = []
     
     try:
@@ -318,7 +356,6 @@ async def get_active_tables(page):
         
         for block in blocks:
             try:
-                # Пытаемся найти номер стола
                 number = None
                 number_elem = await block.query_selector('.dashboard-game-info__additional-info')
                 if number_elem:
@@ -330,19 +367,15 @@ async def get_active_tables(page):
                 if not number:
                     continue
                 
-                # Проверяем таймер
                 timer = await block.query_selector('.dashboard-game-info__time')
                 timer_text = await timer.text_content() if timer else "00:00"
                 
-                # Проверяем счета
                 scores = await block.query_selector_all('.ui-game-scores__num')
                 p_score = await scores[0].text_content() if len(scores) > 0 else "0"
                 d_score = await scores[1].text_content() if len(scores) > 1 else "0"
                 
-                # Проверяем завершена ли
                 completed = await block.query_selector('.dashboard-game-info__period:has-text("Игра завершена")')
                 
-                # Получаем ссылку
                 link = await block.query_selector('.dashboard-game-block__link')
                 href = await link.get_attribute('href') if link else None
                 if href and not href.startswith('http'):
@@ -366,7 +399,6 @@ async def get_active_tables(page):
     return tables
 
 async def monitor_game(browser, game_number, game_url, start_time):
-    """Мониторит конкретную игру (worker)"""
     msg_id = None
     last_state = None
     game_finished = False
@@ -441,18 +473,15 @@ async def monitor_game(browser, game_number, game_url, start_time):
     
     finally:
         await page.close()
-        logging.info(f"Игра #{game_number}: страница закрыта")
+        await pool.release_browser(game_number)
+        logging.info(f"Игра #{game_number}: страница закрыта, браузер освобожден")
 
 async def watcher():
-    """Постоянно следит за главной и распределяет игры"""
     global pool
     
-    # Создаем отдельный браузер для наблюдателя
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = await browser.new_page()
-        
-        last_seen = {}
         
         while bot_running:
             try:
@@ -462,26 +491,21 @@ async def watcher():
                 for table in tables:
                     game_num = table['number']
                     
-                    # Пропускаем завершенные
                     if table['completed']:
                         continue
                     
-                    # Проверяем, не мониторим ли уже
                     with lock:
                         if game_num in active_games:
                             continue
                         if game_data.is_game_completed(game_num):
                             continue
                     
-                    # Проверяем таймер (если скоро начнется)
                     timer = table['timer']
                     if timer and timer != "00:00" and ':' in timer:
                         minutes, seconds = map(int, timer.split(':'))
                         total_seconds = minutes * 60 + seconds
                         
-                        # Если до начала меньше 40 секунд
                         if total_seconds <= 40 and total_seconds > 0:
-                            # Берем свободный браузер из пула
                             browser_worker = await pool.get_browser(game_num)
                             
                             if browser_worker:
@@ -490,7 +514,6 @@ async def watcher():
                                 with lock:
                                     active_games[game_num] = True
                                 
-                                # Запускаем мониторинг
                                 start_time = time.time() + total_seconds
                                 asyncio.create_task(
                                     monitor_game(browser_worker, game_num, table['url'], start_time)
@@ -498,7 +521,7 @@ async def watcher():
                             else:
                                 logging.warning(f"⚠️ Нет свободных браузеров для игры #{game_num}")
                 
-                await asyncio.sleep(5)  # проверка каждые 5 секунд
+                await asyncio.sleep(5)
                 
             except Exception as e:
                 logging.error(f"Ошибка наблюдателя: {e}")
@@ -507,7 +530,6 @@ async def watcher():
         await browser.close()
 
 def run_watcher():
-    """Запуск наблюдателя в отдельном потоке"""
     asyncio.run(watcher())
 
 def main():
@@ -515,11 +537,9 @@ def main():
     
     logging.info("🚀 Запуск бота с пулом браузеров")
     
-    # Создаем и запускаем пул
     pool = BrowserPool(size=3)
     asyncio.run(pool.start())
     
-    # Запускаем наблюдателя в отдельном потоке
     watcher_thread = threading.Thread(target=run_watcher)
     watcher_thread.daemon = True
     watcher_thread.start()
