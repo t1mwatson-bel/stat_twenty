@@ -498,8 +498,6 @@ async def monitor_game(browser, game_number, game_url, start_time):
         except:
             pass
         await pool.release_browser(game_number)
-        logging.info(f"Игра #{game_number}: браузер освобожден")
-        await pool.release_browser(game_number)
         logging.info(f"Игра #{game_number}: завершена, браузер освобожден")
 
 async def watcher():
