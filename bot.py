@@ -3,6 +3,8 @@ import time
 import re
 import logging
 import subprocess
+import glob
+import os
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -11,7 +13,6 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 import telebot
 import pickle
-import os
 from telebot import apihelper
 
 # ===== НАСТРОЙКИ =====
@@ -165,46 +166,8 @@ def format_message(game_number, state, is_final=False):
     else:
         return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
-def find_chrome():
-    """Ищет где лежит Chrome на системе"""
-    possible_paths = [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/nix/store/*/bin/chromium",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable"
-    ]
-    
-    for path_pattern in possible_paths:
-        try:
-            if "*" in path_pattern:
-                # Для nix store используем find
-                result = subprocess.run(
-                    ["find", "/nix/store", "-name", "chromium", "-type", "f", "-print", "-quit"],
-                    capture_output=True, text=True
-                )
-                if result.stdout.strip():
-                    return result.stdout.strip()
-            else:
-                if os.path.exists(path_pattern):
-                    return path_pattern
-        except:
-            continue
-    
-    # Если ничего не нашли, пробуем which
-    try:
-        result = subprocess.run(["which", "chromium"], capture_output=True, text=True)
-        if result.stdout.strip():
-            return result.stdout.strip()
-    except:
-        pass
-    
-    return None
-
 def create_driver():
-    """Создание драйвера Chrome с правильным путем"""
-    chrome_path = find_chrome()
-    logging.info(f"Найден Chrome: {chrome_path}")
+    """Создание драйвера Chrome с правильным путем для Railway"""
     
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -212,9 +175,40 @@ def create_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-setuid-sandbox")
     
-    if chrome_path:
-        chrome_options.binary_location = chrome_path
+    # Пробуем найти Chrome в разных местах
+    chrome_paths = [
+        "/nix/store/*/bin/chromium",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable"
+    ]
+    
+    chrome_found = False
+    for path_pattern in chrome_paths:
+        try:
+            if "*" in path_pattern:
+                matches = glob.glob(path_pattern)
+                if matches:
+                    chrome_options.binary_location = matches[0]
+                    logging.info(f"Найден Chrome: {matches[0]}")
+                    chrome_found = True
+                    break
+            else:
+                if os.path.exists(path_pattern):
+                    chrome_options.binary_location = path_pattern
+                    logging.info(f"Найден Chrome: {path_pattern}")
+                    chrome_found = True
+                    break
+        except:
+            continue
+    
+    if not chrome_found:
+        logging.warning("Chrome не найден в стандартных путях, пробуем без указания пути")
     
     try:
         service = Service(ChromeDriverManager().install())
@@ -223,11 +217,7 @@ def create_driver():
         return driver
     except Exception as e:
         logging.error(f"Ошибка создания драйвера: {e}")
-        # Пробуем без указания пути
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(15)
-        return driver
+        raise e
 
 def extract_cards_from_container(driver, container_selector):
     cards = []
