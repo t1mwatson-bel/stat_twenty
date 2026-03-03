@@ -167,7 +167,7 @@ def format_message(game_number, state, is_final=False):
         return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
 def create_driver():
-    """Создание драйвера Chrome с правильным путем для Railway"""
+    """Создание драйвера Chrome/Chromium для Railway"""
     
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -179,36 +179,34 @@ def create_driver():
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-setuid-sandbox")
     
-    # Пробуем найти Chrome в разных местах
-    chrome_paths = [
+    # Ищем Chromium (не Chrome!)
+    chromium_paths = [
         "/nix/store/*/bin/chromium",
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable"
     ]
     
-    chrome_found = False
-    for path_pattern in chrome_paths:
+    chromium_found = False
+    for path_pattern in chromium_paths:
         try:
             if "*" in path_pattern:
                 matches = glob.glob(path_pattern)
                 if matches:
                     chrome_options.binary_location = matches[0]
-                    logging.info(f"Найден Chrome: {matches[0]}")
-                    chrome_found = True
+                    logging.info(f"Найден Chromium: {matches[0]}")
+                    chromium_found = True
                     break
             else:
                 if os.path.exists(path_pattern):
                     chrome_options.binary_location = path_pattern
-                    logging.info(f"Найден Chrome: {path_pattern}")
-                    chrome_found = True
+                    logging.info(f"Найден Chromium: {path_pattern}")
+                    chromium_found = True
                     break
         except:
             continue
     
-    if not chrome_found:
-        logging.warning("Chrome не найден в стандартных путях, пробуем без указания пути")
+    if not chromium_found:
+        logging.warning("Chromium не найден, пробуем без указания пути")
     
     try:
         service = Service(ChromeDriverManager().install())
