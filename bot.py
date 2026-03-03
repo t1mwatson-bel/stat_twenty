@@ -204,9 +204,11 @@ def format_message(game_number, state, turn=None, is_final=False):
         return f"#N{game_number} {score_part}  #{winner} #T{total_score}"
     else:
         if turn == 'player':
-    return f"#N{game_number} {state['p_score']}({p_cards}) ⬅️ {state['d_score']}({d_cards}) #T{total_score}"
-elif turn == 'dealer':
-    return f"#N{game_number} {state['p_score']}({p_cards}) ➡️ {state['d_score']}({d_cards}) #T{total_score}"
+            return f"#N{game_number} {state['p_score']}({p_cards}) 👈 {state['d_score']}({d_cards}) #T{total_score}"
+        elif turn == 'dealer':
+            return f"#N{game_number} {state['p_score']}({p_cards}) 👉 {state['d_score']}({d_cards}) #T{total_score}"
+        else:
+            return f"#N{game_number} {state['p_score']}({p_cards})-{state['d_score']}({d_cards}) #T{total_score}"
 
 async def extract_cards_from_container(container):
     cards = []
