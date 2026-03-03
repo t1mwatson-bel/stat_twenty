@@ -179,25 +179,21 @@ def create_driver():
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-setuid-sandbox")
     
-    # Жестко прописываем путь из Dockerfile
     chromium_path = "/usr/bin/chromium"
     
     if os.path.exists(chromium_path):
         chrome_options.binary_location = chromium_path
         logging.info(f"Использую Chromium: {chromium_path}")
         
-        # ПОЛУЧАЕМ ВЕРСИЮ CHROMIUM
         try:
             result = subprocess.run([chromium_path, "--version"], capture_output=True, text=True)
             version_str = result.stdout.strip()
             logging.info(f"Версия Chromium: {version_str}")
             
-            # Парсим версию (пример: "Chromium 145.0.7632.116")
             match = re.search(r'(\d+\.\d+\.\d+\.\d+)', version_str)
             if match:
                 chrome_version = match.group(1)
                 logging.info(f"Определена версия: {chrome_version}")
-                # Качаем драйвер под эту версию
                 service = Service(ChromeDriverManager(driver_version=chrome_version).install())
             else:
                 logging.warning("Не удалось определить версию, качаем последний драйвер")
@@ -402,12 +398,10 @@ def poll_game(table_url, game_number, game_start_time):
         
         driver = None
         try:
-            # СОЗДАЕМ НОВЫЙ ДРАЙВЕР ДЛЯ КАЖДОЙ ПОПЫТКИ
             driver = create_driver()
             driver.get(table_url)
-            time.sleep(2)  # Ждем загрузку
+            time.sleep(2)
             
-            # ПОЛУЧАЕМ СОСТОЯНИЕ
             state = get_state_from_driver(driver)
             
             if not state:
@@ -419,15 +413,12 @@ def poll_game(table_url, game_number, game_start_time):
             has_cards = len(state['p_cards']) > 0 or len(state['d_cards']) > 0
             is_finished = is_game_finished(driver)
             
-            # ЛОГИРУЕМ КАЖДУЮ ПОПЫТКУ
             logging.info(f"Игра #{game_number}: попытка {attempt+1}, карты: П:{len(state['p_cards'])} Д:{len(state['d_cards'])}, финиш: {is_finished}")
             
-            # ЕСЛИ ПОЯВИЛИСЬ КАРТЫ - ИГРА НАЧАЛАСЬ
             if has_cards and not game_started:
                 game_started = True
-                logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ! ПЕРВЫЙ РАЗ")
+                logging.info(f"Игра #{game_number}: КАРТЫ ПОЯВИЛИСЬ!")
             
-            # ЕСЛИ ИГРА НАЧАЛАСЬ И СОСТОЯНИЕ ИЗМЕНИЛОСЬ - ОБНОВЛЯЕМ СООБЩЕНИЕ
             if game_started and state != last_state:
                 if not first_message_sent:
                     msg_text = format_message(game_number, state, is_final=False)
@@ -442,7 +433,6 @@ def poll_game(table_url, game_number, game_start_time):
                 
                 last_state = state
             
-            # ЕСЛИ ИГРА ЗАВЕРШЕНА - ФИНАЛ
             if is_finished and game_started:
                 logging.info(f"Игра #{game_number}: ИГРА ЗАВЕРШЕНА!")
                 
@@ -472,8 +462,7 @@ def poll_game(table_url, game_number, game_start_time):
                 except:
                     pass
         
-        # ЖДЕМ 2 СЕКУНДЫ ДО СЛЕДУЮЩЕЙ ПОПЫТКИ
-        time.sleep(POLL_INterval)
+        time.sleep(POLL_INTERVAL)
     
     with lock:
         if game_number in active_games:
@@ -489,7 +478,6 @@ def launch_next_game():
     game_time = None
     
     try:
-        # СОЗДАЕМ ВРЕМЕННЫЙ ДРАЙВЕР ДЛЯ ПОИСКА СТОЛА
         driver = create_driver()
         driver.get(MAIN_URL)
         time.sleep(3)
@@ -497,7 +485,6 @@ def launch_next_game():
         game_time, _ = get_next_game_time()
         game_number = get_game_number_by_time(game_time)
         
-        # ИЩЕМ URL СТОЛА
         table_url = get_table_url(driver, game_number)
         
         if not table_url:
@@ -506,13 +493,11 @@ def launch_next_game():
         
         logging.info(f"✅ Найден URL для стола #{game_number}: {table_url}")
         
-        # ПРОВЕРЯЕМ ВРЕМЯ
         now = datetime.now()
         if now < game_time - timedelta(seconds=2):
             logging.info(f"Игра #{game_number}: еще рано (старт в {game_time.strftime('%H:%M:%S')})")
             return
         
-        # ПРОВЕРЯЕМ НЕ ЗАПУЩЕНА ЛИ УЖЕ
         with lock:
             if game_number in active_games:
                 logging.info(f"Игра #{game_number} уже мониторится")
@@ -521,7 +506,6 @@ def launch_next_game():
                 logging.info(f"Игра #{game_number} уже завершена")
                 return
         
-        # ЗАПУСКАЕМ ПОТОК ОПРОСА
         logging.info(f"🚀 Игра #{game_number}: ЗАПУСК ПОТОКА ОПРОСА")
         
         thread = threading.Thread(
@@ -546,7 +530,8 @@ def launch_next_game():
         if driver:
             try:
                 driver.quit()
-                logging.info(f"Поисковый драйвер для #{game_number} закрыт")
+                if game_number:
+                    logging.info(f"Поисковый драйвер для #{game_number} закрыт")
             except:
                 pass
 
@@ -571,7 +556,6 @@ def monitor_loop():
             
             now = datetime.now()
             
-            # Запуск за 2 секунды до четной минуты
             if now.second >= 58 and now.minute % 2 == 1:
                 next_game_time, seconds_to_next = get_next_game_time()
                 
