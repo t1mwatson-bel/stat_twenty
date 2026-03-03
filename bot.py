@@ -426,6 +426,14 @@ async def monitor_game(browser, game_number, game_url, start_time):
         await page.goto(game_url, timeout=60000, wait_until="domcontentloaded")
         logging.info(f"Игра #{game_number}: страница загружена")
         
+        # Ждем появления карт (до 10 секунд)
+        for i in range(10):
+            state = await get_state_fast(page)
+            if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
+                logging.info(f"Игра #{game_number}: карты появились через {i+1} сек")
+                break
+            await asyncio.sleep(1)
+        
         while not game_finished and (time.time() - start_real) < 240:
             try:
                 current_time = time.time()
