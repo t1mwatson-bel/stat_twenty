@@ -371,7 +371,7 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола (ускоренная версия с ограничением памяти)"""
+    """Мониторинг конкретного стола (ультра-оптимизированная версия)"""
     
     msg_id = None
     last_state = None
@@ -390,7 +390,7 @@ async def monitor_table(table_url, game_number, game_start_time):
     
     try:
         async with async_playwright() as p:
-            # ===== ОПТИМИЗАЦИЯ ПАМЯТИ =====
+            # ===== ОПТИМИЗАЦИЯ ЗАПУСКА =====
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -399,24 +399,42 @@ async def monitor_table(table_url, game_number, game_start_time):
                     "--disable-gpu",
                     "--disable-software-rasterizer",
                     "--disable-setuid-sandbox",
-                    "--js-flags=--max-old-space-size=256",  # Ограничение JS памяти до 256 МБ
-                    "--single-process",  # Единый процесс вместо многопроцессности
-                    "--memory-pressure-off",  # Отключаем автоматическое управление памятью
-                    "--max_old_space_size=256",  # Ограничение V8
-                    "--disable-background-timer-throttling",
-                    "--disable-backgrounding-occluded-windows",
-                    "--disable-renderer-backgrounding",
-                    "--disable-ipc-flooding-protection",
-                    "--disable-background-networking"
+                    "--js-flags=--max-old-space-size=256",  # Ограничение JS памяти
+                    "--single-process",
+                    "--blink-settings=imagesEnabled=false",  # ОТКЛЮЧАЕМ КАРТИНКИ
+                    "--disable-remote-fonts",                # ОТКЛЮЧАЕМ ШРИФТЫ
+                    "--disable-default-apps",
+                    "--disable-translate",
+                    "--disable-sync",
+                    "--disable-extensions"
                 ]
             )
-            # ==============================
             
             page = await browser.new_page()
             
-            # Ускоренная загрузка страницы (не ждём полной загрузки)
-            await page.goto(table_url, timeout=30000, wait_until="commit")
-            logging.info(f"Стол #{game_number}: страница загружена (commit)")
+            # ===== БЛОКИРУЕМ ЛИШНИЕ ЗАПРОСЫ =====
+            async def block_resources(route):
+                # Блокируем картинки, стили, шрифты, медиа
+                if route.request.resource_type in ['image', 'stylesheet', 'font', 'media', 'beacon', 'csp_report', 'imageset', 'texttrack']:
+                    await route.abort()
+                else:
+                    await route.continue_()
+            
+            await page.route('**/*', block_resources)
+            
+            # Устанавливаем таймауты поменьше
+            page.set_default_timeout(15000)
+            
+            # Быстрая загрузка страницы
+            await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
+            logging.info(f"Стол #{game_number}: страница загружена")
+            
+            # Явно ждем появления карт (максимум 5 секунд)
+            try:
+                await page.wait_for_selector('.live-twenty-one-cards', timeout=5000)
+                logging.info(f"Стол #{game_number}: карты найдены")
+            except:
+                logging.warning(f"Стол #{game_number}: карты не найдены, но продолжаем")
             
             # Ждем появления карт (но недолго)
             for i in range(5):
@@ -424,7 +442,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                 if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
                     logging.info(f"Стол #{game_number}: карты появились через {i+1} сек")
                     break
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
             
             while not game_finished and (time.time() - start_time) < max_duration:
                 try:
@@ -442,7 +460,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                         game_finished = True
                         logging.info(f"Стол #{game_number}: игра завершена")
                         
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1)
                         
                         final_state = None
                         for attempt in range(10):
@@ -450,7 +468,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                             if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
                                 logging.info(f"Стол #{game_number}: финал получен с {attempt+1} попытки")
                                 break
-                            await asyncio.sleep(0.3)
+                            await asyncio.sleep(0.2)
                         
                         if final_state:
                             final_msg = format_message(game_number, final_state, is_final=True)
@@ -534,12 +552,24 @@ def launch_next_game_monitor():
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
-                        "--js-flags=--max-old-space-size=256"
+                        "--js-flags=--max-old-space-size=256",
+                        "--blink-settings=imagesEnabled=false",
+                        "--disable-remote-fonts"
                     ]
                 )
                 page = await browser.new_page()
-                # Ускоренная загрузка
-                await page.goto(MAIN_URL, timeout=30000, wait_until="commit")
+                
+                # Блокируем лишнее и при поиске столов
+                async def block_resources(route):
+                    if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                
+                await page.route('**/*', block_resources)
+                page.set_default_timeout(15000)
+                
+                await page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
                 
                 next_game_time, _ = get_next_game_time()
                 game_number = get_game_number_by_time(next_game_time)
@@ -599,7 +629,7 @@ def clean_threads():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic запущен на Chromium (УСКОРЕННАЯ ВЕРСИЯ + ОГРАНИЧЕНИЕ ПАМЯТИ)")
+    logging.info("🚀 Бот 21 Classic запущен (УЛЬТРА-ОПТИМИЗИРОВАННАЯ ВЕРСИЯ)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_launch_time = 0
