@@ -336,7 +336,6 @@ async def get_table_url(page, game_number):
     try:
         logging.info(f"Ищем стол №{game_number}...")
         
-        # Убрал лишнее ожидание
         tables = await page.query_selector_all('.dashboard-game-block')
         logging.info(f"Всего столов: {len(tables)}")
         
@@ -372,7 +371,7 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола (ускоренная версия)"""
+    """Мониторинг конкретного стола (ускоренная версия с ограничением памяти)"""
     
     msg_id = None
     last_state = None
@@ -391,10 +390,28 @@ async def monitor_table(table_url, game_number, game_start_time):
     
     try:
         async with async_playwright() as p:
+            # ===== ОПТИМИЗАЦИЯ ПАМЯТИ =====
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-setuid-sandbox",
+                    "--js-flags=--max-old-space-size=256",  # Ограничение JS памяти до 256 МБ
+                    "--single-process",  # Единый процесс вместо многопроцессности
+                    "--memory-pressure-off",  # Отключаем автоматическое управление памятью
+                    "--max_old_space_size=256",  # Ограничение V8
+                    "--disable-background-timer-throttling",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-ipc-flooding-protection",
+                    "--disable-background-networking"
+                ]
             )
+            # ==============================
+            
             page = await browser.new_page()
             
             # Ускоренная загрузка страницы (не ждём полной загрузки)
@@ -513,7 +530,12 @@ def launch_next_game_monitor():
             try:
                 browser = await p.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox"]
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--js-flags=--max-old-space-size=256"
+                    ]
                 )
                 page = await browser.new_page()
                 # Ускоренная загрузка
@@ -577,7 +599,7 @@ def clean_threads():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic запущен на Chromium (УСКОРЕННАЯ ВЕРСИЯ)")
+    logging.info("🚀 Бот 21 Classic запущен на Chromium (УСКОРЕННАЯ ВЕРСИЯ + ОГРАНИЧЕНИЕ ПАМЯТИ)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_launch_time = 0
