@@ -332,13 +332,11 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
     return None
 
 async def get_table_url(page, game_number):
-    """Получение URL стола по номеру игры"""
+    """Получение URL стола по номеру игры (ускоренная версия)"""
     try:
         logging.info(f"Ищем стол №{game_number}...")
         
-        await page.wait_for_selector('.dashboard-game-block', timeout=30000)
-        await page.wait_for_timeout(2000)
-        
+        # Убрал лишнее ожидание
         tables = await page.query_selector_all('.dashboard-game-block')
         logging.info(f"Всего столов: {len(tables)}")
         
@@ -374,7 +372,7 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола"""
+    """Мониторинг конкретного стола (ускоренная версия)"""
     
     msg_id = None
     last_state = None
@@ -399,11 +397,12 @@ async def monitor_table(table_url, game_number, game_start_time):
             )
             page = await browser.new_page()
             
-            await page.goto(table_url, timeout=60000, wait_until="domcontentloaded")
-            logging.info(f"Стол #{game_number}: страница загружена")
+            # Ускоренная загрузка страницы (не ждём полной загрузки)
+            await page.goto(table_url, timeout=30000, wait_until="commit")
+            logging.info(f"Стол #{game_number}: страница загружена (commit)")
             
-            # Ждем появления карт
-            for i in range(10):
+            # Ждем появления карт (но недолго)
+            for i in range(5):
                 state = await get_state_fast(page)
                 if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
                     logging.info(f"Стол #{game_number}: карты появились через {i+1} сек")
@@ -429,7 +428,7 @@ async def monitor_table(table_url, game_number, game_start_time):
                         await asyncio.sleep(2)
                         
                         final_state = None
-                        for attempt in range(15):
+                        for attempt in range(10):
                             final_state = await get_state_fast(page)
                             if final_state and (len(final_state['p_cards']) > 0 or len(final_state['d_cards']) > 0):
                                 logging.info(f"Стол #{game_number}: финал получен с {attempt+1} попытки")
@@ -507,7 +506,7 @@ def run_async_monitor(table_url, game_number, game_start_time):
         logging.error(f"Ошибка в потоке мониторинга стола #{game_number}: {e}")
 
 def launch_next_game_monitor():
-    """Запускает монитор для следующей игры"""
+    """Запускает монитор для следующей игры (ускоренная версия)"""
     async def get_table():
         async with async_playwright() as p:
             browser = None
@@ -517,8 +516,8 @@ def launch_next_game_monitor():
                     args=["--no-sandbox"]
                 )
                 page = await browser.new_page()
-                await page.goto(MAIN_URL, timeout=60000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(3000)
+                # Ускоренная загрузка
+                await page.goto(MAIN_URL, timeout=30000, wait_until="commit")
                 
                 next_game_time, _ = get_next_game_time()
                 game_number = get_game_number_by_time(next_game_time)
@@ -578,7 +577,7 @@ def clean_threads():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic запущен на Chromium")
+    logging.info("🚀 Бот 21 Classic запущен на Chromium (УСКОРЕННАЯ ВЕРСИЯ)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_launch_time = 0
