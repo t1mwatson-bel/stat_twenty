@@ -39,12 +39,13 @@ VALUE_MAP = {
 }
 
 bot = telebot.TeleBot(TOKEN)
-active_tables = {}
+active_tables = {}          # game_number -> thread
+monitoring_games = set()    # множество игр, которые сейчас в мониторинге
 message_ids = {}
 last_messages = {}
 lock = threading.Lock()
 bot_running = True
-searcher_busy = False  # Флаг: занят ли поисковик
+searcher_busy = False
 
 class GameData:
     def __init__(self):
@@ -353,13 +354,18 @@ async def search_next_table():
     global searcher_busy
     
     if searcher_busy:
-        logging.info("Поисковик уже занят, пропускаем")
         return None, None, None
     
     searcher_busy = True
     try:
-        next_game_time, seconds = get_next_game_time()
+        next_game_time, _ = get_next_game_time()
         game_number = get_game_number_by_time(next_game_time)
+        
+        # ПРОВЕРКА: не мониторим ли мы уже эту игру?
+        with lock:
+            if game_number in monitoring_games:
+                logging.info(f"⚠️ Поисковик: игра #{game_number} уже в мониторинге, пропускаем")
+                return None, None, None
         
         logging.info(f"🔍 Поисковик ищет стол #{game_number}")
         
@@ -389,7 +395,6 @@ async def search_next_table():
             # Быстрый поиск с несколькими попытками
             for attempt in range(5):
                 tables = await page.query_selector_all('.dashboard-game-block')
-                logging.info(f"Поисковик: попытка {attempt+1}, найдено столов: {len(tables)}")
                 
                 for table in tables:
                     try:
@@ -405,6 +410,13 @@ async def search_next_table():
                                         href = await link_element.get_attribute('href')
                                         if href and not href.startswith('http'):
                                             href = f"https://1xlite-9048339.bar{href}"
+                                        
+                                        # ФИНАЛЬНАЯ ПРОВЕРКА перед отправкой
+                                        with lock:
+                                            if game_number in monitoring_games:
+                                                logging.info(f"⚠️ Поисковик: игра #{game_number} уже занята, отказываемся")
+                                                return None, None, None
+                                        
                                         logging.info(f"✅ Поисковик нашёл стол #{game_number}")
                                         return href, game_number, next_game_time
                     except:
@@ -423,6 +435,10 @@ async def search_next_table():
 
 async def monitor_table(table_url, game_number, game_start_time):
     """Мониторинг конкретного стола"""
+    
+    # Отмечаем, что игра пошла в мониторинг
+    with lock:
+        monitoring_games.add(game_number)
     
     msg_id = None
     last_state = None
@@ -556,6 +572,7 @@ async def monitor_table(table_url, game_number, game_start_time):
         with lock:
             if game_number in active_tables:
                 del active_tables[game_number]
+            monitoring_games.discard(game_number)
             if game_number in message_ids:
                 del message_ids[game_number]
             if game_number in last_messages:
@@ -570,14 +587,21 @@ def run_async_monitor(table_url, game_number, game_start_time):
         logging.error(f"Ошибка в потоке мониторинга стола #{game_number}: {e}")
 
 def launch_monitor(table_url, game_number, game_start_time):
-    """Запускает мониторинг в отдельном потоке"""
+    """Запускает мониторинг в отдельном потоке с проверкой на дубли"""
     with lock:
+        # ТРОЙНАЯ ПРОВЕРКА
+        if game_number in monitoring_games:
+            logging.info(f"⚠️ Игра #{game_number} уже в monitoring_games, пропускаем")
+            return
         if game_number in active_tables:
-            logging.info(f"Игра #{game_number} уже мониторится, пропускаем")
+            logging.info(f"⚠️ Игра #{game_number} уже в active_tables, пропускаем")
             return
         if game_data.is_game_completed(game_number):
             logging.info(f"Игра #{game_number} уже завершена, пропускаем")
             return
+        
+        # Резервируем игру
+        monitoring_games.add(game_number)
     
     thread = threading.Thread(
         target=run_async_monitor, 
@@ -596,6 +620,7 @@ def clean_threads():
         dead = [gid for gid, t in active_tables.items() if not t.is_alive()]
         for gid in dead:
             del active_tables[gid]
+            monitoring_games.discard(gid)
             if gid in message_ids:
                 del message_ids[gid]
             if gid in last_messages:
@@ -604,7 +629,7 @@ def clean_threads():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic запущен (МНОГОПОТОЧНЫЙ РЕЖИМ)")
+    logging.info("🚀 Бот 21 Classic запущен (СТРОГОЕ РАСПРЕДЕЛЕНИЕ СТОЛОВ)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_search_time = 0
@@ -613,9 +638,9 @@ def monitor_loop():
         try:
             clean_threads()
             
-            # Если есть свободные браузеры и прошло больше 30 секунд
+            # Если есть свободные браузеры
             if len(active_tables) < MAX_BROWSERS and (time.time() - last_search_time) > 30:
-                # Запускаем поисковик в отдельном потоке
+                # Запускаем поисковик
                 threading.Thread(target=lambda: asyncio.run(search_and_launch()), daemon=True).start()
                 last_search_time = time.time()
             
