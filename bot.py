@@ -13,7 +13,7 @@ from telebot import apihelper
 # ===== НАСТРОЙКИ =====
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
-MAIN_URL = "https://1xlite-7636770.bar/ru/live/twentyone/2092323-21-classics"
+MAIN_URL = "https://1xlite-9048339.bar/ru/live/twentyone/2092323-21-classics?platform_type=desktop"
 MAX_BROWSERS = 2
 DATA_FILE = "game_data.pkl"
 DATA_RETENTION_DAYS = 3
