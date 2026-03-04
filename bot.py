@@ -104,34 +104,60 @@ class GameData:
 game_data = GameData()
 
 def get_game_number_by_time(dt=None):
-    """Расчет номера игры по времени"""
+    """Расчет номера игры по времени (игры стартуют в ЧЕТНЫЕ минуты)"""
     if dt is None:
         dt = datetime.now()
     
     start_of_day = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     minutes_passed = (dt - start_of_day).total_seconds() / 60
+    
+    # Номер игры = (минуты с начала дня // 2) + 1
+    # Неважно четная минута или нет - номер все равно правильный
     game_number = int(minutes_passed // 2) + 1
     
     return game_number
 
 def get_next_game_time():
-    """Возвращает время следующей игры"""
+    """Возвращает время следующей игры (ближайшая ЧЕТНАЯ минута)"""
     now = datetime.now()
     
-    next_game_minute = ((now.minute // 2) * 2 + 2) % 60
+    # Определяем ближайшую четную минуту
+    if now.minute % 2 == 0:
+        # Сейчас четная - следующая через 2 минуты
+        if now.second < 30:
+            # Если прошло меньше 30 секунд, считаем что текущая игра еще не началась
+            next_game_minute = now.minute
+        else:
+            next_game_minute = now.minute + 2
+    else:
+        # Сейчас нечетная - следующая через 1 минуту
+        next_game_minute = now.minute + 1
+    
     next_game_hour = now.hour
+    next_game_day = now.day
     
-    if next_game_minute < now.minute:
-        next_game_hour = (next_game_hour + 1) % 24
+    # Корректировка при переходе через час
+    if next_game_minute >= 60:
+        next_game_minute -= 60
+        next_game_hour += 1
+        if next_game_hour >= 24:
+            next_game_hour -= 24
+            next_game_day += 1
     
-    next_game_time = now.replace(
-        hour=next_game_hour,
-        minute=next_game_minute,
-        second=0,
-        microsecond=0
-    )
+    try:
+        next_game_time = now.replace(
+            day=next_game_day,
+            hour=next_game_hour,
+            minute=next_game_minute,
+            second=0,
+            microsecond=0
+        )
+    except ValueError:
+        # На случай перехода месяца
+        next_game_time = now + timedelta(minutes=(next_game_minute - now.minute) % 60)
+        next_game_time = next_game_time.replace(second=0, microsecond=0)
     
-    seconds_to_start = (next_game_time - now).total_seconds() - 30
+    seconds_to_start = (next_game_time - now).total_seconds()
     
     return next_game_time, max(0, seconds_to_start)
 
@@ -332,7 +358,7 @@ def edit_telegram_message_with_retry(chat_id, message_id, text):
     return None
 
 async def get_table_url(page, game_number):
-    """Получение URL стола по номеру игры (ускоренная версия)"""
+    """Получение URL стола по номеру игры"""
     try:
         logging.info(f"Ищем стол №{game_number}...")
         
@@ -353,7 +379,7 @@ async def get_table_url(page, game_number):
                             if link_element:
                                 href = await link_element.get_attribute('href')
                                 if href and not href.startswith('http'):
-                                    href = f"https://1xlite-7636770.bar{href}"
+                                    href = f"https://1xlite-9048339.bar{href}"
                                 
                                 logging.info(f"Найден нужный стол #{current_number}")
                                 return href
@@ -371,7 +397,7 @@ async def get_table_url(page, game_number):
         return None
 
 async def monitor_table(table_url, game_number, game_start_time):
-    """Мониторинг конкретного стола (ультра-оптимизированная версия)"""
+    """Мониторинг конкретного стола"""
     
     msg_id = None
     last_state = None
@@ -390,19 +416,15 @@ async def monitor_table(table_url, game_number, game_start_time):
     
     try:
         async with async_playwright() as p:
-            # ===== ОПТИМИЗАЦИЯ ЗАПУСКА =====
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-setuid-sandbox",
-                    "--js-flags=--max-old-space-size=256",  # Ограничение JS памяти
-                    "--single-process",
-                    "--blink-settings=imagesEnabled=false",  # ОТКЛЮЧАЕМ КАРТИНКИ
-                    "--disable-remote-fonts",                # ОТКЛЮЧАЕМ ШРИФТЫ
+                    "--js-flags=--max-old-space-size=256",
+                    "--blink-settings=imagesEnabled=false",
+                    "--disable-remote-fonts",
                     "--disable-default-apps",
                     "--disable-translate",
                     "--disable-sync",
@@ -412,9 +434,8 @@ async def monitor_table(table_url, game_number, game_start_time):
             
             page = await browser.new_page()
             
-            # ===== БЛОКИРУЕМ ЛИШНИЕ ЗАПРОСЫ =====
+            # Блокируем лишние запросы
             async def block_resources(route):
-                # Блокируем картинки, стили, шрифты, медиа
                 if route.request.resource_type in ['image', 'stylesheet', 'font', 'media', 'beacon', 'csp_report', 'imageset', 'texttrack']:
                     await route.abort()
                 else:
@@ -422,21 +443,18 @@ async def monitor_table(table_url, game_number, game_start_time):
             
             await page.route('**/*', block_resources)
             
-            # Устанавливаем таймауты поменьше
-            page.set_default_timeout(15000)
-            
             # Быстрая загрузка страницы
             await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
             logging.info(f"Стол #{game_number}: страница загружена")
             
-            # Явно ждем появления карт (максимум 5 секунд)
+            # Явно ждем появления карт
             try:
                 await page.wait_for_selector('.live-twenty-one-cards', timeout=5000)
                 logging.info(f"Стол #{game_number}: карты найдены")
             except:
                 logging.warning(f"Стол #{game_number}: карты не найдены, но продолжаем")
             
-            # Ждем появления карт (но недолго)
+            # Ждем появления карт
             for i in range(5):
                 state = await get_state_fast(page)
                 if state and (len(state['p_cards']) > 0 or len(state['d_cards']) > 0):
@@ -541,7 +559,7 @@ def run_async_monitor(table_url, game_number, game_start_time):
         logging.error(f"Ошибка в потоке мониторинга стола #{game_number}: {e}")
 
 def launch_next_game_monitor():
-    """Запускает монитор для следующей игры (ускоренная версия)"""
+    """Запускает монитор для следующей игры"""
     async def get_table():
         async with async_playwright() as p:
             browser = None
@@ -559,7 +577,6 @@ def launch_next_game_monitor():
                 )
                 page = await browser.new_page()
                 
-                # Блокируем лишнее и при поиске столов
                 async def block_resources(route):
                     if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
                         await route.abort()
@@ -567,7 +584,6 @@ def launch_next_game_monitor():
                         await route.continue_()
                 
                 await page.route('**/*', block_resources)
-                page.set_default_timeout(15000)
                 
                 await page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
                 
@@ -629,7 +645,7 @@ def clean_threads():
 
 def monitor_loop():
     global bot_running
-    logging.info("🚀 Бот 21 Classic запущен (УЛЬТРА-ОПТИМИЗИРОВАННАЯ ВЕРСИЯ)")
+    logging.info("🚀 Бот 21 Classic запущен (ИСПРАВЛЕННЫЙ ТАЙМИНГ)")
     logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
     
     last_launch_time = 0
@@ -638,18 +654,17 @@ def monitor_loop():
         try:
             clean_threads()
             
-            # Проверяем только в нечетные минуты
-            now = datetime.now()
-            if now.minute % 2 == 1:  # нечетная минута
-                next_game_time, seconds_to_next = get_next_game_time()
-                current_time = time.time()
-                
-                if seconds_to_next <= 30 and (current_time - last_launch_time) > 25:
-                    game_number = get_game_number_by_time(next_game_time)
-                    logging.info(f"До игры #{game_number} осталось {seconds_to_next:.0f} сек")
-                    launch_next_game_monitor()
-                    last_launch_time = current_time
-                    time.sleep(35)
+            # Теперь не проверяем минуты - просто считаем время до следующей игры
+            next_game_time, seconds_to_next = get_next_game_time()
+            current_time = time.time()
+            
+            # Запускаем за 40 секунд до игры (даём запас)
+            if seconds_to_next <= 40 and (current_time - last_launch_time) > 30:
+                game_number = get_game_number_by_time(next_game_time)
+                logging.info(f"🎯 До игры #{game_number} осталось {seconds_to_next:.0f} сек")
+                launch_next_game_monitor()
+                last_launch_time = current_time
+                time.sleep(35)
             
             time.sleep(5)
             
@@ -668,4 +683,4 @@ def main():
     monitor_loop()
 
 if __name__ == "__main__":
-    main()
+    main()    main()
