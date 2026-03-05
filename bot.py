@@ -1,14 +1,36 @@
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime
 from playwright.async_api import async_playwright
+import telebot
+from telebot import apihelper
+
+# ===== НАСТРОЙКИ =====
+TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
+CHANNEL_ID = "-1003179573402"
+MAIN_URL = "https://1xlite-9048339.bar/ru/live/twentyone/1643503-twentyone-game?platform_type=desktop"
+# =====================
+
+apihelper.RETRY_ON_ERROR = True
+apihelper.MAX_RETRIES = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+
+bot = telebot.TeleBot(TOKEN)
 
 class TableMonitor:
     def __init__(self):
         self.current_table_index = 0
+        
+    def send_telegram(self, message):
+        """Отправляет сообщение в Telegram"""
+        try:
+            bot.send_message(CHANNEL_ID, message)
+            logging.info(f"✅ Отправлено: {message[:50]}...")
+        except Exception as e:
+            logging.error(f"Ошибка отправки в Telegram: {e}")
         
     async def get_tables_from_lobby(self, page):
         """Получает список всех доступных столов из лобби"""
@@ -87,7 +109,7 @@ class TableMonitor:
                     state = await self.get_game_state(page)
                     
                     if state and state != last_state:
-                        logging.info(f"Стол #{table_index + 1}: {state}")
+                        self.send_telegram(state)
                         last_state = state
                     
                     await asyncio.sleep(1)
@@ -99,8 +121,22 @@ class TableMonitor:
             logging.info(f"Стол #{table_index + 1}: мониторинг завершён")
 
     async def get_game_state(self, page):
-        """Получает текущее состояние игры"""
+        """Получает текущее состояние игры с определением хода"""
         try:
+            # Определяем, чей ход
+            turn_symbol = ""
+            player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
+            if player_area:
+                class_name = await player_area.get_attribute('class') or ''
+                if 'active' in class_name.lower():
+                    turn_symbol = " 👈"
+            
+            dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
+            if dealer_area:
+                class_name = await dealer_area.get_attribute('class') or ''
+                if 'active' in class_name.lower():
+                    turn_symbol = " 👉"
+            
             # Карты игрока
             player_container = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
             player_cards = await self.extract_cards(player_container)
@@ -117,9 +153,11 @@ class TableMonitor:
             dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
             dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
             
-            return f"Игрок: {player_score}({player_cards}) - Дилер: {dealer_score}({dealer_cards})"
+            # Формируем строку состояния
+            return f"#{self.current_table_index} {player_score}({player_cards}){turn_symbol} - {dealer_score}({dealer_cards})"
             
         except Exception as e:
+            logging.error(f"Ошибка в get_game_state: {e}")
             return None
 
     async def extract_cards(self, container):
@@ -133,6 +171,10 @@ class TableMonitor:
         for card in card_elements:
             try:
                 class_name = await card.get_attribute('class') or ''
+                
+                # Пропускаем скрытые карты
+                if 'hidden' in class_name.lower() or 'face-down' in class_name.lower():
+                    continue
                 
                 # Определяем масть
                 suit = '?'
@@ -163,6 +205,7 @@ class TableMonitor:
     async def run(self):
         """Основной цикл мониторинга"""
         logging.info("🚀 Запуск мониторинга столов по очереди")
+        self.send_telegram("🚀 Бот запущен, начинаю мониторинг столов")
         
         while True:
             try:
@@ -175,8 +218,7 @@ class TableMonitor:
                     page = await browser.new_page()
                     
                     # Заходим в лобби
-                    await page.goto("https://1xlite-9048339.bar/ru/live/twentyone/1643503-twentyone-game", 
-                                  timeout=30000, wait_until="domcontentloaded")
+                    await page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
                     
                     # Получаем список столов
                     tables = await self.get_tables_from_lobby(page)
@@ -207,9 +249,9 @@ class TableMonitor:
                     
             except Exception as e:
                 logging.error(f"Критическая ошибка: {e}")
+                self.send_telegram(f"❌ Ошибка: {str(e)[:100]}")
                 await asyncio.sleep(10)
 
 if __name__ == "__main__":
-    import re  # Добавляем импорт re для работы с регулярками
     monitor = TableMonitor()
     asyncio.run(monitor.run())
