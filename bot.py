@@ -23,7 +23,8 @@ bot = telebot.TeleBot(TOKEN)
 class TableMonitor:
     def __init__(self):
         self.current_table_index = 0
-        
+        self.last_turn = ""  # ### ИЗМЕНЕНИЕ: для отслеживания предыдущего хода
+
     def send_telegram(self, message):
         """Отправляет сообщение в Telegram"""
         try:
@@ -31,16 +32,12 @@ class TableMonitor:
             logging.info(f"✅ Отправлено: {message[:50]}...")
         except Exception as e:
             logging.error(f"Ошибка отправки в Telegram: {e}")
-        
+
     async def get_tables_from_lobby(self, page):
         """Получает список всех доступных столов из лобби"""
         try:
-            # Ждем загрузки списка столов
             await page.wait_for_selector('.dashboard-game-block', timeout=10000)
-            
-            # Находим все столы
             tables = await page.query_selector_all('.dashboard-game-block')
-            
             table_urls = []
             for table in tables:
                 try:
@@ -53,10 +50,8 @@ class TableMonitor:
                             table_urls.append(href)
                 except:
                     continue
-            
             logging.info(f"Найдено столов: {len(table_urls)}")
             return table_urls
-            
         except Exception as e:
             logging.error(f"Ошибка при получении списка столов: {e}")
             return []
@@ -64,7 +59,6 @@ class TableMonitor:
     async def monitor_single_table(self, table_url, table_index):
         """Мониторит один стол до конца игры"""
         logging.info(f"🎮 Стол #{table_index + 1}: начало мониторинга")
-        
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -77,26 +71,19 @@ class TableMonitor:
                     "--disable-remote-fonts"
                 ]
             )
-            
             page = await browser.new_page()
-            
-            # Загружаем страницу стола
             await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
             logging.info(f"Стол #{table_index + 1}: страница загружена")
-            
-            # Ждем появления карт
             try:
                 await page.wait_for_selector('.scoreboard-card-games-card', timeout=15000)
                 logging.info(f"Стол #{table_index + 1}: карты появились")
             except:
                 logging.warning(f"Стол #{table_index + 1}: карты не найдены, но продолжаем")
-            
+
             game_active = True
             last_state = None
-            
             while game_active:
                 try:
-                    # Проверяем, не завершилась ли игра
                     timer_div = await page.query_selector('.ui-game-timer__label')
                     if timer_div:
                         timer_text = await timer_div.text_content()
@@ -104,63 +91,75 @@ class TableMonitor:
                             logging.info(f"Стол #{table_index + 1}: игра завершена")
                             game_active = False
                             break
-                    
-                    # Получаем состояние игры
                     state = await self.get_game_state(page)
-                    
                     if state and state != last_state:
                         self.send_telegram(state)
                         last_state = state
-                    
-                    await asyncio.sleep(1)
-                    
+                    await asyncio.sleep(0.5)  # ### ИЗМЕНЕНИЕ: уменьшен интервал до 0.5 сек
                 except Exception as e:
                     logging.error(f"Ошибка при мониторинге стола #{table_index + 1}: {e}")
                     await asyncio.sleep(2)
-            
             logging.info(f"Стол #{table_index + 1}: мониторинг завершён")
+
 
     async def get_game_state(self, page):
         """Получает текущее состояние игры с определением хода"""
         try:
-            # Определяем, чей ход
+            # ### ИЗМЕНЕНИЕ: улучшенная логика определения хода
             turn_symbol = ""
+            player_active = False
+            dealer_active = False
+
+            # Проверяем игрока
             player_area = await page.query_selector('.live-twenty-one-field-player:first-child')
             if player_area:
                 class_name = await player_area.get_attribute('class') or ''
-                if 'active' in class_name.lower():
-                    turn_symbol = " 👈"
-            
+                player_active = 'active' in class_name.lower()
+
+            # Проверяем дилера
             dealer_area = await page.query_selector('.live-twenty-one-field-player:last-child')
             if dealer_area:
                 class_name = await dealer_area.get_attribute('class') or ''
-                if 'active' in class_name.lower():
-                    turn_symbol = " 👉"
-            
+                dealer_active = 'active' in class_name.lower()
+
+            # Определяем ход с приоритетом
+            if player_active and not dealer_active:
+                turn_symbol = " 👈"
+            elif dealer_active and not player_active:
+                turn_symbol = " 👉"
+            else:
+                turn_symbol = " ↔"  # нейтральный символ при неопределённости
+
             # Карты игрока
             player_container = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
             player_cards = await self.extract_cards(player_container)
-            
+
             # Карты дилера
             dealer_container = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-cards')
             dealer_cards = await self.extract_cards(dealer_container)
-            
+
             # Счет игрока
             player_score_el = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-field-score__label')
             player_score = await player_score_el.text_content() if player_score_el else '0'
-            
+
             # Счет дилера
             dealer_score_el = await page.query_selector('.live-twenty-one-field-player:last-child .live-twenty-one-field-score__label')
             dealer_score = await dealer_score_el.text_content() if dealer_score_el else '0'
-            
+
             # Формируем строку состояния
-            return f"#{self.current_table_index} {player_score}({player_cards}){turn_symbol} - {dealer_score}({dealer_cards})"
-            
+            state_str = f"#{self.current_table_index} {player_score}({player_cards}){turn_symbol} - {dealer_score}({dealer_cards})"
+
+            # ### ИЗМЕНЕНИЕ: проверка смены хода и отправка уведомления
+            if turn_symbol != self.last_turn:
+                self.send_telegram(f"Ход изменился: {turn_symbol}")
+                self.last_turn = turn_symbol
+
+            return state_str
         except Exception as e:
             logging.error(f"Ошибка в get_game_state: {e}")
             return None
 
-    async def extract_cards(self, container):
+        async def extract_cards(self, container):
         """Извлекает карты из контейнера"""
         if not container:
             return "нет карт"
