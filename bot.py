@@ -13,7 +13,7 @@ from telebot import apihelper
 TOKEN = "8357635747:AAGAH_Rwk-vR8jGa6Q9F-AJLsMaEIj-JDBU"
 CHANNEL_ID = "-1003179573402"
 MAIN_URL = "https://1xlite-9048339.bar/ru/live/twentyone/1643503-twentyone-game?platform_type=desktop"
-MAX_BROWSERS = 2
+MAX_TABLES = 3  # Максимум столов (раньше было MAX_BROWSERS)
 # =====================
 
 apihelper.RETRY_ON_ERROR = True
@@ -39,7 +39,7 @@ VALUE_MAP = {
 }
 
 bot = telebot.TeleBot(TOKEN)
-active_tables = {}
+active_tables = {}  # game_number -> thread
 monitoring_games = set()
 lock = threading.Lock()
 bot_running = True
@@ -166,8 +166,8 @@ async def get_table_url(page, game_number):
         logging.error(f"Ошибка в get_table_url: {e}")
         return None
 
-async def monitor_table(table_url, game_number):
-    """Мониторинг конкретного стола"""
+async def monitor_table(page, game_number):
+    """Мониторинг конкретного стола (работает с готовой страницей)"""
     
     with lock:
         if game_number in monitoring_games:
@@ -175,83 +175,46 @@ async def monitor_table(table_url, game_number):
             return
         monitoring_games.add(game_number)
     
-    browser = None
-    page = None
     last_state = None
     start_time = time.time()
     max_duration = 240
-    browser_start_time = time.time()
-    max_browser_lifetime = 600
     
     logging.info(f"🎮 Стол #{game_number}: начало мониторинга")
     
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--js-flags=--max-old-space-size=256",
-                    "--single-process",
-                    "--blink-settings=imagesEnabled=false",
-                    "--disable-remote-fonts",
-                    "--disable-default-apps",
-                    "--disable-translate",
-                    "--disable-sync",
-                    "--disable-extensions"
-                ]
-            )
-            
-            page = await browser.new_page()
-            
-            async def block_resources(route):
-                if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
-                    await route.abort()
-                else:
-                    await route.continue_()
-            
-            await page.route('**/*', block_resources)
-            
-            await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
-            logging.info(f"Стол #{game_number}: страница загружена")
-            
-            # Ждём появления карт до 90 секунд
+        # Ждём появления карт до 90 секунд
+        try:
+            await page.wait_for_selector('.scoreboard-card-games-card', timeout=90000)
+            logging.info(f"Стол #{game_number}: карты появились")
+        except:
+            logging.warning(f"Стол #{game_number}: карты не найдены за 90 секунд")
+        
+        while time.time() - start_time < max_duration:
             try:
-                await page.wait_for_selector('.scoreboard-card-games-card', timeout=90000)
-                logging.info(f"Стол #{game_number}: карты появились")
-            except:
-                logging.warning(f"Стол #{game_number}: карты не найдены за 90 секунд")
-            
-            while time.time() - start_time < max_duration:
-                if time.time() - browser_start_time > max_browser_lifetime:
-                    logging.warning(f"Стол #{game_number}: браузер работает слишком долго")
+                if page.is_closed():
                     break
                 
-                try:
-                    if page.is_closed():
-                        break
-                    
-                    state = await get_game_state(page, game_number)
-                    
-                    if state and state != last_state:
-                        message = format_game_message(game_number, state)
-                        send_telegram(message)
-                        last_state = state
-                    
-                    await asyncio.sleep(0.5)
-                    
-                except Exception as e:
+                state = await get_game_state(page, game_number)
+                
+                if state and state != last_state:
+                    message = format_game_message(game_number, state)
+                    send_telegram(message)
+                    last_state = state
+                
+                await asyncio.sleep(0.5)
+                
+            except Exception as e:
+                if "EPIPE" in str(e) or "pipe" in str(e).lower():
+                    logging.error(f"Стол #{game_number}: ошибка соединения с браузером, пробуем пересоздать")
+                    # Пересоздаем страницу не получится, просто выходим
+                    break
+                else:
                     logging.error(f"Ошибка в цикле стола #{game_number}: {e}")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
             
     except Exception as e:
         logging.error(f"Критическая ошибка стола #{game_number}: {e}")
     finally:
-        if browser:
-            await browser.close()
-        
         with lock:
             monitoring_games.discard(game_number)
             if game_number in active_tables:
@@ -311,129 +274,106 @@ def send_telegram(message):
     except Exception as e:
         logging.error(f"Ошибка отправки в Telegram: {e}")
 
-def run_async_monitor(table_url, game_number):
+def run_async_monitor(page, game_number):
     """Запускает асинхронный мониторинг в потоке"""
     try:
-        asyncio.run(monitor_table(table_url, game_number))
+        asyncio.run(monitor_table(page, game_number))
     except Exception as e:
         logging.error(f"Ошибка в потоке мониторинга стола #{game_number}: {e}")
 
-def launch_next_game_monitor():
-    """Запускает монитор для следующей игры"""
-    async def get_table():
-        async with async_playwright() as p:
-            browser = None
+async def browser_manager():
+    """Управляет ОДНИМ браузером и несколькими страницами"""
+    async with async_playwright() as p:
+        # Запускаем ОДИН браузер на всё
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--js-flags=--max-old-space-size=256",
+                "--blink-settings=imagesEnabled=false",
+                "--disable-remote-fonts",
+                "--disable-default-apps",
+                "--disable-translate",
+                "--disable-sync",
+                "--disable-extensions"
+            ]
+        )
+        
+        # Словарь для хранения страниц и их статусов
+        pages = {}  # table_index -> {'page': page, 'game_number': game_number, 'active': bool}
+        
+        while bot_running:
             try:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--js-flags=--max-old-space-size=256"
-                    ]
-                )
-                page = await browser.new_page()
-                
-                async def block_resources(route):
-                    if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
-                        await route.abort()
-                    else:
-                        await route.continue_()
-                
-                await page.route('**/*', block_resources)
-                await page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
-                
-                next_game_time, _ = get_next_game_time()
+                # Определяем следующую игру
+                next_game_time, seconds_to_next = get_next_game_time()
                 game_number = get_game_number_by_time(next_game_time)
                 
-                url = await get_table_url(page, game_number)
-                return url, game_number
+                # Если пора запускать новый стол
+                if seconds_to_next <= 40 and len(pages) < MAX_TABLES:
+                    # Создаем новый контекст и страницу
+                    context = await browser.new_context()
+                    page = await context.new_page()
+                    
+                    # Блокируем лишние ресурсы
+                    await page.route('**/*', block_resources)
+                    
+                    # Загружаем лобби
+                    await page.goto(MAIN_URL, timeout=30000, wait_until="domcontentloaded")
+                    
+                    # Ищем URL стола
+                    table_url = await get_table_url(page, game_number)
+                    
+                    if table_url:
+                        # Переходим на страницу стола
+                        await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
+                        
+                        # Запускаем мониторинг в отдельной задаче
+                        asyncio.create_task(monitor_table(page, game_number))
+                        
+                        pages[game_number] = {'page': page, 'context': context, 'active': True}
+                        logging.info(f"✅ Запущен мониторинг стола #{game_number}")
+                    else:
+                        # Если не нашли стол, закрываем страницу
+                        await page.close()
+                        await context.close()
+                
+                # Чистим завершённые страницы
+                for game_num in list(pages.keys()):
+                    if game_num not in monitoring_games:
+                        # Страница больше не нужна
+                        await pages[game_num]['page'].close()
+                        await pages[game_num]['context'].close()
+                        del pages[game_num]
+                        logging.info(f"🧹 Закрыта страница для игры #{game_num}")
+                
+                await asyncio.sleep(5)
                 
             except Exception as e:
-                logging.error(f"Ошибка при загрузке MAIN_URL: {e}")
-                return None, None
-            finally:
-                if browser:
-                    await browser.close()
-                gc.collect()
-    
-    try:
-        table_url, game_number = asyncio.run(get_table())
+                logging.error(f"Ошибка в browser_manager: {e}")
+                await asyncio.sleep(10)
         
-        if not table_url or not game_number:
-            logging.warning("Не удалось получить URL стола")
-            return
-        
-        with lock:
-            if game_number in active_tables:
-                logging.info(f"Игра #{game_number} уже мониторится, пропускаем")
-                return
-        
-        logging.info(f"🎯 Игра #{game_number}: запуск мониторинга")
-        
-        thread = threading.Thread(
-            target=run_async_monitor, 
-            args=(table_url, game_number)
-        )
-        thread.daemon = True
-        thread.start()
-        
-        with lock:
-            active_tables[game_number] = thread
-        
-        logging.info(f"✅ Игра #{game_number}: мониторинг запущен (активных: {len(active_tables)}/{MAX_BROWSERS})")
-            
-    except Exception as e:
-        logging.error(f"Ошибка при запуске монитора: {e}")
+        # Закрываем браузер при выходе
+        await browser.close()
 
-def clean_threads():
-    """Очищает завершённые потоки"""
-    with lock:
-        dead = [gid for gid, t in active_tables.items() if not t.is_alive()]
-        for gid in dead:
-            del active_tables[gid]
-            monitoring_games.discard(gid)
-            logging.info(f"🧹 Поток игры #{gid} очищен")
-
-def monitor_loop():
-    """Основной цикл мониторинга"""
-    global bot_running
-    last_launch_time = 0
-    
-    logging.info("🚀 Бот для 21 Classic запущен")
-    logging.info(f"Максимум браузеров: {MAX_BROWSERS}")
-    
-    while bot_running:
-        try:
-            clean_threads()
-            
-            next_game_time, seconds_to_next = get_next_game_time()
-            current_time = time.time()
-            
-            if seconds_to_next <= 40 and (current_time - last_launch_time) > 30:
-                game_number = get_game_number_by_time(next_game_time)
-                logging.info(f"🎯 До игры #{game_number} осталось {seconds_to_next:.0f} сек")
-                launch_next_game_monitor()
-                last_launch_time = current_time
-                time.sleep(35)
-            
-            time.sleep(5)
-            
-        except KeyboardInterrupt:
-            logging.info("Получен сигнал завершения")
-            bot_running = False
-            break
-        except Exception as e:
-            logging.error(f"Ошибка в основном цикле: {e}")
-            time.sleep(10)
-            gc.collect()
-    
-    logging.info("Бот остановлен")
+async def block_resources(route):
+    """Блокирует ненужные ресурсы"""
+    if route.request.resource_type in ['image', 'stylesheet', 'font', 'media']:
+        await route.abort()
+    else:
+        await route.continue_()
 
 def main():
     """Точка входа"""
-    monitor_loop()
+    logging.info("🚀 Бот для 21 Classic запущен (ОПТИМИЗИРОВАННАЯ ВЕРСИЯ)")
+    logging.info(f"Максимум столов: {MAX_TABLES}")
+    logging.info("Архитектура: 1 браузер + несколько страниц")
+    
+    try:
+        asyncio.run(browser_manager())
+    except KeyboardInterrupt:
+        logging.info("Бот остановлен")
 
 if __name__ == "__main__":
     main()
