@@ -217,21 +217,13 @@ async def monitor_table(table_url, game_number):
             await page.goto(table_url, timeout=30000, wait_until="domcontentloaded")
             logging.info(f"Стол #{game_number}: страница загружена")
             
-            cards_found = False
-            for attempt in range(10):
-                try:
-                    player_cards_container = await page.query_selector('.live-twenty-one-field-player:first-child .live-twenty-one-cards')
-                    if player_cards_container:
-                        cards = await extract_cards_from_container(player_cards_container)
-                        if cards:
-                            cards_found = True
-                            logging.info(f"Стол #{game_number}: карты найдены на попытке {attempt+1}")
-                            break
-                except:
-                    pass
-                await asyncio.sleep(1)
-            
-            if not cards_found:
+            # Вместо цикла с asyncio.sleep используем wait_for_selector
+            try:
+                await page.wait_for_selector('.scoreboard-card-games-card', timeout=10000)
+                cards_found = True
+                logging.info(f"Стол #{game_number}: карты появились")
+            except:
+                cards_found = False
                 logging.warning(f"Стол #{game_number}: карты не найдены за 10 секунд")
             
             while time.time() - start_time < max_duration:
@@ -250,11 +242,12 @@ async def monitor_table(table_url, game_number):
                         send_telegram(message)
                         last_state = state
                     
-                    await asyncio.sleep(1)
+                    # Уменьшил sleep до минимума
+                    await asyncio.sleep(0.3)
                     
                 except Exception as e:
                     logging.error(f"Ошибка в цикле стола #{game_number}: {e}")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
             
     except Exception as e:
         logging.error(f"Критическая ошибка стола #{game_number}: {e}")
@@ -380,9 +373,6 @@ def launch_next_game_monitor():
                 logging.info(f"Игра #{game_number} уже мониторится, пропускаем")
                 return
             # Убрана проверка на завершённые игры
-            # if game_data.is_game_completed(game_number):
-            #     logging.info(f"Игра #{game_number} уже завершена, пропускаем")
-            #     return
         
         logging.info(f"🎯 Игра #{game_number}: запуск мониторинга")
         
@@ -430,9 +420,10 @@ def monitor_loop():
                 logging.info(f"🎯 До игры #{game_number} осталось {seconds_to_next:.0f} сек")
                 launch_next_game_monitor()
                 last_launch_time = current_time
-                time.sleep(35)
+                # Уменьшил время сна
+                time.sleep(5)  # было 35, теперь 5
             
-            time.sleep(5)
+            time.sleep(1)  # было 5, теперь 1
             
         except KeyboardInterrupt:
             logging.info("Получен сигнал завершения")
@@ -440,7 +431,7 @@ def monitor_loop():
             break
         except Exception as e:
             logging.error(f"Ошибка в основном цикле: {e}")
-            time.sleep(10)
+            time.sleep(5)
             gc.collect()
     
     logging.info("Бот остановлен")
