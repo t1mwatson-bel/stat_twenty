@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 21 CLASSICS", flush=True)
+print("🃏 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -44,26 +44,14 @@ OFFSET_FILE = "offset.txt"
 MAX_HISTORY = 200
 PROCESSED_GAMES = set()
 LAST_PREDICT_TIME = 0
-PREDICT_INTERVAL = 120  # 2 минуты
+PREDICT_INTERVAL = 10  # 10 секунд между прогнозами
 
-# Масти с эмодзи для 21 Classics
-SUITS = {
-    "♠": "♠️", "♣": "♣️", "♦": "♦️", "♥": "♥️",
-    "♠️": "♠️", "♣️": "♣️", "♦️": "♦️", "♥️": "♥️"
-}
+# Масти для 21 Classics
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
 
 # =====================================================================
 # ФУНКЦИИ
 # =====================================================================
-def is_skip_game(text, game_data=None):
-    """Проверяет, нужно ли пропустить игру"""
-    if "21" in text:
-        return True
-    if "🔰" in text:
-        return True
-    return False
-
 def get_updates(offset):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"offset": offset, "timeout": 30}
@@ -103,9 +91,11 @@ def edit_message(message_id, text):
         return False
 
 def is_final_game(text):
+    """Проверяет, завершена ли игра (есть ✅ или 🔰)"""
     return "✅" in text or "🔰" in text
 
 def parse_game(text):
+    """Парсит сообщение с игрой и возвращает карты игрока"""
     try:
         game_match = re.search(r'#N(\d+)', text)
         if not game_match:
@@ -119,50 +109,24 @@ def parse_game(text):
         if len(parts) < 2:
             return None
         
+        # Парсим карты игрока (до " - ")
         player_part = parts[0].strip()
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
         if not player_match:
             return None
         player_cards_str = player_match.group(2).strip()
         
-        dealer_part = parts[1].strip()
-        dealer_match = re.search(r'(\d+)\(([^)]+)\)', dealer_part)
-        if not dealer_match:
-            return None
-        dealer_cards_str = dealer_match.group(2).strip() if dealer_match else ""
-        
-        # Парсим карты с учётом эмодзи мастей (♠️♣️♦️♥️)
+        # Извлекаем карты с учётом эмодзи мастей
         player_cards = []
         for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', player_cards_str):
             rank, suit = card
-            # Нормализуем масть
-            if suit in ["♠️", "♠"]:
-                suit = "♠️"
-            elif suit in ["♣️", "♣"]:
-                suit = "♣️"
-            elif suit in ["♦️", "♦"]:
-                suit = "♦️"
-            elif suit in ["♥️", "♥"]:
-                suit = "♥️"
+            # Нормализуем масть (с эмодзи)
+            suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
             player_cards.append({"rank": rank, "suit": suit})
-        
-        dealer_cards = []
-        for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', dealer_cards_str):
-            rank, suit = card
-            if suit in ["♠️", "♠"]:
-                suit = "♠️"
-            elif suit in ["♣️", "♣"]:
-                suit = "♣️"
-            elif suit in ["♦️", "♦"]:
-                suit = "♦️"
-            elif suit in ["♥️", "♥"]:
-                suit = "♥️"
-            dealer_cards.append({"rank": rank, "suit": suit})
         
         return {
             "number": game_number,
             "player_cards": player_cards,
-            "dealer_cards": dealer_cards,
             "text": text
         }
     except Exception as e:
@@ -219,10 +183,7 @@ def predict(game_data):
     if not predicted_suit:
         return None
     
-    # Получаем ранг старшей карты
     rank = player_highest["rank"]
-    
-    # Формируем прогноз
     target_game = game_num + 1
     
     result = {
@@ -248,7 +209,6 @@ def check_results(history, all_messages):
         predicted_suit = entry.get("suit")
         from_game = entry.get("from_game")
         message_id = entry.get("message_id")
-        predicted_card = entry.get("card")
         
         if not predicted_suit or not message_id:
             continue
@@ -260,10 +220,8 @@ def check_results(history, all_messages):
         # Проверяем игры с N+1 по N+3
         for i in range(3):
             game_to_check = target + i
-            
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
-                    # Проверяем наличие прогнозируемой масти у игрока
                     game_data = parse_game(msg)
                     if game_data:
                         for card in game_data["player_cards"]:
@@ -324,19 +282,7 @@ def load_history():
 def clean_memory(history):
     if len(history) > MAX_HISTORY:
         history = history[-MAX_HISTORY:]
-    now = datetime.now()
-    new_history = []
-    for item in history:
-        if "time" in item:
-            try:
-                item_time = datetime.fromisoformat(item["time"])
-                if (now - item_time).days < 7:
-                    new_history.append(item)
-            except:
-                new_history.append(item)
-        else:
-            new_history.append(item)
-    return new_history
+    return history
 
 def get_offset():
     if os.path.exists(OFFSET_FILE):
@@ -352,12 +298,12 @@ def save_offset(offset):
         f.write(str(offset))
 
 # =====================================================================
-# ОСНОВНОЙ ЦИКЛ
+# ОСНОВНОЙ ЦИКЛ (ЛАЙВ)
 # =====================================================================
 def main():
     global LAST_PREDICT_TIME
     
-    print("🔄 ПРОГНОЗИСТ 21 CLASSICS ЗАПУЩЕН", flush=True)
+    print("🔄 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ) ЗАПУЩЕН", flush=True)
     print(f"📊 Читает канал: {CHANNEL_STATS}", flush=True)
     print(f"📤 Отправляет в: {CHANNEL_PROGNOZ}", flush=True)
     print("=" * 60, flush=True)
@@ -406,6 +352,9 @@ def main():
                 if game_number in PROCESSED_GAMES:
                     continue
                 
+                # ❌ УБРАЛ ПРОВЕРКУ НА ЧЁТНОСТЬ
+                # if game_number % 2 != 0: continue
+                
                 if not is_final_game(text):
                     print(f"⏳ Ожидание финальной раздачи для #N{game_number}", flush=True)
                     continue
@@ -415,11 +364,6 @@ def main():
                 game_data = parse_game(text)
                 if not game_data:
                     print(f"❌ Не удалось распарсить #N{game_number}", flush=True)
-                    continue
-                
-                if is_skip_game(text, game_data):
-                    reason = "21" if "21" in text else "🔰" if "🔰" in text else "фильтр"
-                    print(f"⏭️ Пропускаем #N{game_number} (фильтр: {reason})", flush=True)
                     continue
                 
                 current_time = time.time()
