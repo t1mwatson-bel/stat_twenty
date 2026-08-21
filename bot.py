@@ -5,13 +5,19 @@ import json
 import re
 import time
 from datetime import datetime, timedelta
+import pytz
+
+# =====================================================================
+# ЧАСОВОЙ ПОЯС (МОСКВА)
+# =====================================================================
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 # =====================================================================
 # ПРИНУДИТЕЛЬНЫЙ ВЫВОД ЛОГОВ
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ)", flush=True)
+print("🃏 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ + СТАТИСТИКА)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -41,13 +47,70 @@ print("✅ Все переменные заданы!", flush=True)
 # =====================================================================
 HISTORY_FILE = "history.json"
 OFFSET_FILE = "offset.txt"
+STATS_FILE = "stats.json"
 MAX_HISTORY = 200
 PROCESSED_GAMES = set()
 LAST_PREDICT_TIME = 0
-PREDICT_INTERVAL = 10  # 10 секунд между прогнозами
+PREDICT_INTERVAL = 10
+CLEANUP_INTERVAL = 3600
 
-# Масти для 21 Classics
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
+
+# =====================================================================
+# СТАТИСТИКА
+# =====================================================================
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        try:
+            with open(STATS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0}}
+    return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0}}
+
+def save_stats(stats):
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2, ensure_ascii=False)
+
+def update_stats(dogon_number, result):
+    stats = load_stats()
+    stats["total"] += 1
+    
+    if result == "win":
+        stats["win"] += 1
+        if dogon_number in stats["by_dogon"]:
+            stats["by_dogon"][dogon_number] += 1
+    else:
+        stats["lose"] += 1
+    
+    save_stats(stats)
+    return stats
+
+def send_stats_report():
+    stats = load_stats()
+    
+    if stats["total"] == 0:
+        msg = "📊 <b>СТАТИСТИКА ПРОГНОЗОВ</b>\n\n"
+        msg += "Пока нет прогнозов. Ожидаем первые результаты..."
+        send_message(msg)
+        return
+    
+    win_rate = (stats["win"] / stats["total"] * 100) if stats["total"] > 0 else 0
+    
+    msg = f"📊 <b>СТАТИСТИКА ПРОГНОЗОВ</b>\n"
+    msg += f"{'=' * 30}\n\n"
+    msg += f"📈 <b>Всего прогнозов:</b> {stats['total']}\n"
+    msg += f"✅ <b>Зашло:</b> {stats['win']} ({win_rate:.1f}%)\n"
+    msg += f"❌ <b>Не зашло:</b> {stats['lose']} ({100 - win_rate:.1f}%)\n\n"
+    msg += f"{'=' * 30}\n"
+    msg += f"<b>По догонам:</b>\n"
+    msg += f"🎯 Целевая игра: {stats['by_dogon'].get(1, 0)}\n"
+    msg += f"🔄 Догон 1: {stats['by_dogon'].get(2, 0)}\n"
+    msg += f"🔄 Догон 2: {stats['by_dogon'].get(3, 0)}\n"
+    msg += f"{'=' * 30}\n"
+    msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
+    
+    send_message(msg)
 
 # =====================================================================
 # ФУНКЦИИ
@@ -90,43 +153,52 @@ def edit_message(message_id, text):
         print(f"❌ Ошибка редактирования: {e}", flush=True)
         return False
 
-def is_final_game(text):
-    """Проверяет, завершена ли игра (есть ✅ или 🔰)"""
-    return "✅" in text or "🔰" in text
-
 def parse_game(text):
-    """Парсит сообщение с игрой и возвращает карты игрока"""
+    """Парсит игру и возвращает карты игрока и дилера"""
     try:
         game_match = re.search(r'#N(\d+)', text)
         if not game_match:
             return None
         game_number = int(game_match.group(1))
         
-        # Очищаем текст от лишних символов
-        clean_text = text.replace('✅', '').replace('🔰', '').replace('▶️', '').replace('◀️', '').replace('⚠️', '')
+        # Убираем все лишние символы
+        clean_text = text
+        for symbol in ['✅', '🔰', '▶️', '◀️', '⚠️']:
+            clean_text = clean_text.replace(symbol, '')
         
         parts = clean_text.split('-')
         if len(parts) < 2:
             return None
         
-        # Парсим карты игрока (до " - ")
         player_part = parts[0].strip()
+        dealer_part = parts[1].strip()
+        
+        # Парсим карты игрока
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
         if not player_match:
             return None
         player_cards_str = player_match.group(2).strip()
         
-        # Извлекаем карты с учётом эмодзи мастей
+        # Парсим карты дилера
+        dealer_match = re.search(r'(\d+)\(([^)]+)\)', dealer_part)
+        dealer_cards_str = dealer_match.group(2).strip() if dealer_match else ""
+        
         player_cards = []
         for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', player_cards_str):
             rank, suit = card
-            # Нормализуем масть (с эмодзи)
             suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
             player_cards.append({"rank": rank, "suit": suit})
+        
+        dealer_cards = []
+        for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', dealer_cards_str):
+            rank, suit = card
+            suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
+            dealer_cards.append({"rank": rank, "suit": suit})
         
         return {
             "number": game_number,
             "player_cards": player_cards,
+            "dealer_cards": dealer_cards,
             "text": text
         }
     except Exception as e:
@@ -159,24 +231,21 @@ def get_highest_card(cards):
         elif rank_value == highest_rank:
             count_highest += 1
     
-    # Если несколько одинаковых старших карт - пропускаем
     if count_highest > 1:
         return None, None
     
     return highest_card, highest_position
 
 def get_suit_by_position(position):
-    """По позиции определяет прогнозируемую масть"""
     return POSITION_SUITS.get(position, None)
 
 def predict(game_data):
-    """Делает прогноз для 21 Classics"""
+    """Делает прогноз на основе старшей карты игрока"""
     game_num = game_data["number"]
     
-    # Находим старшую карту у игрока
     player_highest, player_position = get_highest_card(game_data["player_cards"])
     if not player_highest or not player_position:
-        print(f"⚠️ Игра #{game_num}: неопределенность (несколько старших карт или 5+ карт)", flush=True)
+        print(f"⚠️ Игра #{game_num}: неопределенность", flush=True)
         return None
     
     predicted_suit = get_suit_by_position(player_position)
@@ -186,7 +255,7 @@ def predict(game_data):
     rank = player_highest["rank"]
     target_game = game_num + 1
     
-    result = {
+    return {
         "from_game": game_num,
         "target": target_game,
         "suit": predicted_suit,
@@ -195,12 +264,9 @@ def predict(game_data):
         "position": player_position,
         "games": [target_game, target_game + 1, target_game + 2]
     }
-    
-    print(f"🔍 Прогноз для #N{game_num}: {result}", flush=True)
-    return result
 
 def check_results(history, all_messages):
-    """Проверяет результаты прогнозов"""
+    """Проверяет прогнозы по всем играм (целевая + 2 догона)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -217,25 +283,34 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
-        # Проверяем игры с N+1 по N+3
+        # ✅ ПРОВЕРЯЕМ 3 ИГРЫ: ЦЕЛЕВАЯ (0) + ДОГОН 1 (1) + ДОГОН 2 (2)
         for i in range(3):
             game_to_check = target + i
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
                     game_data = parse_game(msg)
                     if game_data:
+                        # Проверяем карты игрока
                         for card in game_data["player_cards"]:
                             if card.get("suit") == predicted_suit:
                                 found = True
                                 found_game = game_to_check
                                 found_dogon = i + 1
                                 break
+                        # Если не нашли у игрока - проверяем дилера
+                        if not found:
+                            for card in game_data["dealer_cards"]:
+                                if card.get("suit") == predicted_suit:
+                                    found = True
+                                    found_game = game_to_check
+                                    found_dogon = i + 1
+                                    break
                     if found:
                         break
             if found:
                 break
         
-        # Проверяем, все ли игры проверены
+        # Проверяем, все ли 3 игры уже есть в канале
         all_games_present = True
         for i in range(3):
             game_to_check = target + i
@@ -248,8 +323,15 @@ def check_results(history, all_messages):
                 all_games_present = False
                 break
         
+        # Если не все игры есть - пропускаем
         if not all_games_present:
             continue
+        
+        # Обновляем статистику
+        if found:
+            update_stats(found_dogon, "win")
+        else:
+            update_stats(0, "lose")
         
         original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
         original_text += f"📊 От игры: #N{from_game}\n"
@@ -282,6 +364,7 @@ def load_history():
 def clean_memory(history):
     if len(history) > MAX_HISTORY:
         history = history[-MAX_HISTORY:]
+        print(f"🧹 Очистка кэша: оставлено {len(history)} записей", flush=True)
     return history
 
 def get_offset():
@@ -297,8 +380,26 @@ def save_offset(offset):
     with open(OFFSET_FILE, "w") as f:
         f.write(str(offset))
 
+def load_recent_messages():
+    """Загружает последние 100 сообщений из канала при запуске"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    params = {"chat_id": CHANNEL_STATS, "limit": 100}
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            messages = []
+            for update in data.get("result", []):
+                post = update.get("channel_post")
+                if post and post.get("text"):
+                    messages.append(post.get("text"))
+            return messages
+    except Exception as e:
+        print(f"❌ Ошибка загрузки истории: {e}", flush=True)
+    return []
+
 # =====================================================================
-# ОСНОВНОЙ ЦИКЛ (ЛАЙВ)
+# ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
     global LAST_PREDICT_TIME
@@ -306,6 +407,7 @@ def main():
     print("🔄 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ) ЗАПУЩЕН", flush=True)
     print(f"📊 Читает канал: {CHANNEL_STATS}", flush=True)
     print(f"📤 Отправляет в: {CHANNEL_PROGNOZ}", flush=True)
+    print(f"⏰ Часовой пояс: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')} (МСК)", flush=True)
     print("=" * 60, flush=True)
     print("📌 Правила прогноза:", flush=True)
     print("   - Ищем старшую карту у игрока", flush=True)
@@ -316,10 +418,32 @@ def main():
     
     offset = get_offset()
     history = load_history()
-    all_messages = []
+    
+    # Загружаем последние сообщения при запуске
+    print("📥 Загрузка последних сообщений из канала...", flush=True)
+    all_messages = load_recent_messages()
+    print(f"📥 Загружено сообщений: {len(all_messages)}", flush=True)
+    
+    last_cleanup_time = time.time()
+    last_stats_time = time.time()
     
     while True:
         try:
+            current_time = time.time()
+            
+            if current_time - last_cleanup_time > CLEANUP_INTERVAL:
+                print("🧹 Запуск плановой очистки кэша...", flush=True)
+                history = clean_memory(history)
+                save_history(history)
+                PROCESSED_GAMES.clear()
+                print(f"🧹 Кэш очищен. Записей в истории: {len(history)}", flush=True)
+                last_cleanup_time = current_time
+            
+            if current_time - last_stats_time > 21600:
+                print("📊 Отправка статистики...", flush=True)
+                send_stats_report()
+                last_stats_time = current_time
+            
             updates = get_updates(offset)
             
             for update in updates.get("result", []):
@@ -345,18 +469,15 @@ def main():
                     continue
                 game_number = int(game_id_match.group(1))
                 
+                # Добавляем сообщение в историю
                 all_messages.append(text)
                 if len(all_messages) > 500:
                     all_messages = all_messages[-500:]
                 
+                # ✅ СРАЗУ проверяем прогнозы после добавления сообщения
+                check_results(history, all_messages)
+                
                 if game_number in PROCESSED_GAMES:
-                    continue
-                
-                # ❌ УБРАЛ ПРОВЕРКУ НА ЧЁТНОСТЬ
-                # if game_number % 2 != 0: continue
-                
-                if not is_final_game(text):
-                    print(f"⏳ Ожидание финальной раздачи для #N{game_number}", flush=True)
                     continue
                 
                 print(f"📥 {text[:50]}...", flush=True)
@@ -366,7 +487,6 @@ def main():
                     print(f"❌ Не удалось распарсить #N{game_number}", flush=True)
                     continue
                 
-                current_time = time.time()
                 if current_time - LAST_PREDICT_TIME < PREDICT_INTERVAL:
                     print(f"⏳ Интервал: {int(current_time - LAST_PREDICT_TIME)} сек < {PREDICT_INTERVAL} сек", flush=True)
                     continue
@@ -378,7 +498,7 @@ def main():
                     msg += f"🃏 Игрок масть: {prognoz['suit']}\n"
                     msg += f"🎯 Целевая игра: #N{prognoz['target']}\n"
                     msg += f"📈 2 игры догон\n"
-                    msg += f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+                    msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}"
                     
                     message_id = send_message(msg)
                     if message_id:
@@ -391,12 +511,13 @@ def main():
                             "target": prognoz["target"],
                             "suit": prognoz["suit"],
                             "card": prognoz["card"],
-                            "time": datetime.now().isoformat(),
+                            "time": datetime.now(MOSCOW_TZ).isoformat(),
                             "status": "pending",
                             "message_id": message_id
                         })
                         save_history(history)
             
+            # Проверка после всех обновлений (на всякий случай)
             check_results(history, all_messages)
             history = clean_memory(history)
             save_history(history)
