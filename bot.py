@@ -65,8 +65,8 @@ def load_stats():
             with open(STATS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
-            return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0}}
-    return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0}}
+            return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}}
+    return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}}
 
 def save_stats(stats):
     with open(STATS_FILE, "w", encoding="utf-8") as f:
@@ -107,6 +107,7 @@ def send_stats_report():
     msg += f"🎯 Целевая игра: {stats['by_dogon'].get(1, 0)}\n"
     msg += f"🔄 Догон 1: {stats['by_dogon'].get(2, 0)}\n"
     msg += f"🔄 Догон 2: {stats['by_dogon'].get(3, 0)}\n"
+    msg += f"🔄 Догон 3 (запас): {stats['by_dogon'].get(4, 0)}\n"
     msg += f"{'=' * 30}\n"
     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
     
@@ -154,7 +155,7 @@ def edit_message(message_id, text):
         return False
 
 def parse_game(text):
-    """Парсит игру и возвращает карты игрока и дилера"""
+    """Парсит игру и возвращает карты игрока"""
     try:
         game_match = re.search(r'#N(\d+)', text)
         if not game_match:
@@ -171,7 +172,6 @@ def parse_game(text):
             return None
         
         player_part = parts[0].strip()
-        dealer_part = parts[1].strip()
         
         # Парсим карты игрока
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
@@ -179,26 +179,15 @@ def parse_game(text):
             return None
         player_cards_str = player_match.group(2).strip()
         
-        # Парсим карты дилера
-        dealer_match = re.search(r'(\d+)\(([^)]+)\)', dealer_part)
-        dealer_cards_str = dealer_match.group(2).strip() if dealer_match else ""
-        
         player_cards = []
         for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', player_cards_str):
             rank, suit = card
             suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
             player_cards.append({"rank": rank, "suit": suit})
         
-        dealer_cards = []
-        for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', dealer_cards_str):
-            rank, suit = card
-            suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
-            dealer_cards.append({"rank": rank, "suit": suit})
-        
         return {
             "number": game_number,
             "player_cards": player_cards,
-            "dealer_cards": dealer_cards,
             "text": text
         }
     except Exception as e:
@@ -262,11 +251,11 @@ def predict(game_data):
         "rank": rank,
         "card": f"{rank}{predicted_suit}",
         "position": player_position,
-        "games": [target_game, target_game + 1, target_game + 2]
+        "games": [target_game, target_game + 1, target_game + 2, target_game + 3]
     }
 
 def check_results(history, all_messages):
-    """Проверяет прогнозы по всем играм (целевая + 2 догона)"""
+    """Проверяет прогнозы по 4 играм (только у игрока)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -283,36 +272,28 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
-        # ✅ ПРОВЕРЯЕМ 3 ИГРЫ: ЦЕЛЕВАЯ (0) + ДОГОН 1 (1) + ДОГОН 2 (2)
-        for i in range(3):
+        # ✅ Проверяем 4 игры подряд (целевая + 3 догона)
+        for i in range(4):
             game_to_check = target + i
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
                     game_data = parse_game(msg)
                     if game_data:
-                        # Проверяем карты игрока
+                        # ✅ Проверяем ТОЛЬКО игрока
                         for card in game_data["player_cards"]:
                             if card.get("suit") == predicted_suit:
                                 found = True
                                 found_game = game_to_check
                                 found_dogon = i + 1
                                 break
-                        # Если не нашли у игрока - проверяем дилера
-                        if not found:
-                            for card in game_data["dealer_cards"]:
-                                if card.get("suit") == predicted_suit:
-                                    found = True
-                                    found_game = game_to_check
-                                    found_dogon = i + 1
-                                    break
                     if found:
                         break
             if found:
                 break
         
-        # Проверяем, все ли 3 игры уже есть в канале
+        # Проверяем, все ли 4 игры уже есть в канале
         all_games_present = True
-        for i in range(3):
+        for i in range(4):
             game_to_check = target + i
             found_msg = False
             for msg in all_messages:
@@ -323,7 +304,6 @@ def check_results(history, all_messages):
                 all_games_present = False
                 break
         
-        # Если не все игры есть - пропускаем
         if not all_games_present:
             continue
         
@@ -337,13 +317,13 @@ def check_results(history, all_messages):
         original_text += f"📊 От игры: #N{from_game}\n"
         original_text += f"🃏 Игрок масть: {predicted_suit}\n"
         original_text += f"🎯 Целевая игра: #N{target}\n"
-        original_text += f"📈 2 игры догон\n"
+        original_text += f"📈 3 игры догон\n"
         original_text += f"⏰ {entry.get('time', '')[:16]}"
         
         if found:
             result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon}: #N{found_game}"
         else:
-            result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (2 догона проверены до #N{target+2})"
+            result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (3 догона проверены до #N{target+3})"
         
         edit_message(message_id, original_text + result_text)
         entry["status"] = "win" if found else "loss"
@@ -413,7 +393,8 @@ def main():
     print("   - Ищем старшую карту у игрока", flush=True)
     print("   - По позиции определяем масть (1→♣️, 2→♦️, 3→♥️, 4→♠️)", flush=True)
     print("   - Если несколько старших карт - пропускаем", flush=True)
-    print("   - Прогноз на 3 игры (целевая + 2 догона)", flush=True)
+    print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
+    print("   - Проверка ТОЛЬКО у игрока", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
@@ -474,7 +455,7 @@ def main():
                 if len(all_messages) > 500:
                     all_messages = all_messages[-500:]
                 
-                # ✅ СРАЗУ проверяем прогнозы после добавления сообщения
+                # Сразу проверяем прогнозы после добавления сообщения
                 check_results(history, all_messages)
                 
                 if game_number in PROCESSED_GAMES:
@@ -497,7 +478,7 @@ def main():
                     msg += f"📊 От игры: #N{game_data['number']}\n"
                     msg += f"🃏 Игрок масть: {prognoz['suit']}\n"
                     msg += f"🎯 Целевая игра: #N{prognoz['target']}\n"
-                    msg += f"📈 2 игры догон\n"
+                    msg += f"📈 3 игры догон\n"
                     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}"
                     
                     message_id = send_message(msg)
