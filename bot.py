@@ -155,14 +155,13 @@ def edit_message(message_id, text):
         return False
 
 def parse_game(text):
-    """Парсит игру и возвращает карты игрока"""
+    """Парсит игру и возвращает карты игрока и дилера"""
     try:
         game_match = re.search(r'#N(\d+)', text)
         if not game_match:
             return None
         game_number = int(game_match.group(1))
         
-        # Убираем все лишние символы
         clean_text = text
         for symbol in ['✅', '🔰', '▶️', '◀️', '⚠️']:
             clean_text = clean_text.replace(symbol, '')
@@ -172,12 +171,15 @@ def parse_game(text):
             return None
         
         player_part = parts[0].strip()
+        dealer_part = parts[1].strip()
         
-        # Парсим карты игрока
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
         if not player_match:
             return None
         player_cards_str = player_match.group(2).strip()
+        
+        dealer_match = re.search(r'(\d+)\(([^)]+)\)', dealer_part)
+        dealer_cards_str = dealer_match.group(2).strip() if dealer_match else ""
         
         player_cards = []
         for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', player_cards_str):
@@ -185,9 +187,16 @@ def parse_game(text):
             suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
             player_cards.append({"rank": rank, "suit": suit})
         
+        dealer_cards = []
+        for card in re.findall(r'([AKQJ]|10|\d)([♠♣♦♥]|♠️|♣️|♦️|♥️)', dealer_cards_str):
+            rank, suit = card
+            suit = suit.replace('♠', '♠️').replace('♣', '♣️').replace('♦', '♦️').replace('♥', '♥️')
+            dealer_cards.append({"rank": rank, "suit": suit})
+        
         return {
             "number": game_number,
             "player_cards": player_cards,
+            "dealer_cards": dealer_cards,
             "text": text
         }
     except Exception as e:
@@ -195,7 +204,6 @@ def parse_game(text):
         return None
 
 def get_highest_card(cards):
-    """Находит самую старшую карту и её позицию"""
     if not cards:
         return None, None
     
@@ -228,8 +236,43 @@ def get_highest_card(cards):
 def get_suit_by_position(position):
     return POSITION_SUITS.get(position, None)
 
+def is_valid_game(game_data):
+    """Проверяет, подходит ли игра для прогноза"""
+    player_cards = game_data.get("player_cards", [])
+    dealer_cards = game_data.get("dealer_cards", [])
+    
+    # Считаем количество цифр (6,7,8,9,10)
+    digit_count = 0
+    for card in player_cards + dealer_cards:
+        rank = card.get("rank", "")
+        if rank.isdigit():
+            digit_count += 1
+    
+    # 1. Если цифр ≥ 4 → пропускаем
+    if digit_count >= 4:
+        print(f"⏭️ Пропускаем #N{game_data['number']}: цифр {digit_count} (≥4)", flush=True)
+        return False
+    
+    # 2. Если у дилера 0 карт → пропускаем
+    if len(dealer_cards) == 0:
+        print(f"⏭️ Пропускаем #N{game_data['number']}: у дилера 0 карт", flush=True)
+        return False
+    
+    # 3. Если у игрока 2 карты, а у дилера ≥ 3 → пропускаем
+    if len(player_cards) == 2 and len(dealer_cards) >= 3:
+        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (≥3)", flush=True)
+        return False
+    
+    # 4. Если у игрока 2 карты, у дилера 2 карты → пропускаем
+    if len(player_cards) == 2 and len(dealer_cards) == 2:
+        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
+        return False
+    
+    # ✅ Все проверки пройдены → даем прогноз
+    print(f"✅ Игра #N{game_data['number']} подходит для прогноза", flush=True)
+    return True
+
 def predict(game_data):
-    """Делает прогноз на основе старшей карты игрока"""
     game_num = game_data["number"]
     
     player_highest, player_position = get_highest_card(game_data["player_cards"])
@@ -255,7 +298,6 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
-    """Проверяет прогнозы по 4 играм (только у игрока)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -272,14 +314,12 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
-        # ✅ Проверяем 4 игры подряд (целевая + 3 догона)
         for i in range(4):
             game_to_check = target + i
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
                     game_data = parse_game(msg)
                     if game_data:
-                        # ✅ Проверяем ТОЛЬКО игрока
                         for card in game_data["player_cards"]:
                             if card.get("suit") == predicted_suit:
                                 found = True
@@ -291,7 +331,6 @@ def check_results(history, all_messages):
             if found:
                 break
         
-        # Проверяем, все ли 4 игры уже есть в канале
         all_games_present = True
         for i in range(4):
             game_to_check = target + i
@@ -307,7 +346,6 @@ def check_results(history, all_messages):
         if not all_games_present:
             continue
         
-        # Обновляем статистику
         if found:
             update_stats(found_dogon, "win")
         else:
@@ -361,7 +399,6 @@ def save_offset(offset):
         f.write(str(offset))
 
 def load_recent_messages():
-    """Загружает последние 100 сообщений из канала при запуске"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"chat_id": CHANNEL_STATS, "limit": 100}
     try:
@@ -400,7 +437,6 @@ def main():
     offset = get_offset()
     history = load_history()
     
-    # Загружаем последние сообщения при запуске
     print("📥 Загрузка последних сообщений из канала...", flush=True)
     all_messages = load_recent_messages()
     print(f"📥 Загружено сообщений: {len(all_messages)}", flush=True)
@@ -420,7 +456,7 @@ def main():
                 print(f"🧹 Кэш очищен. Записей в истории: {len(history)}", flush=True)
                 last_cleanup_time = current_time
             
-            if current_time - last_stats_time > 21600:
+            if current_time - last_stats_time > 3600:
                 print("📊 Отправка статистики...", flush=True)
                 send_stats_report()
                 last_stats_time = current_time
@@ -450,12 +486,10 @@ def main():
                     continue
                 game_number = int(game_id_match.group(1))
                 
-                # Добавляем сообщение в историю
                 all_messages.append(text)
                 if len(all_messages) > 500:
                     all_messages = all_messages[-500:]
                 
-                # Сразу проверяем прогнозы после добавления сообщения
                 check_results(history, all_messages)
                 
                 if game_number in PROCESSED_GAMES:
@@ -466,6 +500,10 @@ def main():
                 game_data = parse_game(text)
                 if not game_data:
                     print(f"❌ Не удалось распарсить #N{game_number}", flush=True)
+                    continue
+                
+                # ✅ Проверяем, можно ли делать прогноз
+                if not is_valid_game(game_data):
                     continue
                 
                 if current_time - LAST_PREDICT_TIME < PREDICT_INTERVAL:
@@ -498,7 +536,6 @@ def main():
                         })
                         save_history(history)
             
-            # Проверка после всех обновлений (на всякий случай)
             check_results(history, all_messages)
             history = clean_memory(history)
             save_history(history)
