@@ -80,6 +80,8 @@ def update_stats(dogon_number, result):
         stats["win"] += 1
         if dogon_number in stats["by_dogon"]:
             stats["by_dogon"][dogon_number] += 1
+        else:
+            stats["by_dogon"][dogon_number] = 1
     else:
         stats["lose"] += 1
     
@@ -166,12 +168,20 @@ def parse_game(text):
         for symbol in ['✅', '🔰', '▶️', '◀️', '⚠️']:
             clean_text = clean_text.replace(symbol, '')
         
-        parts = clean_text.split('-')
-        if len(parts) < 2:
-            return None
-        
-        player_part = parts[0].strip()
-        dealer_part = parts[1].strip()
+        # Проверяем оба формата
+        if ' - ' in clean_text:
+            parts = clean_text.split('-')
+            if len(parts) < 2:
+                return None
+            player_part = parts[0].strip()
+            dealer_part = parts[1].strip()
+        else:
+            # Формат: #N273. 3(Q♦️) ◀️ 0() #T3
+            parts = clean_text.split('0()')
+            if len(parts) < 2:
+                return None
+            player_part = parts[0].strip()
+            dealer_part = "0()"
         
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
         if not player_match:
@@ -246,9 +256,9 @@ def is_valid_game(game_data):
         print(f"⏭️ Пропускаем #N{game_data['number']}: у дилера 0 карт", flush=True)
         return False
     
-    # 2. Если у игрока 2 карты, а у дилера ≥ 3 → пропускаем
+    # 2. Если у игрока 2 карты, а у дилера >= 3 → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) >= 3:
-        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (≥3)", flush=True)
+        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (>=3)", flush=True)
         return False
     
     # 3. Если у игрока 2 карты, у дилера 2 карты → пропускаем
@@ -420,10 +430,12 @@ def main():
     print("   - Если несколько старших карт - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
     print("   - Проверка ТОЛЬКО у игрока", flush=True)
+    print("   - Ежедневный сброс кэша в 03:00", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
     history = load_history()
+    last_reset_date = datetime.now(MOSCOW_TZ).date()
     
     print("📥 Загрузка последних сообщений из канала...", flush=True)
     all_messages = load_recent_messages()
@@ -435,15 +447,30 @@ def main():
     while True:
         try:
             current_time = time.time()
+            current_date = datetime.now(MOSCOW_TZ).date()
+            current_hour = datetime.now(MOSCOW_TZ).hour
             
+            # ✅ Ежедневный сброс кэша в 03:00
+            if current_date != last_reset_date and current_hour == 3:
+                print("🔄 Ежедневный сброс кэша (новый цикл игр)...", flush=True)
+                PROCESSED_GAMES.clear()
+                messages.clear()
+                history = []
+                save_history(history)
+                all_messages = []
+                last_reset_date = current_date
+                print("✅ Кэш сброшен, начинаем новый цикл", flush=True)
+                continue
+            
+            # Очистка кэша раз в час (только история)
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
                 print("🧹 Запуск плановой очистки кэша...", flush=True)
                 history = clean_memory(history)
                 save_history(history)
-                PROCESSED_GAMES.clear()
                 print(f"🧹 Кэш очищен. Записей в истории: {len(history)}", flush=True)
                 last_cleanup_time = current_time
             
+            # Отправка статистики раз в час
             if current_time - last_stats_time > 3600:
                 print("📊 Отправка статистики...", flush=True)
                 send_stats_report()
@@ -490,7 +517,6 @@ def main():
                     print(f"❌ Не удалось распарсить #N{game_number}", flush=True)
                     continue
                 
-                # ✅ Проверяем, можно ли делать прогноз
                 if not is_valid_game(game_data):
                     continue
                 
