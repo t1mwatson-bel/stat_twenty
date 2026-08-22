@@ -168,20 +168,12 @@ def parse_game(text):
         for symbol in ['✅', '🔰', '▶️', '◀️', '⚠️']:
             clean_text = clean_text.replace(symbol, '')
         
-        # Проверяем оба формата
-        if ' - ' in clean_text:
-            parts = clean_text.split('-')
-            if len(parts) < 2:
-                return None
-            player_part = parts[0].strip()
-            dealer_part = parts[1].strip()
-        else:
-            # Формат: #N273. 3(Q♦️) ◀️ 0() #T3
-            parts = clean_text.split('0()')
-            if len(parts) < 2:
-                return None
-            player_part = parts[0].strip()
-            dealer_part = "0()"
+        parts = clean_text.split('-')
+        if len(parts) < 2:
+            return None
+        
+        player_part = parts[0].strip()
+        dealer_part = parts[1].strip()
         
         player_match = re.search(r'(\d+)\(([^)]+)\)', player_part)
         if not player_match:
@@ -266,8 +258,6 @@ def is_valid_game(game_data):
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
         return False
     
-    # ✅ Все проверки пройдены → даем прогноз
-    print(f"✅ Игра #N{game_data['number']} подходит для прогноза", flush=True)
     return True
 
 def predict(game_data):
@@ -430,7 +420,6 @@ def main():
     print("   - Если несколько старших карт - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
     print("   - Проверка ТОЛЬКО у игрока", flush=True)
-    print("   - Ежедневный сброс кэша в 03:00", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
@@ -453,8 +442,8 @@ def main():
             # ✅ Ежедневный сброс кэша в 03:00
             if current_date != last_reset_date and current_hour == 3:
                 print("🔄 Ежедневный сброс кэша (новый цикл игр)...", flush=True)
-                PROCESSED_GAMES.clear()
-                messages.clear()
+                # ❌ НЕ ТРОГАЕМ PROCESSED_GAMES!
+                # ❌ НЕ ТРОГАЕМ messages!
                 history = []
                 save_history(history)
                 all_messages = []
