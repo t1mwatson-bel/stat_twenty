@@ -241,29 +241,17 @@ def is_valid_game(game_data):
     player_cards = game_data.get("player_cards", [])
     dealer_cards = game_data.get("dealer_cards", [])
     
-    # Считаем количество цифр (6,7,8,9,10)
-    digit_count = 0
-    for card in player_cards + dealer_cards:
-        rank = card.get("rank", "")
-        if rank.isdigit():
-            digit_count += 1
-    
-    # 1. Если цифр ≥ 4 → пропускаем
-    if digit_count >= 4:
-        print(f"⏭️ Пропускаем #N{game_data['number']}: цифр {digit_count} (≥4)", flush=True)
-        return False
-    
-    # 2. Если у дилера 0 карт → пропускаем
+    # 1. Если у дилера 0 карт → пропускаем
     if len(dealer_cards) == 0:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у дилера 0 карт", flush=True)
         return False
     
-    # 3. Если у игрока 2 карты, а у дилера ≥ 3 → пропускаем
+    # 2. Если у игрока 2 карты, а у дилера ≥ 3 → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) >= 3:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (≥3)", flush=True)
         return False
     
-    # 4. Если у игрока 2 карты, у дилера 2 карты → пропускаем
+    # 3. Если у игрока 2 карты, у дилера 2 карты → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) == 2:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
         return False
