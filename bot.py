@@ -206,28 +206,34 @@ def parse_game(text):
         return None
 
 def get_highest_card(cards):
+    """Твоя методика: старшая карта по очкам"""
     if not cards:
         return None, None
     
-    rank_order = {"A": 14, "K": 13, "Q": 12, "J": 11}
-    for i in range(10, 1, -1):
-        rank_order[str(i)] = i
+    # Твоя таблица очков
+    rank_order = {
+        "A": 1,   # Туз = 1 (самый младший)
+        "J": 2,   # Валет = 2
+        "Q": 3,   # Дама = 3
+        "K": 4,   # Король = 4
+        "6": 6, "7": 7, "8": 8, "9": 9, "10": 10
+    }
     
-    highest_rank = -1
+    highest_value = -1
     highest_card = None
     highest_position = None
     count_highest = 0
     
     for idx, card in enumerate(cards, start=1):
         rank = card.get("rank", "")
-        rank_value = rank_order.get(rank, 0)
+        value = rank_order.get(rank, 0)
         
-        if rank_value > highest_rank:
-            highest_rank = rank_value
+        if value > highest_value:
+            highest_value = value
             highest_card = card
             highest_position = idx
             count_highest = 1
-        elif rank_value == highest_rank:
+        elif value == highest_value:
             count_highest += 1
     
     if count_highest > 1:
