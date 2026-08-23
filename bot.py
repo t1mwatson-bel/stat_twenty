@@ -17,7 +17,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (С ДЕНЕЖНЫМ ПОДХОДОМ)", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (МГНОВЕННЫЙ РЕЗУЛЬТАТ)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -114,15 +114,13 @@ def update_stats(dogon_number, result):
         else:
             stats["by_dogon"][dogon_number] = 1
         
-        # Денежный подход: рассчитываем профит
         stake = STAKES.get(dogon_number, 0)
         win_amount = stake * ODDS
         stats["bank"] = stats["bank"] - stake + win_amount
         stats["profit"] = stats["bank"] - START_BANK
     else:
         stats["lose"] += 1
-        # Проигрыш: списываем ставку
-        stake = STAKES.get(4, 1562.5)  # Если проиграли все догоны
+        stake = STAKES.get(4, 1562.5)
         stats["bank"] = stats["bank"] - stake
         stats["profit"] = stats["bank"] - START_BANK
     
@@ -255,7 +253,6 @@ def get_highest_card(cards):
     if not cards:
         return None, None
     
-    # Твоя таблица очков
     rank_order = {
         "A": 1,   # Туз = 1 (самый младший)
         "J": 2,   # Валет = 2
@@ -297,7 +294,7 @@ def has_ten(cards):
     return False
 
 def is_valid_game(game_data):
-    """Проверяет, подходит ли игра для прогноза"""
+    """Проверяет, подходит ли игра для прогноза (ТОЛЬКО ДЛЯ СОЗДАНИЯ)"""
     player_cards = game_data.get("player_cards", [])
     dealer_cards = game_data.get("dealer_cards", [])
     
@@ -349,7 +346,7 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
-    """Проверяет результаты прогнозов (только игрок)"""
+    """Проверяет результаты прогнозов - мгновенный результат"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -509,7 +506,8 @@ def main():
     print("   - Если несколько старших карт - пропускаем", flush=True)
     print("   - Если есть 10 у игрока - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
-    print("   - Проверка ТОЛЬКО у игрока", flush=True)
+    print("   - Проверка ТОЛЬКО у игрока (ДАЖЕ если дилер 0)", flush=True)
+    print("   - Мгновенный результат: как только нашли заход - закрываем", flush=True)
     print("   - Банк: {START_BANK}₽, Кэф: {ODDS}, Повышение: ×2.5", flush=True)
     print("=" * 60, flush=True)
     
