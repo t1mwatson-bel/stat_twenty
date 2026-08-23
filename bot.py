@@ -17,7 +17,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (СТАБИЛЬНЫЙ)", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -225,7 +225,6 @@ def parse_game(text):
         return None
 
 def get_highest_card(cards):
-    """Твоя методика: старшая карта по очкам"""
     if not cards:
         return None, None
     
@@ -263,33 +262,27 @@ def get_suit_by_position(position):
     return POSITION_SUITS.get(position, None)
 
 def has_ten(cards):
-    """Проверяет, есть ли среди карт десятка"""
     for card in cards:
         if card.get("rank") == "10":
             return True
     return False
 
 def is_valid_game(game_data):
-    """Проверяет, подходит ли игра для прогноза (ТОЛЬКО ДЛЯ СОЗДАНИЯ)"""
     player_cards = game_data.get("player_cards", [])
     dealer_cards = game_data.get("dealer_cards", [])
     
-    # 1. Если у дилера 0 карт → пропускаем
     if len(dealer_cards) == 0:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у дилера 0 карт", flush=True)
         return False
     
-    # 2. Если у игрока 2 карты, а у дилера >= 3 → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) >= 3:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (>=3)", flush=True)
         return False
     
-    # 3. Если у игрока 2 карты, у дилера 2 карты → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) == 2:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
         return False
     
-    # 4. Если у игрока есть 10 → пропускаем
     if has_ten(player_cards):
         print(f"⏭️ Пропускаем #N{game_data['number']}: есть 10 у игрока", flush=True)
         return False
@@ -322,7 +315,6 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
-    """Проверяет результаты прогнозов (только игрок)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -339,53 +331,23 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
-        # Проверяем игры по одной, не ждём все 4
         for i in range(4):
             game_to_check = target + i
-            # Проверяем, есть ли эта игра в all_messages
-            game_msg = None
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
-                    game_msg = msg
-                    break
-            
-            if not game_msg:
-                # Если игра ещё не пришла - выходим, ждём дальше
-                break
-            
-            game_data = parse_game(game_msg)
-            if game_data:
-                for card in game_data["player_cards"]:
-                    if card.get("suit") == predicted_suit:
-                        found = True
-                        found_game = game_to_check
-                        found_dogon = i + 1
+                    game_data = parse_game(msg)
+                    if game_data:
+                        for card in game_data["player_cards"]:
+                            if card.get("suit") == predicted_suit:
+                                found = True
+                                found_game = game_to_check
+                                found_dogon = i + 1
+                                break
+                    if found:
                         break
-            
             if found:
                 break
         
-        # Если нашли - ЗАШЛО
-        if found:
-            update_stats(found_dogon, "win")
-            
-            original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
-            original_text += f"📊 От игры: #N{from_game}\n"
-            original_text += f"🃏 Игрок масть: {predicted_suit}\n"
-            original_text += f"🎯 Целевая игра: #N{target}\n"
-            original_text += f"📈 3 игры догон\n"
-            original_text += f"⏰ {entry.get('time', '')[:16]}"
-            
-            if found_dogon == 1:
-                result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{found_game}"
-            else:
-                result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon-1}: #N{found_game}"
-            
-            edit_message(message_id, original_text + result_text)
-            entry["status"] = "win"
-            continue
-        
-        # Если не нашли - проверяем, пришли ли все 4 игры
         all_games_present = True
         for i in range(4):
             game_to_check = target + i
@@ -398,21 +360,31 @@ def check_results(history, all_messages):
                 all_games_present = False
                 break
         
-        # Если все 4 игры есть и нигде не нашли - НЕ ЗАШЛО
-        if all_games_present:
+        if not all_games_present:
+            continue
+        
+        if found:
+            update_stats(found_dogon, "win")
+        else:
             update_stats(0, "lose")
-            
-            original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
-            original_text += f"📊 От игры: #N{from_game}\n"
-            original_text += f"🃏 Игрок масть: {predicted_suit}\n"
-            original_text += f"🎯 Целевая игра: #N{target}\n"
-            original_text += f"📈 3 игры догон\n"
-            original_text += f"⏰ {entry.get('time', '')[:16]}"
-            
+        
+        original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
+        original_text += f"📊 От игры: #N{from_game}\n"
+        original_text += f"🃏 Игрок масть: {predicted_suit}\n"
+        original_text += f"🎯 Целевая игра: #N{target}\n"
+        original_text += f"📈 3 игры догон\n"
+        original_text += f"⏰ {entry.get('time', '')[:16]}"
+        
+        if found:
+            if found_dogon == 1:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{found_game}"
+            else:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon-1}: #N{found_game}"
+        else:
             result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (3 догона проверены до #N{target+3})"
-            
-            edit_message(message_id, original_text + result_text)
-            entry["status"] = "lose"
+        
+        edit_message(message_id, original_text + result_text)
+        entry["status"] = "win" if found else "loss"
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -480,8 +452,7 @@ def main():
     print("   - Если несколько старших карт - пропускаем", flush=True)
     print("   - Если есть 10 у игрока - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
-    print("   - Проверка ТОЛЬКО у игрока (ДАЖЕ если дилер 0)", flush=True)
-    print("   - Мгновенный результат: как только нашли заход - закрываем", flush=True)
+    print("   - Проверка ТОЛЬКО у игрока", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
@@ -492,8 +463,6 @@ def main():
     all_messages = load_recent_messages()
     print(f"📥 Загружено сообщений: {len(all_messages)}", flush=True)
     
-    # ✅ ПРОВЕРКА СУЩЕСТВУЮЩИХ ПРОГНОЗОВ ПРИ ЗАПУСКЕ
-    print("📥 Проверка существующих прогнозов...", flush=True)
     check_results(history, all_messages)
     
     last_cleanup_time = time.time()
@@ -505,7 +474,6 @@ def main():
             current_date = datetime.now(MOSCOW_TZ).date()
             current_hour = datetime.now(MOSCOW_TZ).hour
             
-            # Ежедневный сброс кэша в 03:00
             if current_date != last_reset_date and current_hour == 3:
                 print("🔄 Ежедневный сброс кэша (новый цикл игр)...", flush=True)
                 history = []
@@ -515,7 +483,6 @@ def main():
                 print("✅ Кэш сброшен, начинаем новый цикл", flush=True)
                 continue
             
-            # Очистка кэша раз в час (только история)
             if current_time - last_cleanup_time > CLEANUP_INTERVAL:
                 print("🧹 Запуск плановой очистки кэша...", flush=True)
                 history = clean_memory(history)
@@ -523,7 +490,6 @@ def main():
                 print(f"🧹 Кэш очищен. Записей в истории: {len(history)}", flush=True)
                 last_cleanup_time = current_time
             
-            # Отправка статистики раз в час
             if current_time - last_stats_time > 3600:
                 print("📊 Отправка статистики...", flush=True)
                 send_stats_report()
