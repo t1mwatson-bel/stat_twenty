@@ -340,25 +340,53 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
-        # Проверяем 4 игры: целевая (N+1) и 3 догона (N+2, N+3, N+4)
+        # Проверяем игры по одной, не ждём все 4
         for i in range(4):
             game_to_check = target + i
+            # Проверяем, есть ли эта игра в all_messages
+            game_msg = None
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg:
-                    game_data = parse_game(msg)
-                    if game_data:
-                        for card in game_data["player_cards"]:
-                            if card.get("suit") == predicted_suit:
-                                found = True
-                                found_game = game_to_check
-                                found_dogon = i + 1  # 1=целевая, 2=догон1, 3=догон2, 4=догон3
-                                break
-                    if found:
+                    game_msg = msg
+                    break
+            
+            if not game_msg:
+                # Если игра ещё не пришла - выходим, ждём дальше
+                break
+            
+            game_data = parse_game(game_msg)
+            if game_data:
+                for card in game_data["player_cards"]:
+                    if card.get("suit") == predicted_suit:
+                        found = True
+                        found_game = game_to_check
+                        found_dogon = i + 1
                         break
+            
             if found:
                 break
         
-        # Проверяем, что все 4 игры уже есть в истории
+        # Если нашли - ЗАШЛО
+        if found:
+            update_stats(found_dogon, "win")
+            
+            original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
+            original_text += f"📊 От игры: #N{from_game}\n"
+            original_text += f"🃏 Игрок масть: {predicted_suit}\n"
+            original_text += f"🎯 Целевая игра: #N{target}\n"
+            original_text += f"📈 3 игры догон\n"
+            original_text += f"⏰ {entry.get('time', '')[:16]}"
+            
+            if found_dogon == 1:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{found_game}"
+            else:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon-1}: #N{found_game}"
+            
+            edit_message(message_id, original_text + result_text)
+            entry["status"] = "win"
+            continue
+        
+        # Если не нашли - проверяем, пришли ли все 4 игры
         all_games_present = True
         for i in range(4):
             game_to_check = target + i
@@ -371,33 +399,21 @@ def check_results(history, all_messages):
                 all_games_present = False
                 break
         
-        if not all_games_present:
-            continue
-        
-        # Обновляем статистику
-        if found:
-            update_stats(found_dogon, "win")
-        else:
+        # Если все 4 игры есть и нигде не нашли - НЕ ЗАШЛО
+        if all_games_present:
             update_stats(0, "lose")
-        
-        # Формируем сообщение с результатом
-        original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
-        original_text += f"📊 От игры: #N{from_game}\n"
-        original_text += f"🃏 Игрок масть: {predicted_suit}\n"
-        original_text += f"🎯 Целевая игра: #N{target}\n"
-        original_text += f"📈 3 игры догон\n"
-        original_text += f"⏰ {entry.get('time', '')[:16]}"
-        
-        if found:
-            if found_dogon == 1:
-                result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{found_game}"
-            else:
-                result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon-1}: #N{found_game}"
-        else:
+            
+            original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
+            original_text += f"📊 От игры: #N{from_game}\n"
+            original_text += f"🃏 Игрок масть: {predicted_suit}\n"
+            original_text += f"🎯 Целевая игра: #N{target}\n"
+            original_text += f"📈 3 игры догон\n"
+            original_text += f"⏰ {entry.get('time', '')[:16]}"
+            
             result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (3 догона проверены до #N{target+3})"
-        
-        edit_message(message_id, original_text + result_text)
-        entry["status"] = "win" if found else "loss"
+            
+            edit_message(message_id, original_text + result_text)
+            entry["status"] = "lose"
 
 def save_history(history):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
