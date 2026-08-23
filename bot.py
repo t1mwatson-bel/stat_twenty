@@ -128,7 +128,7 @@ def send_stats_report():
     msg += f"🎯 Целевая игра: {stats['by_dogon'].get(1, 0)}\n"
     msg += f"🔄 Догон 1: {stats['by_dogon'].get(2, 0)}\n"
     msg += f"🔄 Догон 2: {stats['by_dogon'].get(3, 0)}\n"
-    msg += f"🔄 Догон 3 (запас): {stats['by_dogon'].get(4, 0)}\n"
+    msg += f"🔄 Догон 3: {stats['by_dogon'].get(4, 0)}\n"
     msg += f"{'=' * 30}\n"
     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
     
@@ -290,7 +290,7 @@ def is_valid_game(game_data):
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
         return False
     
-    # 4. ✅ НОВОЕ ПРАВИЛО: если у игрока есть 10 → пропускаем
+    # 4. Если у игрока есть 10 → пропускаем
     if has_ten(player_cards):
         print(f"⏭️ Пропускаем #N{game_data['number']}: есть 10 у игрока", flush=True)
         return False
@@ -340,6 +340,7 @@ def check_results(history, all_messages):
         found_game = None
         found_dogon = None
         
+        # Проверяем 4 игры: целевая (N+1) и 3 догона (N+2, N+3, N+4)
         for i in range(4):
             game_to_check = target + i
             for msg in all_messages:
@@ -350,13 +351,14 @@ def check_results(history, all_messages):
                             if card.get("suit") == predicted_suit:
                                 found = True
                                 found_game = game_to_check
-                                found_dogon = i + 1
+                                found_dogon = i + 1  # 1=целевая, 2=догон1, 3=догон2, 4=догон3
                                 break
                     if found:
                         break
             if found:
                 break
         
+        # Проверяем, что все 4 игры уже есть в истории
         all_games_present = True
         for i in range(4):
             game_to_check = target + i
@@ -372,11 +374,13 @@ def check_results(history, all_messages):
         if not all_games_present:
             continue
         
+        # Обновляем статистику
         if found:
             update_stats(found_dogon, "win")
         else:
             update_stats(0, "lose")
         
+        # Формируем сообщение с результатом
         original_text = f"🔮 <b>ПРОГНОЗ</b>\n"
         original_text += f"📊 От игры: #N{from_game}\n"
         original_text += f"🃏 Игрок масть: {predicted_suit}\n"
@@ -385,7 +389,10 @@ def check_results(history, all_messages):
         original_text += f"⏰ {entry.get('time', '')[:16]}"
         
         if found:
-            result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon}: #N{found_game}"
+            if found_dogon == 1:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{found_game}"
+            else:
+                result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {found_dogon-1}: #N{found_game}"
         else:
             result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (3 догона проверены до #N{target+3})"
         
@@ -478,7 +485,7 @@ def main():
             current_date = datetime.now(MOSCOW_TZ).date()
             current_hour = datetime.now(MOSCOW_TZ).hour
             
-            # ✅ Ежедневный сброс кэша в 03:00
+            # Ежедневный сброс кэша в 03:00
             if current_date != last_reset_date and current_hour == 3:
                 print("🔄 Ежедневный сброс кэша (новый цикл игр)...", flush=True)
                 history = []
