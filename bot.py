@@ -17,7 +17,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (ПРАВИЛО 4 КАРТ)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -225,6 +225,7 @@ def parse_game(text):
         return None
 
 def get_highest_card(cards):
+    """Твоя методика: старшая карта по очкам"""
     if not cards:
         return None, None
     
@@ -268,49 +269,91 @@ def has_ten(cards):
     return False
 
 def is_valid_game(game_data):
+    """Проверяет, подходит ли игра для прогноза (ПРАВИЛО 4 КАРТ)"""
     player_cards = game_data.get("player_cards", [])
     dealer_cards = game_data.get("dealer_cards", [])
     
-    if len(dealer_cards) == 0:
-        print(f"⏭️ Пропускаем #N{game_data['number']}: у дилера 0 карт", flush=True)
+    # 1. Если у игрока 1, 2 или 5+ карт → пропускаем
+    if len(player_cards) in [1, 2] or len(player_cards) >= 5:
+        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока {len(player_cards)} карт (нужно 3 или 4)", flush=True)
         return False
     
-    if len(player_cards) == 2 and len(dealer_cards) >= 3:
-        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера {len(dealer_cards)} (>=3)", flush=True)
-        return False
+    # 2. Если у игрока 3 карты → нужна 1-я карта дилера
+    if len(player_cards) == 3:
+        if len(dealer_cards) == 0:
+            print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 3 карты, но у дилера 0", flush=True)
+            return False
+        # Берём 3 игрока + 1-я дилера → всего 4
+        return True
     
-    if len(player_cards) == 2 and len(dealer_cards) == 2:
-        print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
-        return False
-    
-    if has_ten(player_cards):
-        print(f"⏭️ Пропускаем #N{game_data['number']}: есть 10 у игрока", flush=True)
-        return False
+    # 3. Если у игрока 4 карты → проверяем на 10
+    if len(player_cards) == 4:
+        if has_ten(player_cards):
+            print(f"⏭️ Пропускаем #N{game_data['number']}: есть 10 у игрока", flush=True)
+            return False
+        return True
     
     return True
 
 def predict(game_data):
     game_num = game_data["number"]
+    player_cards = game_data["player_cards"]
+    dealer_cards = game_data.get("dealer_cards", [])
     
-    player_highest, player_position = get_highest_card(game_data["player_cards"])
-    if not player_highest or not player_position:
-        print(f"⚠️ Игра #{game_num}: неопределенность", flush=True)
+    # Формируем список для анализа (4 карты)
+    if len(player_cards) == 3:
+        # 3 игрока + 1-я дилера
+        if dealer_cards:
+            four_cards = player_cards + [dealer_cards[0]]
+        else:
+            print(f"⚠️ Игра #{game_num}: у дилера нет карт", flush=True)
+            return None
+    elif len(player_cards) == 4:
+        # 4 игрока
+        four_cards = player_cards
+    else:
+        print(f"⚠️ Игра #{game_num}: {len(player_cards)} карт — не подходит", flush=True)
         return None
     
-    predicted_suit = get_suit_by_position(player_position)
+    # Проверяем повторяющиеся ранги
+    ranks = [c["rank"] for c in four_cards]
+    if len(ranks) != len(set(ranks)):
+        print(f"⏭️ Пропускаем #N{game_num}: повторяющиеся ранги", flush=True)
+        return None
+    
+    # Находим старшую карту
+    highest_rank = None
+    highest_position = None
+    highest_value = -1
+    
+    for idx, card in enumerate(four_cards, start=1):
+        rank = card["rank"]
+        value = RANK_VALUES.get(rank, 0)
+        if value > highest_value:
+            highest_value = value
+            highest_rank = rank
+            highest_position = idx
+    
+    if highest_rank is None or highest_position is None:
+        print(f"⚠️ Игра #{game_num}: не удалось определить старшую карту", flush=True)
+        return None
+    
+    predicted_suit = get_suit_by_position(highest_position)
     if not predicted_suit:
+        print(f"⚠️ Игра #{game_num}: позиция {highest_position} не определена", flush=True)
         return None
     
-    rank = player_highest["rank"]
     target_game = game_num + 1
+    
+    print(f"🔍 #N{game_num}: {four_cards} → старшая {highest_rank} (поз. {highest_position}) → {predicted_suit}", flush=True)
     
     return {
         "from_game": game_num,
         "target": target_game,
         "suit": predicted_suit,
-        "rank": rank,
-        "card": f"{rank}{predicted_suit}",
-        "position": player_position,
+        "rank": highest_rank,
+        "card": f"{highest_rank}{predicted_suit}",
+        "position": highest_position,
         "games": [target_game, target_game + 1, target_game + 2, target_game + 3]
     }
 
@@ -447,12 +490,13 @@ def main():
     print(f"⏰ Часовой пояс: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')} (МСК)", flush=True)
     print("=" * 60, flush=True)
     print("📌 ПРАВИЛА:", flush=True)
-    print("   - Ищем старшую карту у игрока", flush=True)
+    print("   - Берём 4 карты для прогноза:", flush=True)
+    print("     * Если у игрока 3 карты → 3 игрока + 1-я дилера", flush=True)
+    print("     * Если у игрока 4 карты → 4 игрока", flush=True)
     print("   - По позиции определяем масть (1→♣️, 2→♦️, 3→♥️, 4→♠️)", flush=True)
     print("   - Если несколько старших карт - пропускаем", flush=True)
     print("   - Если есть 10 у игрока - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
-    print("   - Проверка ТОЛЬКО у игрока", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
