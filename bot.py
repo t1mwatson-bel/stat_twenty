@@ -17,7 +17,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ + СТАТИСТИКА)", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (С ФИЛЬТРОМ 10)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -55,6 +55,25 @@ PREDICT_INTERVAL = 10
 CLEANUP_INTERVAL = 3600
 
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
+
+# =====================================================================
+# ТВОИ ПРАВИЛА ДЛЯ РАНГОВ
+# =====================================================================
+RANK_VALUES = {
+    'A': 1,   # Туз - младший
+    '2': 2,
+    '3': 3,
+    '4': 4,
+    '5': 5,
+    '6': 6,
+    '7': 7,
+    '8': 8,
+    '9': 9,
+    '10': 10,
+    'J': 11,  # Валет
+    'Q': 12,  # Дама
+    'K': 13   # Король - старший
+}
 
 # =====================================================================
 # СТАТИСТИКА
@@ -244,6 +263,13 @@ def get_highest_card(cards):
 def get_suit_by_position(position):
     return POSITION_SUITS.get(position, None)
 
+def has_ten(cards):
+    """Проверяет, есть ли среди карт десятка"""
+    for card in cards:
+        if card.get("rank") == "10":
+            return True
+    return False
+
 def is_valid_game(game_data):
     """Проверяет, подходит ли игра для прогноза"""
     player_cards = game_data.get("player_cards", [])
@@ -262,6 +288,11 @@ def is_valid_game(game_data):
     # 3. Если у игрока 2 карты, у дилера 2 карты → пропускаем
     if len(player_cards) == 2 and len(dealer_cards) == 2:
         print(f"⏭️ Пропускаем #N{game_data['number']}: у игрока 2, у дилера 2", flush=True)
+        return False
+    
+    # 4. ✅ НОВОЕ ПРАВИЛО: если у игрока есть 10 → пропускаем
+    if has_ten(player_cards):
+        print(f"⏭️ Пропускаем #N{game_data['number']}: есть 10 у игрока", flush=True)
         return False
     
     return True
@@ -292,6 +323,7 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
+    """Проверяет результаты прогнозов (только игрок)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -415,15 +447,16 @@ def load_recent_messages():
 def main():
     global LAST_PREDICT_TIME
     
-    print("🔄 ПРОГНОЗИСТ 21 CLASSICS (ЛАЙВ) ЗАПУЩЕН", flush=True)
+    print("🔄 ПРОГНОЗИСТ 1 (ПО МАСТИ) ЗАПУЩЕН", flush=True)
     print(f"📊 Читает канал: {CHANNEL_STATS}", flush=True)
     print(f"📤 Отправляет в: {CHANNEL_PROGNOZ}", flush=True)
     print(f"⏰ Часовой пояс: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')} (МСК)", flush=True)
     print("=" * 60, flush=True)
-    print("📌 Правила прогноза:", flush=True)
+    print("📌 ПРАВИЛА:", flush=True)
     print("   - Ищем старшую карту у игрока", flush=True)
     print("   - По позиции определяем масть (1→♣️, 2→♦️, 3→♥️, 4→♠️)", flush=True)
     print("   - Если несколько старших карт - пропускаем", flush=True)
+    print("   - Если есть 10 у игрока - пропускаем", flush=True)
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
     print("   - Проверка ТОЛЬКО у игрока", flush=True)
     print("=" * 60, flush=True)
@@ -448,8 +481,6 @@ def main():
             # ✅ Ежедневный сброс кэша в 03:00
             if current_date != last_reset_date and current_hour == 3:
                 print("🔄 Ежедневный сброс кэша (новый цикл игр)...", flush=True)
-                # ❌ НЕ ТРОГАЕМ PROCESSED_GAMES!
-                # ❌ НЕ ТРОГАЕМ messages!
                 history = []
                 save_history(history)
                 all_messages = []
