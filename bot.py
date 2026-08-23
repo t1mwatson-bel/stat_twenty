@@ -17,7 +17,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (МГНОВЕННЫЙ РЕЗУЛЬТАТ)", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (СТАБИЛЬНЫЙ)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -57,18 +57,6 @@ CLEANUP_INTERVAL = 3600
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
 
 # =====================================================================
-# ДЕНЕЖНЫЙ ПОДХОД
-# =====================================================================
-START_BANK = 5000
-ODDS = 1.7
-STAKES = {
-    1: 100,      # Целевая
-    2: 250,      # Догон 1
-    3: 625,      # Догон 2
-    4: 1562.5    # Догон 3
-}
-
-# =====================================================================
 # ТВОИ ПРАВИЛА ДЛЯ РАНГОВ
 # =====================================================================
 RANK_VALUES = {
@@ -96,8 +84,8 @@ def load_stats():
             with open(STATS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
-            return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}, "bank": START_BANK, "profit": 0}
-    return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}, "bank": START_BANK, "profit": 0}
+            return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}}
+    return {"total": 0, "win": 0, "lose": 0, "by_dogon": {1: 0, 2: 0, 3: 0, 4: 0}}
 
 def save_stats(stats):
     with open(STATS_FILE, "w", encoding="utf-8") as f:
@@ -113,16 +101,8 @@ def update_stats(dogon_number, result):
             stats["by_dogon"][dogon_number] += 1
         else:
             stats["by_dogon"][dogon_number] = 1
-        
-        stake = STAKES.get(dogon_number, 0)
-        win_amount = stake * ODDS
-        stats["bank"] = stats["bank"] - stake + win_amount
-        stats["profit"] = stats["bank"] - START_BANK
     else:
         stats["lose"] += 1
-        stake = STAKES.get(4, 1562.5)
-        stats["bank"] = stats["bank"] - stake
-        stats["profit"] = stats["bank"] - START_BANK
     
     save_stats(stats)
     return stats
@@ -143,16 +123,12 @@ def send_stats_report():
     msg += f"📈 <b>Всего прогнозов:</b> {stats['total']}\n"
     msg += f"✅ <b>Зашло:</b> {stats['win']} ({win_rate:.1f}%)\n"
     msg += f"❌ <b>Не зашло:</b> {stats['lose']} ({100 - win_rate:.1f}%)\n\n"
-    msg += f"💰 <b>ДЕНЕЖНЫЙ ПОДХОД</b>\n"
-    msg += f"📊 <b>Банк:</b> {stats['bank']:.2f}₽\n"
-    msg += f"📈 <b>Прибыль:</b> {stats['profit']:+.2f}₽\n"
-    msg += f"🎯 <b>Коэффициент:</b> {ODDS}\n\n"
     msg += f"{'=' * 30}\n"
     msg += f"<b>По догонам:</b>\n"
-    msg += f"🎯 Целевая (100₽): {stats['by_dogon'].get(1, 0)}\n"
-    msg += f"🔄 Догон 1 (250₽): {stats['by_dogon'].get(2, 0)}\n"
-    msg += f"🔄 Догон 2 (625₽): {stats['by_dogon'].get(3, 0)}\n"
-    msg += f"🔄 Догон 3 (1562.5₽): {stats['by_dogon'].get(4, 0)}\n"
+    msg += f"🎯 Целевая игра: {stats['by_dogon'].get(1, 0)}\n"
+    msg += f"🔄 Догон 1: {stats['by_dogon'].get(2, 0)}\n"
+    msg += f"🔄 Догон 2: {stats['by_dogon'].get(3, 0)}\n"
+    msg += f"🔄 Догон 3: {stats['by_dogon'].get(4, 0)}\n"
     msg += f"{'=' * 30}\n"
     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
     
@@ -346,7 +322,7 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
-    """Проверяет результаты прогнозов - мгновенный результат"""
+    """Проверяет результаты прогнозов (только игрок)"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
@@ -398,7 +374,6 @@ def check_results(history, all_messages):
             original_text += f"🃏 Игрок масть: {predicted_suit}\n"
             original_text += f"🎯 Целевая игра: #N{target}\n"
             original_text += f"📈 3 игры догон\n"
-            original_text += f"💰 Ставка: {STAKES.get(found_dogon, 0)}₽ | Кэф: {ODDS}\n"
             original_text += f"⏰ {entry.get('time', '')[:16]}"
             
             if found_dogon == 1:
@@ -432,7 +407,6 @@ def check_results(history, all_messages):
             original_text += f"🃏 Игрок масть: {predicted_suit}\n"
             original_text += f"🎯 Целевая игра: #N{target}\n"
             original_text += f"📈 3 игры догон\n"
-            original_text += f"💰 Ставка: {STAKES.get(4, 0)}₽ | Кэф: {ODDS}\n"
             original_text += f"⏰ {entry.get('time', '')[:16]}"
             
             result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (3 догона проверены до #N{target+3})"
@@ -508,7 +482,6 @@ def main():
     print("   - Прогноз на 4 игры (целевая + 3 догона)", flush=True)
     print("   - Проверка ТОЛЬКО у игрока (ДАЖЕ если дилер 0)", flush=True)
     print("   - Мгновенный результат: как только нашли заход - закрываем", flush=True)
-    print("   - Банк: {START_BANK}₽, Кэф: {ODDS}, Повышение: ×2.5", flush=True)
     print("=" * 60, flush=True)
     
     offset = get_offset()
@@ -518,6 +491,10 @@ def main():
     print("📥 Загрузка последних сообщений из канала...", flush=True)
     all_messages = load_recent_messages()
     print(f"📥 Загружено сообщений: {len(all_messages)}", flush=True)
+    
+    # ✅ ПРОВЕРКА СУЩЕСТВУЮЩИХ ПРОГНОЗОВ ПРИ ЗАПУСКЕ
+    print("📥 Проверка существующих прогнозов...", flush=True)
+    check_results(history, all_messages)
     
     last_cleanup_time = time.time()
     last_stats_time = time.time()
@@ -607,8 +584,6 @@ def main():
                     msg += f"🃏 Игрок масть: {prognoz['suit']}\n"
                     msg += f"🎯 Целевая игра: #N{prognoz['target']}\n"
                     msg += f"📈 3 игры догон\n"
-                    msg += f"💰 Ставки: 100₽ → 250₽ → 625₽ → 1562.5₽\n"
-                    msg += f"🎯 Коэффициент: {ODDS}\n"
                     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}"
                     
                     message_id = send_message(msg)
