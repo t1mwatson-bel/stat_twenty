@@ -17,13 +17,13 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (ИСПРАВЛЕННАЯ НУМЕРАЦИЯ)", flush=True)
+print("🃏 ПРОГНОЗИСТ 1 - ПО МАСТИ (ИСПРАВЛЕННЫЙ)", flush=True)
 print("=" * 60, flush=True)
 
 print("🔮 ОБНОВЛЕНИЕ УСПЕШНО УСТАНОВЛЕНО!")
-print("📦 Версия: 032v3.0")
+print("📦 Версия: 032v3.2")
 print("✅ Статус: Завершено")
-print("📌 Целевая игра = 0, догоны = 1,2,3")
+print("📌 Исправлен парсинг карт с эмодзи")
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -63,22 +63,14 @@ CLEANUP_INTERVAL = 3600
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
 
 # =====================================================================
-# ТВОИ ПРАВИЛА ДЛЯ РАНГОВ
+# ТВОЯ ТАБЛИЦА ОЧКОВ
 # =====================================================================
 RANK_VALUES = {
-    'A': 1,   # Туз - младший
-    '2': 2,
-    '3': 3,
-    '4': 4,
-    '5': 5,
-    '6': 6,
-    '7': 7,
-    '8': 8,
-    '9': 9,
-    '10': 10,
-    'J': 11,  # Валет
-    'Q': 12,  # Дама
-    'K': 13   # Король - старший
+    'A': 1,   # Туз = 1 (самый младший)
+    'J': 2,   # Валет = 2
+    'Q': 3,   # Дама = 3
+    'K': 4,   # Король = 4
+    '6': 6, '7': 7, '8': 8, '9': 9, '10': 10
 }
 
 # =====================================================================
@@ -231,17 +223,8 @@ def parse_game(text):
         return None
 
 def get_highest_card(cards):
-    """Твоя методика: старшая карта по очкам"""
     if not cards:
         return None, None
-    
-    rank_order = {
-        "A": 1,   # Туз = 1 (самый младший)
-        "J": 2,   # Валет = 2
-        "Q": 3,   # Дама = 3
-        "K": 4,   # Король = 4
-        "6": 6, "7": 7, "8": 8, "9": 9, "10": 10
-    }
     
     highest_value = -1
     highest_card = None
@@ -250,7 +233,7 @@ def get_highest_card(cards):
     
     for idx, card in enumerate(cards, start=1):
         rank = card.get("rank", "")
-        value = rank_order.get(rank, 0)
+        value = RANK_VALUES.get(rank, 0)
         
         if value > highest_value:
             highest_value = value
@@ -275,7 +258,6 @@ def has_ten(cards):
     return False
 
 def is_valid_game(game_data):
-    """Проверяет, подходит ли игра для прогноза (ПРАВИЛО 4 КАРТ)"""
     player_cards = game_data.get("player_cards", [])
     dealer_cards = game_data.get("dealer_cards", [])
     
@@ -346,7 +328,6 @@ def predict(game_data):
     }
 
 def check_results(history, all_messages):
-    """Проверяет результаты прогнозов — ТОЛЬКО ИГРОК, мгновенно"""
     for entry in history:
         if entry.get("status") != "pending":
             continue
