@@ -42,14 +42,13 @@ CLEANUP_INTERVAL = 3600
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
 
 # =====================================================================
-# ТАБЛИЦА ОЧКОВ ДЛЯ СТАРШИНСТВА (A=1, J=2, Q=3, K=4, 6-10 ПО НОМИНАЛУ)
+# ТОЛЬКО ДЛЯ КАРТИНОК (J, Q, K, A) – старшинство: A=1, J=2, Q=3, K=4
 # =====================================================================
-RANK_VALUES = {
-    'A': 1,   # Туз = 1 (самый младший)
-    'J': 2,   # Валет = 2
-    'Q': 3,   # Дама = 3
-    'K': 4,   # Король = 4
-    '6': 6, '7': 7, '8': 8, '9': 9, '10': 10
+PICTURE_RANK = {
+    'A': 1,
+    'J': 2,
+    'Q': 3,
+    'K': 4
 }
 
 def load_stats():
@@ -137,11 +136,11 @@ def edit_message(message_id, text):
         return False
 
 def send_startup_message():
-    msg = "✅ ОБНОВЛЕНИЕ ЗАВЕРШЕНО\n📦 Версия: 3.0.0\n✅ Прогнозист по масти\n🤖 Бот активен 💪"
+    msg = "✅ ОБНОВЛЕНИЕ ЗАВЕРШЕНО\n📦 Версия: 3.1.0\n✅ Прогнозист по масти (картинки)\n🤖 Бот активен 💪"
     send_message(msg)
 
 # =====================================================================
-# ПАРСИНГ (НЕ МЕНЯЕМ, ОН ИДЕАЛЬНЫЙ)
+# ПАРСИНГ (НЕ МЕНЯЕМ)
 # =====================================================================
 def parse_game(text):
     try:
@@ -241,28 +240,28 @@ def parse_game(text):
         return None
 
 # =====================================================================
-# ЛОГИКА ПРОГНОЗИСТА 1 (ПО МАСТИ)
+# ЛОГИКА ПРОГНОЗИСТА 1 (ПО МАСТИ) – СТАРШАЯ КАРТИНКА
 # =====================================================================
-def get_highest_card(cards):
-    if not cards:
-        return None, None
-    highest_value = -1
-    highest_card = None
-    highest_position = None
-    count_highest = 0
+def get_highest_picture(cards):
+    """Находит самую старшую картинку (J, Q, K, A) и её позицию."""
+    best_rank = -1
+    best_card = None
+    best_pos = None
+    count = 0
     for idx, card in enumerate(cards, start=1):
         rank = card.get("rank", "")
-        value = RANK_VALUES.get(rank, 0)
-        if value > highest_value:
-            highest_value = value
-            highest_card = card
-            highest_position = idx
-            count_highest = 1
-        elif value == highest_value:
-            count_highest += 1
-    if count_highest > 1:
+        if rank in PICTURE_RANK:
+            value = PICTURE_RANK[rank]
+            if value > best_rank:
+                best_rank = value
+                best_card = card
+                best_pos = idx
+                count = 1
+            elif value == best_rank:
+                count += 1
+    if count > 1:
         return None, None
-    return highest_card, highest_position
+    return best_card, best_pos
 
 def get_suit_by_position(position):
     return POSITION_SUITS.get(position, None)
@@ -299,14 +298,19 @@ def predict(game_data):
     else:
         print(f"⚠️ Игра #{game_num}: {len(player_cards)} карт — не подходит", flush=True)
         return None
-    # Проверка повторяющихся рангов
+    # Проверяем, есть ли хотя бы одна картинка
+    has_picture = any(c["rank"] in PICTURE_RANK for c in four_cards)
+    if not has_picture:
+        print(f"⏭️ Пропускаем #N{game_num}: нет картинок (J, Q, K, A)", flush=True)
+        return None
+    # Проверяем повторяющиеся ранги (всех карт, чтобы отсечь дубли)
     ranks = [c["rank"] for c in four_cards]
     if len(ranks) != len(set(ranks)):
         print(f"⏭️ Пропускаем #N{game_num}: повторяющиеся ранги {ranks}", flush=True)
         return None
-    highest_card, highest_position = get_highest_card(four_cards)
+    highest_card, highest_position = get_highest_picture(four_cards)
     if not highest_card or not highest_position:
-        print(f"⚠️ Игра #{game_num}: не удалось определить старшую карту", flush=True)
+        print(f"⚠️ Игра #{game_num}: не удалось определить старшую картинку", flush=True)
         return None
     predicted_suit = get_suit_by_position(highest_position)
     if not predicted_suit:
@@ -318,7 +322,7 @@ def predict(game_data):
         return None
     rank = highest_card["rank"]
     target_game = game_num + 1
-    print(f"🔍 #N{game_num}: старшая {rank} (поз. {highest_position}) → {predicted_suit}", flush=True)
+    print(f"🔍 #N{game_num}: старшая картинка {rank} (поз. {highest_position}) → {predicted_suit}", flush=True)
     return {
         "from_game": game_num,
         "target": target_game,
@@ -466,7 +470,7 @@ def check_bot_status():
 
 def main():
     global LAST_PREDICT_TIME
-    print("🔄 ЗАПУСК ПРОГНОЗИСТА (МАСТЬ)...", flush=True)
+    print("🔄 ЗАПУСК ПРОГНОЗИСТА (МАСТЬ, КАРТИНКИ)...", flush=True)
     print("", flush=True)
     check_bot_status()
     try:
