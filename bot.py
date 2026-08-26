@@ -33,6 +33,7 @@ print("", flush=True)
 HISTORY_FILE = "history.json"
 OFFSET_FILE = "offset.txt"
 STATS_FILE = "stats.json"
+BALANCE_FILE = "balance_mast.json"
 MAX_HISTORY = 200
 PROCESSED_GAMES = set()
 LAST_PREDICT_TIME = 0
@@ -40,6 +41,38 @@ PREDICT_INTERVAL = 3
 CLEANUP_INTERVAL = 3600
 
 POSITION_SUITS = {1: "♣️", 2: "♦️", 3: "♥️", 4: "♠️"}
+
+# =====================================================================
+# ФИНАНСОВЫЕ ПАРАМЕТРЫ
+# =====================================================================
+COEFFICIENT = 1.70
+STARTER_BET = 50
+MULTIPLIER = 2.5
+INITIAL_BALANCE = 5000
+BETS = [STARTER_BET, STARTER_BET * MULTIPLIER, STARTER_BET * MULTIPLIER**2, STARTER_BET * MULTIPLIER**3]
+# BETS = [50, 125, 312.5, 781.25]
+
+# =====================================================================
+# БАЛАНС
+# =====================================================================
+def load_balance():
+    if os.path.exists(BALANCE_FILE):
+        try:
+            with open(BALANCE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("balance", INITIAL_BALANCE)
+        except:
+            return INITIAL_BALANCE
+    return INITIAL_BALANCE
+
+def save_balance(balance):
+    with open(BALANCE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"balance": round(balance, 2)}, f, indent=2, ensure_ascii=False)
+
+def get_bet(dogon_number):
+    if dogon_number < len(BETS):
+        return BETS[dogon_number]
+    return BETS[-1]
 
 # =====================================================================
 # ТОЛЬКО ДЛЯ КАРТИНОК (J, Q, K, A) – старшинство: A=1, J=2, Q=3, K=4
@@ -80,8 +113,10 @@ def update_stats(dogon_number, result):
 
 def send_stats_report():
     stats = load_stats()
+    balance = load_balance()
     if stats["total"] == 0:
         msg = "📊 <b>СТАТИСТИКА ПРОГНОЗОВ (МАСТЬ)</b>\n\nПока нет прогнозов."
+        msg += f"\n💰 Баланс: {balance:.2f}₽"
         send_message(msg)
         return
     win_rate = (stats["win"] / stats["total"] * 100) if stats["total"] > 0 else 0
@@ -94,7 +129,9 @@ def send_stats_report():
     msg += f"🔄 Догон 1: {stats['by_dogon'].get(1, 0)}\n"
     msg += f"🔄 Догон 2: {stats['by_dogon'].get(2, 0)}\n"
     msg += f"🔄 Догон 3: {stats['by_dogon'].get(3, 0)}\n"
-    msg += f"{'=' * 30}\n⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
+    msg += f"{'=' * 30}\n"
+    msg += f"💰 Баланс: {balance:.2f}₽\n"
+    msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%d.%m.%Y %H:%M:%S')}"
     send_message(msg)
 
 def get_updates(offset):
@@ -136,7 +173,14 @@ def edit_message(message_id, text):
         return False
 
 def send_startup_message():
-    msg = "✅ ОБНОВЛЕНИЕ ЗАВЕРШЕНО\n📦 Версия: 3.2.0\n✅ Прогнозист по масти (картинки)\n🔄 Таймаут 10 мин\n🤖 Бот активен 💪"
+    balance = load_balance()
+    msg = (
+        "✅ ОБНОВЛЕНИЕ ЗАВЕРШЕНО\n"
+        "📦 Версия: 4.0.0\n"
+        "✅ Прогнозист по масти (картинки)\n"
+        f"💰 Баланс: {balance:.2f}₽\n"
+        "🤖 Бот активен 💪"
+    )
     send_message(msg)
 
 # =====================================================================
@@ -240,7 +284,7 @@ def parse_game(text):
         return None
 
 # =====================================================================
-# ЛОГИКА ПРОГНОЗИСТА 1 (ПО МАСТИ) – СТАРШАЯ КАРТИНКА
+# ЛОГИКА ПРОГНОЗИСТА (ПО МАСТИ) – СТАРШАЯ КАРТИНКА
 # =====================================================================
 def get_highest_picture(cards):
     best_rank = -1
@@ -342,6 +386,7 @@ def check_results(history, all_messages):
         from_game = entry.get("from_game")
         message_id = entry.get("message_id")
         created_time = entry.get("time")
+        current_dogon = entry.get("current_dogon", 0)
 
         if not message_id:
             continue
@@ -353,9 +398,13 @@ def check_results(history, all_messages):
 
         if current_time - created_ts > TIMEOUT_SECONDS:
             print(f"⏰ Таймаут для прогноза #N{from_game} -> #N{target} (больше {TIMEOUT_SECONDS//60} мин)", flush=True)
-            update_stats(0, "lose")
+            balance = load_balance()
+            bet = get_bet(current_dogon)
+            balance -= bet
+            save_balance(balance)
+            update_stats(current_dogon, "lose")
             original_text = f"🔮 <b>ПРОГНОЗ (МАСТЬ)</b>\n📊 От игры: #N{from_game}\n🃏 Масть: {predicted_suit}\n🎯 Целевая игра: #N{target}\n📈 3 игры догон\n⏰ {entry.get('time', '')[:16]}"
-            result_text = f"\n\n⏰ <b>ТАЙМАУТ</b> (игра не завершена)"
+            result_text = f"\n\n⏰ <b>ТАЙМАУТ</b> (игра не завершена)\n💰 -{bet:.2f}₽ | Баланс: {balance:.2f}₽"
             edit_message(message_id, original_text + result_text)
             entry["status"] = "lose"
             save_history(history)
@@ -388,12 +437,19 @@ def check_results(history, all_messages):
             if suit_found:
                 print(f"✅ Найдена масть {predicted_suit} в игре #N{game_to_check}!", flush=True)
                 dogon_number = game_to_check - target
+                bet = get_bet(dogon_number)
+                win_amount = bet * COEFFICIENT
+                balance = load_balance()
+                balance -= bet
+                balance += win_amount
+                save_balance(balance)
                 update_stats(dogon_number, "win")
                 original_text = f"🔮 <b>ПРОГНОЗ (МАСТЬ)</b>\n📊 От игры: #N{from_game}\n🃏 Масть: {predicted_suit}\n🎯 Целевая игра: #N{target}\n📈 3 игры догон\n⏰ {entry.get('time', '')[:16]}"
                 if dogon_number == 0:
                     result_text = f"\n\n✅ <b>ЗАШЛО</b> в целевой игре: #N{game_to_check}"
                 else:
                     result_text = f"\n\n✅ <b>ЗАШЛО</b> на догоне {dogon_number}: #N{game_to_check}"
+                result_text += f"\n💰 Ставка: {bet:.2f}₽ | Выигрыш: {win_amount:.2f}₽ | Баланс: {balance:.2f}₽"
                 edit_message(message_id, original_text + result_text)
                 entry["status"] = "win"
                 entry["result_game"] = game_to_check
@@ -403,9 +459,13 @@ def check_results(history, all_messages):
 
             if i == max_games_to_check - 1:
                 print(f"❌ Масть {predicted_suit} не найдена за {max_games_to_check} игр", flush=True)
-                update_stats(0, "lose")
+                bet = get_bet(current_dogon)
+                balance = load_balance()
+                balance -= bet
+                save_balance(balance)
+                update_stats(current_dogon, "lose")
                 original_text = f"🔮 <b>ПРОГНОЗ (МАСТЬ)</b>\n📊 От игры: #N{from_game}\n🃏 Масть: {predicted_suit}\n🎯 Целевая игра: #N{target}\n📈 3 игры догон\n⏰ {entry.get('time', '')[:16]}"
-                result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (проверено {max_games_to_check} игр)"
+                result_text = f"\n\n❌ <b>НЕ ЗАШЛО</b> (проверено {max_games_to_check} игр)\n💰 -{bet:.2f}₽ | Баланс: {balance:.2f}₽"
                 edit_message(message_id, original_text + result_text)
                 entry["status"] = "lose"
                 save_history(history)
@@ -461,6 +521,7 @@ def load_recent_messages():
     return []
 
 def check_bot_status():
+    balance = load_balance()
     print("╔═══════════════════════════════════════════════════════════════╗", flush=True)
     print("║              🔍 ДИАГНОСТИКА СТАТУСА БОТА                    ║", flush=True)
     print("╠═══════════════════════════════════════════════════════════════╣", flush=True)
@@ -469,6 +530,7 @@ def check_bot_status():
     print(f"║  ⏰ Последний прогноз: {datetime.fromtimestamp(LAST_PREDICT_TIME).strftime('%H:%M:%S') if LAST_PREDICT_TIME > 0 else 'Нет'}", flush=True)
     print(f"║  📤 Канал отправки: {CHANNEL_PROGNOZ}", flush=True)
     print(f"║  📥 Канал чтения: {CHANNEL_STATS}", flush=True)
+    print(f"║  💰 Баланс: {balance:.2f}₽", flush=True)
     print("╚═══════════════════════════════════════════════════════════════╝", flush=True)
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
     try:
@@ -484,6 +546,11 @@ def check_bot_status():
 
 def main():
     global LAST_PREDICT_TIME
+    
+    if not os.path.exists(BALANCE_FILE):
+        save_balance(INITIAL_BALANCE)
+        print(f"💰 Создан новый баланс: {INITIAL_BALANCE}₽", flush=True)
+    
     print("🔄 ЗАПУСК ПРОГНОЗИСТА (МАСТЬ, КАРТИНКИ)...", flush=True)
     print("", flush=True)
     check_bot_status()
@@ -502,6 +569,7 @@ def main():
     check_results(history, all_messages)
     last_cleanup_time = time.time()
     last_stats_time = time.time()
+    last_forced_check = time.time()
     print("🚀 БОТ ГОТОВ К РАБОТЕ!", flush=True)
     print("=" * 60, flush=True)
     print("", flush=True)
@@ -528,6 +596,11 @@ def main():
             if current_time - last_stats_time > 3600:
                 send_stats_report()
                 last_stats_time = current_time
+
+            if current_time - last_forced_check > 30:
+                print("🔄 Принудительная проверка...", flush=True)
+                check_results(history, all_messages)
+                last_forced_check = current_time
 
             updates = get_updates(offset)
 
@@ -592,11 +665,13 @@ def main():
 
                 prognoz = predict(game_data)
                 if prognoz:
+                    bet = get_bet(0)
                     msg = f"🔮 <b>ПРОГНОЗ (МАСТЬ)</b>\n"
                     msg += f"📊 От игры: #N{game_data['number']}\n"
                     msg += f"🃏 Масть: {prognoz['suit']}\n"
                     msg += f"🎯 Целевая игра: #N{prognoz['target']}\n"
                     msg += f"📈 3 игры догон\n"
+                    msg += f"💰 Ставка: {bet:.2f}₽ | Коэф: {COEFFICIENT}\n"
                     msg += f"⏰ {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}"
 
                     message_id = send_message(msg)
@@ -612,7 +687,8 @@ def main():
                             "card": prognoz["card"],
                             "time": datetime.now(MOSCOW_TZ).isoformat(),
                             "status": "pending",
-                            "message_id": message_id
+                            "message_id": message_id,
+                            "current_dogon": 0
                         })
                         save_history(history)
 
