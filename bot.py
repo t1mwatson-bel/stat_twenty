@@ -38,7 +38,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-10691.pro"
 DATA_FILE = "twentyone_data.json"
 MAX_RECORDS = 20000
-CHECK_INTERVAL = 5
+CHECK_INTERVAL = 3
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -100,7 +100,6 @@ def get_active_games():
                         active_games.append(game)
             return active_games
         else:
-            print(f"⚠️ Статус API: {response.status_code}", flush=True)
             return []
     except Exception as e:
         print(f"❌ Ошибка: {e}", flush=True)
@@ -123,7 +122,10 @@ def get_game_data(game_id):
 
 def parse_cards_from_json(cards_str):
     try:
-        cards = json.loads(cards_str)
+        if isinstance(cards_str, str):
+            cards = json.loads(cards_str)
+        else:
+            cards = cards_str
         result = []
         for card in cards:
             cs = card.get("CS", 0)
@@ -132,55 +134,89 @@ def parse_cards_from_json(cards_str):
             rank = RANKS.get(cv, "?")
             result.append({"rank": rank, "suit": suit, "cs": cs, "cv": cv})
         return result
-    except:
+    except Exception as e:
         return []
 
+def find_cards(data):
+    """Ищет карты в любом месте ответа API"""
+    player_cards = []
+    dealer_cards = []
+    state = "0"
+    
+    # Пробуем path: Value.scores.statistic.main
+    try:
+        scores = data.get("Value", {}).get("scores", {})
+        if scores:
+            statistic = scores.get("statistic", {})
+            main_stat = statistic.get("main", {})
+            if main_stat:
+                p1 = main_stat.get("P1", "[]")
+                p2 = main_stat.get("P2", "[]")
+                if p1 and p1 != "[]":
+                    player_cards = parse_cards_from_json(p1)
+                if p2 and p2 != "[]":
+                    dealer_cards = parse_cards_from_json(p2)
+                state = main_stat.get("STATE", state)
+                if player_cards or dealer_cards:
+                    return player_cards, dealer_cards, state
+    except:
+        pass
+    
+    # Пробуем path: Value.SC (как в классик)
+    try:
+        sc = data.get("Value", {}).get("SC", {})
+        if sc:
+            p1 = sc.get("P1", "[]")
+            p2 = sc.get("P2", "[]")
+            if p1 and p1 != "[]":
+                player_cards = parse_cards_from_json(p1)
+            if p2 and p2 != "[]":
+                dealer_cards = parse_cards_from_json(p2)
+            state = sc.get("STATE", state)
+            if player_cards or dealer_cards:
+                return player_cards, dealer_cards, state
+    except:
+        pass
+    
+    # Пробуем path: scores.statistic.main (без Value)
+    try:
+        scores = data.get("scores", {})
+        if scores:
+            statistic = scores.get("statistic", {})
+            main_stat = statistic.get("main", {})
+            if main_stat:
+                p1 = main_stat.get("P1", "[]")
+                p2 = main_stat.get("P2", "[]")
+                if p1 and p1 != "[]":
+                    player_cards = parse_cards_from_json(p1)
+                if p2 and p2 != "[]":
+                    dealer_cards = parse_cards_from_json(p2)
+                state = main_stat.get("STATE", state)
+    except:
+        pass
+    
+    return player_cards, dealer_cards, state
+
 def analyze_game(game_id, data, latency, start_time, end_time):
+    global last_card_data
+    
     timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ)
     timestamp_msk_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
     
-    # Получаем карты из правильного места
-    scores = data.get("Value", {}).get("scores", {})
-    statistic = scores.get("statistic", {})
-    main_stat = statistic.get("main", {})
-    
-    # Если в Value нет scores, пробуем другой путь
-    if not scores:
-        scores = data.get("scores", {})
-        statistic = scores.get("statistic", {})
-        main_stat = statistic.get("main", {})
-    
-    # Получаем состояние
-    state = main_stat.get("STATE", "0")
-    
-    # Получаем карты
-    p1_str = main_stat.get("P1", "[]")
-    p2_str = main_stat.get("P2", "[]")
-    
-    # Если карты пустые, пробуем альтернативный путь
-    if not p1_str or p1_str == "[]":
-        sc = data.get("Value", {}).get("SC", {})
-        p1_str = sc.get("P1", "[]")
-        p2_str = sc.get("P2", "[]")
-        state = sc.get("STATE", state)
-    
-    player_cards = parse_cards_from_json(p1_str)
-    dealer_cards = parse_cards_from_json(p2_str)
+    # Ищем карты
+    player_cards, dealer_cards, state = find_cards(data)
     
     # Проверяем, изменились ли карты
     game_id_str = str(game_id)
     last_cards = last_card_data.get(game_id_str, {})
-    last_p1 = last_cards.get("p1", "[]")
-    last_p2 = last_cards.get("p2", "[]")
+    last_count = last_cards.get("count", 0)
+    current_count = len(player_cards) + len(dealer_cards)
     
-    if p1_str == last_p1 and p2_str == last_p2 and player_cards:
-        # Карты не изменились, обновляем только если state изменился
-        if state in ["4", "5"]:
-            pass
-        else:
-            return
+    if current_count == last_count and current_count > 0:
+        # Карты не изменились, не сохраняем
+        return
     
-    last_card_data[game_id_str] = {"p1": p1_str, "p2": p2_str}
+    last_card_data[game_id_str] = {"count": current_count}
     
     # Последовательность
     sequence = []
@@ -226,11 +262,15 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     }
     
     seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence]) if sequence else "нет карт"
-    print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
-    if sequence:
-        print(f"   Последовательность: {seq_str}", flush=True)
     
-    save_data(record)
+    if current_count > 0:
+        print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
+        print(f"   Последовательность: {seq_str}", flush=True)
+        save_data(record)
+    
+    if state in ["4", "5"]:
+        finished_games.add(game_id_str)
+        print(f"🏁 Игра {game_id} завершена (state={state})", flush=True)
 
 def main():
     print("🔄 АНАЛИЗАТОР ОБЫЧНОЙ 21 ЗАПУЩЕН", flush=True)
@@ -246,7 +286,6 @@ def main():
         try:
             active_games = get_active_games()
             if not active_games:
-                print("💤 Нет активных игр", flush=True)
                 time.sleep(CHECK_INTERVAL)
                 continue
             
@@ -260,23 +299,6 @@ def main():
                     continue
                 
                 analyze_game(game_id, data, latency, start_time, end_time)
-                
-                # Проверяем состояние
-                scores = data.get("Value", {}).get("scores", {})
-                if not scores:
-                    scores = data.get("scores", {})
-                statistic = scores.get("statistic", {})
-                main_stat = statistic.get("main", {})
-                state = main_stat.get("STATE", "0")
-                
-                if not state or state == "0":
-                    sc = data.get("Value", {}).get("SC", {})
-                    state = sc.get("STATE", state)
-                
-                if state in ["4", "5"]:
-                    finished_games.add(game_id)
-                    print(f"🏁 Игра {game_id} завершена (state={state})", flush=True)
-                
                 time.sleep(0.3)
             
             if len(finished_games) > 500:
