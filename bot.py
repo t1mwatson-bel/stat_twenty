@@ -84,41 +84,25 @@ def get_active_games():
     try:
         url = f"{BASE_URL}/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=190&gr=415&grMode=4&lng=ru&ref=7&selectedMs=10.146.1643503"
         response = requests.get(url, headers=HEADERS, timeout=10)
-        print(f"📡 Запрос к API: статус {response.status_code}", flush=True)
         
         if response.status_code == 200:
             data = response.json()
-            print(f"📦 Получен ответ, тип: {type(data)}", flush=True)
-            
             if isinstance(data, dict) and "Value" in data:
                 games = data.get("Value", [])
-                print(f"📊 Найдено игр в Value: {len(games)}", flush=True)
             elif isinstance(data, list):
                 games = data
-                print(f"📊 Найдено игр в списке: {len(games)}", flush=True)
             else:
-                print(f"⚠️ Неизвестный формат ответа: {str(data)[:200]}", flush=True)
                 return []
             
             active_games = []
             for game in games:
-                liga = game.get("liga", {})
-                if liga.get("id") == 1643503:
+                if game.get("liga", {}).get("id") == 1643503:
                     active_games.append(game)
-                    print(f"✅ Найдена игра 21: {game.get('id')}", flush=True)
-            
-            if not active_games:
-                print("💤 Нет активных игр 21 Очко", flush=True)
-                # Показываем первые 3 игры для отладки
-                for i, game in enumerate(games[:3]):
-                    print(f"   Игра {i+1}: id={game.get('id')}, liga_id={game.get('liga', {}).get('id')}", flush=True)
-            
             return active_games
         else:
-            print(f"❌ Ошибка API: {response.status_code}", flush=True)
             return []
     except Exception as e:
-        print(f"❌ Ошибка get_active_games: {e}", flush=True)
+        print(f"❌ Ошибка: {e}", flush=True)
         return []
 
 def get_game_data(game_id):
@@ -131,7 +115,6 @@ def get_game_data(game_id):
         if response.status_code == 200:
             return response.json(), latency, start_time, end_time
         else:
-            print(f"⚠️ Статус игры {game_id}: {response.status_code}", flush=True)
             return None, None, None, None
     except Exception as e:
         print(f"❌ Ошибка игры {game_id}: {e}", flush=True)
@@ -165,6 +148,7 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     state = "0"
     
     # === ПАРСИНГ ДЛЯ ОБЫЧНОЙ 21 ===
+    # Пробуем path: data.scores.statistic.main
     scores = data.get("scores", {})
     if scores:
         statistic = scores.get("statistic", {})
@@ -189,7 +173,20 @@ def analyze_game(game_id, data, latency, start_time, end_time):
                 player_cards = parse_cards_from_json(p1_str)
                 dealer_cards = parse_cards_from_json(p2_str)
     
+    # Если всё ещё нет — пробуем SC
+    if not player_cards and not dealer_cards:
+        sc = data.get("Value", {}).get("SC", {})
+        if sc:
+            p1_str = sc.get("P1", "[]")
+            p2_str = sc.get("P2", "[]")
+            state = sc.get("STATE", "0")
+            player_cards = parse_cards_from_json(p1_str)
+            dealer_cards = parse_cards_from_json(p2_str)
+    
     current_count = len(player_cards) + len(dealer_cards)
+    
+    # Всегда показываем, даже если карт нет
+    print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
     
     if current_count > 0:
         sequence = []
@@ -244,7 +241,6 @@ def analyze_game(game_id, data, latency, start_time, end_time):
         }
         
         seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence])
-        print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
         print(f"   Последовательность: {seq_str}", flush=True)
         save_data(record)
     
@@ -264,7 +260,6 @@ def main():
     
     while True:
         try:
-            print(f"\n🔍 Проверка активных игр...", flush=True)
             active_games = get_active_games()
             
             if not active_games:
@@ -279,12 +274,14 @@ def main():
                 if game_id in finished_games:
                     continue
                 
+                print(f"📥 Запрос данных для игры {game_id}...", flush=True)
                 data, latency, start_time, end_time = get_game_data(game_id)
                 if not data:
+                    print(f"❌ Не удалось получить данные для игры {game_id}", flush=True)
                     continue
                 
                 analyze_game(game_id, data, latency, start_time, end_time)
-                time.sleep(0.3)
+                time.sleep(0.5)
             
             if len(finished_games) > 500:
                 finished_games.clear()
