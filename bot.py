@@ -38,7 +38,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-10691.pro"
 DATA_FILE = "twentyone_data.json"
 MAX_RECORDS = 20000
-CHECK_INTERVAL = 5
+CHECK_INTERVAL = 3
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -140,7 +140,6 @@ def parse_cards_from_json(cards_str):
 def analyze_game(game_id, data, latency, start_time, end_time):
     global last_card_data
     
-    # === ЗАЩИТА ОТ NONE ===
     if data is None:
         print(f"⚠️ Данные для игры {game_id} пустые (None)", flush=True)
         return
@@ -153,7 +152,6 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     state = "0"
     
     # === ПАРСИНГ ДЛЯ ОБЫЧНОЙ 21 ===
-    # Пробуем path: data.scores.statistic.main
     scores = data.get("scores", {})
     if scores:
         statistic = scores.get("statistic", {})
@@ -194,8 +192,10 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     
     current_count = len(player_cards) + len(dealer_cards)
     
+    # Показываем state всегда
     print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
     
+    # === СОХРАНЯЕМ ЕСЛИ ЕСТЬ КАРТЫ ИЛИ STATE НЕ 0 ===
     if current_count > 0:
         sequence = []
         max_len = max(len(player_cards), len(dealer_cards))
@@ -251,6 +251,21 @@ def analyze_game(game_id, data, latency, start_time, end_time):
         seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence])
         print(f"   Последовательность: {seq_str}", flush=True)
         save_data(record)
+    elif state != "0":
+        # Если state не 0, но карт нет — сохраняем state
+        print(f"   ⚠️ State={state}, но карт нет, сохраняем состояние", flush=True)
+        record = {
+            "game_id": game_id,
+            "timestamp_msk": timestamp_msk_str,
+            "latency_ms": round(latency, 2),
+            "state": state,
+            "player_score": 0,
+            "dealer_score": 0,
+            "player_cards": [],
+            "dealer_cards": [],
+            "sequence": []
+        }
+        save_data(record)
     
     if state in ["4", "5"]:
         finished_games.add(str(game_id))
@@ -282,14 +297,13 @@ def main():
                 if game_id in finished_games:
                     continue
                 
-                print(f"📥 Запрос данных для игры {game_id}...", flush=True)
                 data, latency, start_time, end_time = get_game_data(game_id)
                 if not data:
                     print(f"❌ Не удалось получить данные для игры {game_id}", flush=True)
                     continue
                 
                 analyze_game(game_id, data, latency, start_time, end_time)
-                time.sleep(0.5)
+                time.sleep(0.3)
             
             if len(finished_games) > 500:
                 finished_games.clear()
