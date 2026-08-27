@@ -140,7 +140,12 @@ def parse_cards_from_json(cards_str):
 def analyze_game(game_id, data, latency, start_time, end_time):
     global last_card_data
     
-    timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ)
+    # === ЗАЩИТА ОТ NONE ===
+    if data is None:
+        print(f"⚠️ Данные для игры {game_id} пустые (None)", flush=True)
+        return
+    
+    timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ) if start_time else datetime.now(MOSCOW_TZ)
     timestamp_msk_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
     
     player_cards = []
@@ -162,30 +167,33 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     
     # Если не нашлось, пробуем через Value
     if not player_cards and not dealer_cards:
-        scores = data.get("Value", {}).get("scores", {})
-        if scores:
-            statistic = scores.get("statistic", {})
-            main_stat = statistic.get("main", {})
-            if main_stat:
-                p1_str = main_stat.get("P1", "[]")
-                p2_str = main_stat.get("P2", "[]")
-                state = main_stat.get("STATE", "0")
-                player_cards = parse_cards_from_json(p1_str)
-                dealer_cards = parse_cards_from_json(p2_str)
+        value = data.get("Value", {})
+        if value:
+            scores = value.get("scores", {})
+            if scores:
+                statistic = scores.get("statistic", {})
+                main_stat = statistic.get("main", {})
+                if main_stat:
+                    p1_str = main_stat.get("P1", "[]")
+                    p2_str = main_stat.get("P2", "[]")
+                    state = main_stat.get("STATE", "0")
+                    player_cards = parse_cards_from_json(p1_str)
+                    dealer_cards = parse_cards_from_json(p2_str)
     
     # Если всё ещё нет — пробуем SC
     if not player_cards and not dealer_cards:
-        sc = data.get("Value", {}).get("SC", {})
-        if sc:
-            p1_str = sc.get("P1", "[]")
-            p2_str = sc.get("P2", "[]")
-            state = sc.get("STATE", "0")
-            player_cards = parse_cards_from_json(p1_str)
-            dealer_cards = parse_cards_from_json(p2_str)
+        value = data.get("Value", {})
+        if value:
+            sc = value.get("SC", {})
+            if sc:
+                p1_str = sc.get("P1", "[]")
+                p2_str = sc.get("P2", "[]")
+                state = sc.get("STATE", "0")
+                player_cards = parse_cards_from_json(p1_str)
+                dealer_cards = parse_cards_from_json(p2_str)
     
     current_count = len(player_cards) + len(dealer_cards)
     
-    # Всегда показываем, даже если карт нет
     print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
     
     if current_count > 0:
