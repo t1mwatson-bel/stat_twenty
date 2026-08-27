@@ -3,7 +3,7 @@ import sys
 import requests
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 # =====================================================================
@@ -51,6 +51,7 @@ SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
 
 finished_games = set()
+last_card_data = {}
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -138,16 +139,50 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ)
     timestamp_msk_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
     
-    sc = data.get("Value", {}).get("SC", {})
-    state = sc.get("STATE", "0")
+    # Получаем карты из правильного места
+    scores = data.get("Value", {}).get("scores", {})
+    statistic = scores.get("statistic", {})
+    main_stat = statistic.get("main", {})
     
-    p1_str = sc.get("P1", "[]")
-    p2_str = sc.get("P2", "[]")
+    # Если в Value нет scores, пробуем другой путь
+    if not scores:
+        scores = data.get("scores", {})
+        statistic = scores.get("statistic", {})
+        main_stat = statistic.get("main", {})
+    
+    # Получаем состояние
+    state = main_stat.get("STATE", "0")
+    
+    # Получаем карты
+    p1_str = main_stat.get("P1", "[]")
+    p2_str = main_stat.get("P2", "[]")
+    
+    # Если карты пустые, пробуем альтернативный путь
+    if not p1_str or p1_str == "[]":
+        sc = data.get("Value", {}).get("SC", {})
+        p1_str = sc.get("P1", "[]")
+        p2_str = sc.get("P2", "[]")
+        state = sc.get("STATE", state)
     
     player_cards = parse_cards_from_json(p1_str)
     dealer_cards = parse_cards_from_json(p2_str)
     
-    # Последовательность в порядке раздачи
+    # Проверяем, изменились ли карты
+    game_id_str = str(game_id)
+    last_cards = last_card_data.get(game_id_str, {})
+    last_p1 = last_cards.get("p1", "[]")
+    last_p2 = last_cards.get("p2", "[]")
+    
+    if p1_str == last_p1 and p2_str == last_p2 and player_cards:
+        # Карты не изменились, обновляем только если state изменился
+        if state in ["4", "5"]:
+            pass
+        else:
+            return
+    
+    last_card_data[game_id_str] = {"p1": p1_str, "p2": p2_str}
+    
+    # Последовательность
     sequence = []
     max_len = max(len(player_cards), len(dealer_cards))
     for i in range(max_len):
@@ -191,8 +226,9 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     }
     
     seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence]) if sequence else "нет карт"
-    print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс", flush=True)
-    print(f"   Последовательность: {seq_str}", flush=True)
+    print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
+    if sequence:
+        print(f"   Последовательность: {seq_str}", flush=True)
     
     save_data(record)
 
@@ -226,8 +262,17 @@ def main():
                 analyze_game(game_id, data, latency, start_time, end_time)
                 
                 # Проверяем состояние
-                sc = data.get("Value", {}).get("SC", {})
-                state = sc.get("STATE", "0")
+                scores = data.get("Value", {}).get("scores", {})
+                if not scores:
+                    scores = data.get("scores", {})
+                statistic = scores.get("statistic", {})
+                main_stat = statistic.get("main", {})
+                state = main_stat.get("STATE", "0")
+                
+                if not state or state == "0":
+                    sc = data.get("Value", {}).get("SC", {})
+                    state = sc.get("STATE", state)
+                
                 if state in ["4", "5"]:
                     finished_games.add(game_id)
                     print(f"🏁 Игра {game_id} завершена (state={state})", flush=True)
