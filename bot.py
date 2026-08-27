@@ -38,7 +38,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-10691.pro"
 DATA_FILE = "twentyone_data.json"
 MAX_RECORDS = 20000
-CHECK_INTERVAL = 3
+CHECK_INTERVAL = 5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -84,25 +84,41 @@ def get_active_games():
     try:
         url = f"{BASE_URL}/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=190&gr=415&grMode=4&lng=ru&ref=7&selectedMs=10.146.1643503"
         response = requests.get(url, headers=HEADERS, timeout=10)
+        print(f"📡 Запрос к API: статус {response.status_code}", flush=True)
+        
         if response.status_code == 200:
             data = response.json()
+            print(f"📦 Получен ответ, тип: {type(data)}", flush=True)
+            
             if isinstance(data, dict) and "Value" in data:
                 games = data.get("Value", [])
+                print(f"📊 Найдено игр в Value: {len(games)}", flush=True)
             elif isinstance(data, list):
                 games = data
+                print(f"📊 Найдено игр в списке: {len(games)}", flush=True)
             else:
+                print(f"⚠️ Неизвестный формат ответа: {str(data)[:200]}", flush=True)
                 return []
+            
             active_games = []
             for game in games:
-                if game.get("liga", {}).get("id") == 1643503:
-                    game_id = game.get("id")
-                    if game_id:
-                        active_games.append(game)
+                liga = game.get("liga", {})
+                if liga.get("id") == 1643503:
+                    active_games.append(game)
+                    print(f"✅ Найдена игра 21: {game.get('id')}", flush=True)
+            
+            if not active_games:
+                print("💤 Нет активных игр 21 Очко", flush=True)
+                # Показываем первые 3 игры для отладки
+                for i, game in enumerate(games[:3]):
+                    print(f"   Игра {i+1}: id={game.get('id')}, liga_id={game.get('liga', {}).get('id')}", flush=True)
+            
             return active_games
         else:
+            print(f"❌ Ошибка API: {response.status_code}", flush=True)
             return []
     except Exception as e:
-        print(f"❌ Ошибка: {e}", flush=True)
+        print(f"❌ Ошибка get_active_games: {e}", flush=True)
         return []
 
 def get_game_data(game_id):
@@ -115,6 +131,7 @@ def get_game_data(game_id):
         if response.status_code == 200:
             return response.json(), latency, start_time, end_time
         else:
+            print(f"⚠️ Статус игры {game_id}: {response.status_code}", flush=True)
             return None, None, None, None
     except Exception as e:
         print(f"❌ Ошибка игры {game_id}: {e}", flush=True)
@@ -132,70 +149,10 @@ def parse_cards_from_json(cards_str):
             cv = card.get("CV", 0)
             suit = SUITS_NAMES.get(cs, "?")
             rank = RANKS.get(cv, "?")
-            result.append({"rank": rank, "suit": suit, "cs": cs, "cv": cv})
+            result.append({"rank": rank, "suit": suit})
         return result
-    except Exception as e:
+    except:
         return []
-
-def find_cards(data):
-    """Ищет карты в любом месте ответа API"""
-    player_cards = []
-    dealer_cards = []
-    state = "0"
-    
-    # Пробуем path: Value.scores.statistic.main
-    try:
-        scores = data.get("Value", {}).get("scores", {})
-        if scores:
-            statistic = scores.get("statistic", {})
-            main_stat = statistic.get("main", {})
-            if main_stat:
-                p1 = main_stat.get("P1", "[]")
-                p2 = main_stat.get("P2", "[]")
-                if p1 and p1 != "[]":
-                    player_cards = parse_cards_from_json(p1)
-                if p2 and p2 != "[]":
-                    dealer_cards = parse_cards_from_json(p2)
-                state = main_stat.get("STATE", state)
-                if player_cards or dealer_cards:
-                    return player_cards, dealer_cards, state
-    except:
-        pass
-    
-    # Пробуем path: Value.SC (как в классик)
-    try:
-        sc = data.get("Value", {}).get("SC", {})
-        if sc:
-            p1 = sc.get("P1", "[]")
-            p2 = sc.get("P2", "[]")
-            if p1 and p1 != "[]":
-                player_cards = parse_cards_from_json(p1)
-            if p2 and p2 != "[]":
-                dealer_cards = parse_cards_from_json(p2)
-            state = sc.get("STATE", state)
-            if player_cards or dealer_cards:
-                return player_cards, dealer_cards, state
-    except:
-        pass
-    
-    # Пробуем path: scores.statistic.main (без Value)
-    try:
-        scores = data.get("scores", {})
-        if scores:
-            statistic = scores.get("statistic", {})
-            main_stat = statistic.get("main", {})
-            if main_stat:
-                p1 = main_stat.get("P1", "[]")
-                p2 = main_stat.get("P2", "[]")
-                if p1 and p1 != "[]":
-                    player_cards = parse_cards_from_json(p1)
-                if p2 and p2 != "[]":
-                    dealer_cards = parse_cards_from_json(p2)
-                state = main_stat.get("STATE", state)
-    except:
-        pass
-    
-    return player_cards, dealer_cards, state
 
 def analyze_game(game_id, data, latency, start_time, end_time):
     global last_card_data
@@ -203,73 +160,96 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ)
     timestamp_msk_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
     
-    # Ищем карты
-    player_cards, dealer_cards, state = find_cards(data)
+    player_cards = []
+    dealer_cards = []
+    state = "0"
     
-    # Проверяем, изменились ли карты
-    game_id_str = str(game_id)
-    last_cards = last_card_data.get(game_id_str, {})
-    last_count = last_cards.get("count", 0)
+    # === ПАРСИНГ ДЛЯ ОБЫЧНОЙ 21 ===
+    scores = data.get("scores", {})
+    if scores:
+        statistic = scores.get("statistic", {})
+        main_stat = statistic.get("main", {})
+        if main_stat:
+            p1_str = main_stat.get("P1", "[]")
+            p2_str = main_stat.get("P2", "[]")
+            state = main_stat.get("STATE", "0")
+            player_cards = parse_cards_from_json(p1_str)
+            dealer_cards = parse_cards_from_json(p2_str)
+    
+    # Если не нашлось, пробуем через Value
+    if not player_cards and not dealer_cards:
+        scores = data.get("Value", {}).get("scores", {})
+        if scores:
+            statistic = scores.get("statistic", {})
+            main_stat = statistic.get("main", {})
+            if main_stat:
+                p1_str = main_stat.get("P1", "[]")
+                p2_str = main_stat.get("P2", "[]")
+                state = main_stat.get("STATE", "0")
+                player_cards = parse_cards_from_json(p1_str)
+                dealer_cards = parse_cards_from_json(p2_str)
+    
     current_count = len(player_cards) + len(dealer_cards)
     
-    if current_count == last_count and current_count > 0:
-        # Карты не изменились, не сохраняем
-        return
-    
-    last_card_data[game_id_str] = {"count": current_count}
-    
-    # Последовательность
-    sequence = []
-    max_len = max(len(player_cards), len(dealer_cards))
-    for i in range(max_len):
-        if i < len(player_cards):
-            pc = player_cards[i]
-            sequence.append({"position": i*2+1, "who": "P", "rank": pc["rank"], "suit": pc["suit"]})
-        if i < len(dealer_cards):
-            dc = dealer_cards[i]
-            sequence.append({"position": i*2+2, "who": "D", "rank": dc["rank"], "suit": dc["suit"]})
-    
-    # Очки
-    def calc_score(cards):
-        score = 0
-        for card in cards:
-            cv = card.get("cv", 0)
-            if cv == 14:
-                score += 11
-            elif cv == 13:
-                score += 4
-            elif cv == 12:
-                score += 3
-            elif cv == 11:
-                score += 2
-            elif 6 <= cv <= 10:
-                score += cv
-        return score
-    
-    player_score = calc_score(player_cards)
-    dealer_score = calc_score(dealer_cards)
-    
-    record = {
-        "game_id": game_id,
-        "timestamp_msk": timestamp_msk_str,
-        "latency_ms": round(latency, 2),
-        "state": state,
-        "player_score": player_score,
-        "dealer_score": dealer_score,
-        "player_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in player_cards],
-        "dealer_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in dealer_cards],
-        "sequence": sequence
-    }
-    
-    seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence]) if sequence else "нет карт"
-    
     if current_count > 0:
+        sequence = []
+        max_len = max(len(player_cards), len(dealer_cards))
+        for i in range(max_len):
+            if i < len(player_cards):
+                pc = player_cards[i]
+                sequence.append({"position": i*2+1, "who": "P", "rank": pc["rank"], "suit": pc["suit"]})
+            if i < len(dealer_cards):
+                dc = dealer_cards[i]
+                sequence.append({"position": i*2+2, "who": "D", "rank": dc["rank"], "suit": dc["suit"]})
+        
+        def calc_score(cards):
+            score = 0
+            for card in cards:
+                cv = 0
+                if card["rank"] == "A":
+                    cv = 14
+                elif card["rank"] == "K":
+                    cv = 13
+                elif card["rank"] == "Q":
+                    cv = 12
+                elif card["rank"] == "J":
+                    cv = 11
+                elif card["rank"].isdigit():
+                    cv = int(card["rank"])
+                if cv == 14:
+                    score += 11
+                elif cv == 13:
+                    score += 4
+                elif cv == 12:
+                    score += 3
+                elif cv == 11:
+                    score += 2
+                elif 6 <= cv <= 10:
+                    score += cv
+            return score
+        
+        player_score = calc_score(player_cards)
+        dealer_score = calc_score(dealer_cards)
+        
+        record = {
+            "game_id": game_id,
+            "timestamp_msk": timestamp_msk_str,
+            "latency_ms": round(latency, 2),
+            "state": state,
+            "player_score": player_score,
+            "dealer_score": dealer_score,
+            "player_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in player_cards],
+            "dealer_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in dealer_cards],
+            "sequence": sequence
+        }
+        
+        seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence])
         print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
         print(f"   Последовательность: {seq_str}", flush=True)
         save_data(record)
     
     if state in ["4", "5"]:
-        finished_games.add(game_id_str)
+        finished_games.add(str(game_id))
         print(f"🏁 Игра {game_id} завершена (state={state})", flush=True)
 
 def main():
@@ -284,10 +264,15 @@ def main():
     
     while True:
         try:
+            print(f"\n🔍 Проверка активных игр...", flush=True)
             active_games = get_active_games()
+            
             if not active_games:
+                print("💤 Нет активных игр 21 Очко, ждём...", flush=True)
                 time.sleep(CHECK_INTERVAL)
                 continue
+            
+            print(f"🎯 Найдено {len(active_games)} активных игр", flush=True)
             
             for game in active_games:
                 game_id = str(game.get("id"))
@@ -314,6 +299,8 @@ def main():
             break
         except Exception as e:
             print(f"❌ Ошибка: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
