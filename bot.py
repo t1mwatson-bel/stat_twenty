@@ -38,7 +38,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-10691.pro"
 DATA_FILE = "twentyone_data_full.json"
 MAX_RECORDS = 20000
-CHECK_INTERVAL = 5  # Проверяем каждые 5 секунд
+CHECK_INTERVAL = 5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -145,7 +145,6 @@ def parse_cards_from_json(cards_str):
         return []
 
 def calculate_score(cards):
-    """Подсчет очков - туз всегда 11"""
     score = 0
     for card in cards:
         cv = 0
@@ -184,70 +183,111 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     dealer_cards = []
     state = "0"
     
-    # === ПАРСИНГ ДЛЯ ОБЫЧНОЙ 21 ===
-    scores = data.get("scores", {})
-    if scores:
-        statistic = scores.get("statistic", {})
-        main_stat = statistic.get("main", {})
-        if main_stat:
-            p1_str = main_stat.get("P1", "[]")
-            p2_str = main_stat.get("P2", "[]")
-            state = main_stat.get("STATE", "0")
-            player_cards = parse_cards_from_json(p1_str)
-            dealer_cards = parse_cards_from_json(p2_str)
+    # =============================================================
+    # ПАРСИНГ ДЛЯ ОБЫЧНОЙ 21 (ПОИСК ПО ВСЕМ ВОЗМОЖНЫМ ПУТЯМ)
+    # =============================================================
     
-    # Если не нашлось, пробуем через Value
-    if not player_cards and not dealer_cards:
-        value = data.get("Value", {})
-        if value:
-            scores = value.get("scores", {})
-            if scores:
-                statistic = scores.get("statistic", {})
-                main_stat = statistic.get("main", {})
-                if main_stat:
-                    p1_str = main_stat.get("P1", "[]")
-                    p2_str = main_stat.get("P2", "[]")
-                    state = main_stat.get("STATE", "0")
-                    player_cards = parse_cards_from_json(p1_str)
-                    dealer_cards = parse_cards_from_json(p2_str)
+    # 1. Пробуем через Value -> SC (как в 21 Classics)
+    value = data.get("Value", {})
+    if value:
+        sc = value.get("SC", {})
+        if sc:
+            for item in sc.get("S", []):
+                if item.get("Key") == "P1":
+                    try:
+                        player_cards = json.loads(item.get("Value", "[]"))
+                    except:
+                        player_cards = []
+                if item.get("Key") == "P2":
+                    try:
+                        dealer_cards = json.loads(item.get("Value", "[]"))
+                    except:
+                        dealer_cards = []
+                if item.get("Key") == "STATE":
+                    state = item.get("Value")
     
-    # Если всё ещё нет — пробуем SC
-    if not player_cards and not dealer_cards:
-        value = data.get("Value", {})
-        if value:
-            sc = value.get("SC", {})
+    # 2. Если не нашлось — пробуем через scores.statistic.main
+    if not player_cards:
+        scores = data.get("scores", {})
+        if scores:
+            statistic = scores.get("statistic", {})
+            main_stat = statistic.get("main", {})
+            if main_stat:
+                p1_str = main_stat.get("P1", "[]")
+                p2_str = main_stat.get("P2", "[]")
+                state = main_stat.get("STATE", "0")
+                try:
+                    player_cards = json.loads(p1_str) if isinstance(p1_str, str) else p1_str
+                except:
+                    player_cards = []
+                try:
+                    dealer_cards = json.loads(p2_str) if isinstance(p2_str, str) else p2_str
+                except:
+                    dealer_cards = []
+    
+    # 3. Если всё ещё нет — пробуем через result (для некоторых API)
+    if not player_cards:
+        result = data.get("result", {})
+        if result:
+            sc = result.get("SC", {})
             if sc:
                 p1_str = sc.get("P1", "[]")
                 p2_str = sc.get("P2", "[]")
                 state = sc.get("STATE", "0")
-                player_cards = parse_cards_from_json(p1_str)
-                dealer_cards = parse_cards_from_json(p2_str)
+                try:
+                    player_cards = json.loads(p1_str) if isinstance(p1_str, str) else p1_str
+                except:
+                    player_cards = []
+                try:
+                    dealer_cards = json.loads(p2_str) if isinstance(p2_str, str) else p2_str
+                except:
+                    dealer_cards = []
     
-    current_count = len(player_cards) + len(dealer_cards)
+    # 4. Преобразуем карты в читаемый формат
+    player_cards_parsed = []
+    for card in player_cards:
+        cs = card.get("CS", 0)
+        cv = card.get("CV", 0)
+        suit = SUITS_NAMES.get(cs, "?")
+        rank = RANKS.get(cv, "?")
+        player_cards_parsed.append({"rank": rank, "suit": suit})
     
-    print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
+    dealer_cards_parsed = []
+    for card in dealer_cards:
+        cs = card.get("CS", 0)
+        cv = card.get("CV", 0)
+        suit = SUITS_NAMES.get(cs, "?")
+        rank = RANKS.get(cv, "?")
+        dealer_cards_parsed.append({"rank": rank, "suit": suit})
+    
+    current_count = len(player_cards_parsed) + len(dealer_cards_parsed)
+    
+    print(f"🃏 Игра {game_id}: {len(player_cards_parsed)} карт игрока, {len(dealer_cards_parsed)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
+    
+    if player_cards_parsed:
+        print(f"   🃏 Игрок: {', '.join([c['rank']+c['suit'] for c in player_cards_parsed])}", flush=True)
+    if dealer_cards_parsed:
+        print(f"   🃏 Дилер: {', '.join([c['rank']+c['suit'] for c in dealer_cards_parsed])}", flush=True)
     
     # === СОХРАНЯЕМ ВСЕ ДАННЫЕ ===
     if current_count > 0 or state != "0":
-        # Формируем последовательность
         sequence = []
-        max_len = max(len(player_cards), len(dealer_cards))
+        max_len = max(len(player_cards_parsed), len(dealer_cards_parsed))
         for i in range(max_len):
-            if i < len(player_cards):
-                pc = player_cards[i]
+            if i < len(player_cards_parsed):
+                pc = player_cards_parsed[i]
                 sequence.append({"position": i*2+1, "who": "P", "rank": pc["rank"], "suit": pc["suit"]})
-            if i < len(dealer_cards):
-                dc = dealer_cards[i]
+            if i < len(dealer_cards_parsed):
+                dc = dealer_cards_parsed[i]
                 sequence.append({"position": i*2+2, "who": "D", "rank": dc["rank"], "suit": dc["suit"]})
         
-        player_score = calculate_score(player_cards)
-        dealer_score = calculate_score(dealer_cards)
+        player_score = calculate_score(player_cards_parsed)
+        dealer_score = calculate_score(dealer_cards_parsed)
         
-        # Собираем все масти и ранги
-        player_suits = [c["suit"] for c in player_cards]
-        player_ranks = [c["rank"] for c in player_cards]
-        dealer_suits = [c["suit"] for c in dealer_cards]
-        dealer_ranks = [c["rank"] for c in dealer_cards]
+        player_suits = [c["suit"] for c in player_cards_parsed]
+        player_ranks = [c["rank"] for c in player_cards_parsed]
+        dealer_suits = [c["suit"] for c in dealer_cards_parsed]
+        dealer_ranks = [c["rank"] for c in dealer_cards_parsed]
         all_suits = player_suits + dealer_suits
         all_ranks = player_ranks + dealer_ranks
         
@@ -258,8 +298,8 @@ def analyze_game(game_id, data, latency, start_time, end_time):
             "state": state,
             "player_score": player_score,
             "dealer_score": dealer_score,
-            "player_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in player_cards],
-            "dealer_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in dealer_cards],
+            "player_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in player_cards_parsed],
+            "dealer_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in dealer_cards_parsed],
             "player_suits": player_suits,
             "player_ranks": player_ranks,
             "dealer_suits": dealer_suits,
@@ -270,10 +310,8 @@ def analyze_game(game_id, data, latency, start_time, end_time):
             "total_cards": current_count
         }
         
-        seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence])
+        seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence]) if sequence else "нет карт"
         print(f"   Последовательность: {seq_str}", flush=True)
-        print(f"   Масти игрока: {', '.join(player_suits) if player_suits else 'нет'}", flush=True)
-        print(f"   Ранги игрока: {', '.join(player_ranks) if player_ranks else 'нет'}", flush=True)
         save_data(record)
     
     if state in ["4", "5"]:
