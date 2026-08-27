@@ -11,7 +11,7 @@ import pytz
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 АНАЛИЗАТОР ОБЫЧНОЙ 21 (TWENTYONE GAME)", flush=True)
+print("🃏 АНАЛИЗАТОР ОБЫЧНОЙ 21 (ПОЛНАЯ ВЕРСИЯ)", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -36,9 +36,9 @@ print("✅ BOT_TOKEN задан!", flush=True)
 # =====================================================================
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-10691.pro"
-DATA_FILE = "twentyone_data.json"
+DATA_FILE = "twentyone_data_full.json"
 MAX_RECORDS = 20000
-CHECK_INTERVAL = 3
+CHECK_INTERVAL = 5  # Проверяем каждые 5 секунд
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -51,8 +51,10 @@ SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
 
 finished_games = set()
-last_card_data = {}
 
+# =====================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛОМ
+# =====================================================================
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -80,6 +82,9 @@ def save_data(record):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+# =====================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С API
+# =====================================================================
 def get_active_games():
     try:
         url = f"{BASE_URL}/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=190&gr=415&grMode=4&lng=ru&ref=7&selectedMs=10.146.1643503"
@@ -100,6 +105,7 @@ def get_active_games():
                     active_games.append(game)
             return active_games
         else:
+            print(f"⚠️ Статус API: {response.status_code}", flush=True)
             return []
     except Exception as e:
         print(f"❌ Ошибка: {e}", flush=True)
@@ -115,6 +121,7 @@ def get_game_data(game_id):
         if response.status_code == 200:
             return response.json(), latency, start_time, end_time
         else:
+            print(f"⚠️ Статус игры {game_id}: {response.status_code}", flush=True)
             return None, None, None, None
     except Exception as e:
         print(f"❌ Ошибка игры {game_id}: {e}", flush=True)
@@ -137,11 +144,37 @@ def parse_cards_from_json(cards_str):
     except:
         return []
 
+def calculate_score(cards):
+    """Подсчет очков - туз всегда 11"""
+    score = 0
+    for card in cards:
+        cv = 0
+        rank = card.get("rank", "")
+        if rank == "A":
+            cv = 14
+        elif rank == "K":
+            cv = 13
+        elif rank == "Q":
+            cv = 12
+        elif rank == "J":
+            cv = 11
+        elif rank.isdigit():
+            cv = int(rank)
+        if cv == 14:
+            score += 11
+        elif cv == 13:
+            score += 4
+        elif cv == 12:
+            score += 3
+        elif cv == 11:
+            score += 2
+        elif 6 <= cv <= 10:
+            score += cv
+    return score
+
 def analyze_game(game_id, data, latency, start_time, end_time):
-    global last_card_data
-    
     if data is None:
-        print(f"⚠️ Данные для игры {game_id} пустые (None)", flush=True)
+        print(f"⚠️ Данные для игры {game_id} пустые", flush=True)
         return
     
     timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ) if start_time else datetime.now(MOSCOW_TZ)
@@ -192,11 +225,11 @@ def analyze_game(game_id, data, latency, start_time, end_time):
     
     current_count = len(player_cards) + len(dealer_cards)
     
-    # Показываем state всегда
     print(f"🃏 Игра {game_id}: {len(player_cards)} карт игрока, {len(dealer_cards)} карт дилера, задержка={latency:.2f}мс, state={state}", flush=True)
     
-    # === СОХРАНЯЕМ ЕСЛИ ЕСТЬ КАРТЫ ИЛИ STATE НЕ 0 ===
-    if current_count > 0:
+    # === СОХРАНЯЕМ ВСЕ ДАННЫЕ ===
+    if current_count > 0 or state != "0":
+        # Формируем последовательность
         sequence = []
         max_len = max(len(player_cards), len(dealer_cards))
         for i in range(max_len):
@@ -207,34 +240,16 @@ def analyze_game(game_id, data, latency, start_time, end_time):
                 dc = dealer_cards[i]
                 sequence.append({"position": i*2+2, "who": "D", "rank": dc["rank"], "suit": dc["suit"]})
         
-        def calc_score(cards):
-            score = 0
-            for card in cards:
-                cv = 0
-                if card["rank"] == "A":
-                    cv = 14
-                elif card["rank"] == "K":
-                    cv = 13
-                elif card["rank"] == "Q":
-                    cv = 12
-                elif card["rank"] == "J":
-                    cv = 11
-                elif card["rank"].isdigit():
-                    cv = int(card["rank"])
-                if cv == 14:
-                    score += 11
-                elif cv == 13:
-                    score += 4
-                elif cv == 12:
-                    score += 3
-                elif cv == 11:
-                    score += 2
-                elif 6 <= cv <= 10:
-                    score += cv
-            return score
+        player_score = calculate_score(player_cards)
+        dealer_score = calculate_score(dealer_cards)
         
-        player_score = calc_score(player_cards)
-        dealer_score = calc_score(dealer_cards)
+        # Собираем все масти и ранги
+        player_suits = [c["suit"] for c in player_cards]
+        player_ranks = [c["rank"] for c in player_cards]
+        dealer_suits = [c["suit"] for c in dealer_cards]
+        dealer_ranks = [c["rank"] for c in dealer_cards]
+        all_suits = player_suits + dealer_suits
+        all_ranks = player_ranks + dealer_ranks
         
         record = {
             "game_id": game_id,
@@ -245,32 +260,29 @@ def analyze_game(game_id, data, latency, start_time, end_time):
             "dealer_score": dealer_score,
             "player_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in player_cards],
             "dealer_cards": [{"rank": c["rank"], "suit": c["suit"]} for c in dealer_cards],
-            "sequence": sequence
+            "player_suits": player_suits,
+            "player_ranks": player_ranks,
+            "dealer_suits": dealer_suits,
+            "dealer_ranks": dealer_ranks,
+            "all_suits": all_suits,
+            "all_ranks": all_ranks,
+            "sequence": sequence,
+            "total_cards": current_count
         }
         
         seq_str = ', '.join([f"{c['who']}{c['position']}:{c['rank']}{c['suit']}" for c in sequence])
         print(f"   Последовательность: {seq_str}", flush=True)
-        save_data(record)
-    elif state != "0":
-        # Если state не 0, но карт нет — сохраняем state
-        print(f"   ⚠️ State={state}, но карт нет, сохраняем состояние", flush=True)
-        record = {
-            "game_id": game_id,
-            "timestamp_msk": timestamp_msk_str,
-            "latency_ms": round(latency, 2),
-            "state": state,
-            "player_score": 0,
-            "dealer_score": 0,
-            "player_cards": [],
-            "dealer_cards": [],
-            "sequence": []
-        }
+        print(f"   Масти игрока: {', '.join(player_suits) if player_suits else 'нет'}", flush=True)
+        print(f"   Ранги игрока: {', '.join(player_ranks) if player_ranks else 'нет'}", flush=True)
         save_data(record)
     
     if state in ["4", "5"]:
         finished_games.add(str(game_id))
         print(f"🏁 Игра {game_id} завершена (state={state})", flush=True)
 
+# =====================================================================
+# ОСНОВНОЙ ЦИКЛ
+# =====================================================================
 def main():
     print("🔄 АНАЛИЗАТОР ОБЫЧНОЙ 21 ЗАПУЩЕН", flush=True)
     print(f"📁 Данные сохраняются в {DATA_FILE}", flush=True)
