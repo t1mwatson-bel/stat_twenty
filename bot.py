@@ -8,7 +8,7 @@ import os
 
 REQUIRED_PACKAGES = [
     'numpy',
-    'catboost',
+    'lightgbm',
     'scikit-learn',
     'requests',
     'pytz'
@@ -70,25 +70,26 @@ from datetime import datetime, timedelta
 import pytz
 from collections import deque, defaultdict
 import warnings
+import gc
 warnings.filterwarnings('ignore')
 
 # =====================================================================
-# ML-БИБЛИОТЕКА
+# ML-БИБЛИОТЕКА (LightGBM — экономит память)
 # =====================================================================
 ML_AVAILABLE = False
 ML_LIB = None
 
 try:
-    from catboost import CatBoostClassifier
+    import lightgbm as lgb
     ML_AVAILABLE = True
-    ML_LIB = "catboost"
-    print("✅ CatBoost загружен!", flush=True)
+    ML_LIB = "lightgbm"
+    print("✅ LightGBM загружен!", flush=True)
 except ImportError:
     try:
-        from xgboost import XGBClassifier
+        from catboost import CatBoostClassifier
         ML_AVAILABLE = True
-        ML_LIB = "xgboost"
-        print("✅ XGBoost загружен!", flush=True)
+        ML_LIB = "catboost"
+        print("✅ CatBoost загружен!", flush=True)
     except ImportError:
         print("⚠️ ML-библиотеки не установлены. Работаем без ML.", flush=True)
 
@@ -114,7 +115,7 @@ if not BOT_TOKEN or not CHANNEL_STATS or not CHANNEL_PROGNOZ:
     sys.exit(1)
 
 # =====================================================================
-# НАСТРОЙКИ
+# НАСТРОЙКИ (ОПТИМИЗИРОВАНЫ)
 # =====================================================================
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-36553.pro"
@@ -126,13 +127,13 @@ ML_MODEL_FILE = "cards_model.pkl"
 OFFSET_FILE = "cards_offset.txt"
 GAME_HISTORY_FILE = "cards_game_history.json"
 
-# Настройки
+# Настройки (уменьшены для экономии памяти)
 MAX_RECORDS = 10000
 CHECK_INTERVAL = 3
 OFFSET = 10
-MIN_TRAIN_SAMPLES = 500
-MAX_HISTORY = 3000
-MAX_GAME_HISTORY = 20
+MIN_TRAIN_SAMPLES = 300
+MAX_HISTORY = 2000
+MAX_GAME_HISTORY = 10
 DOGON_GAMES = 3
 
 # 16 карт для прогноза (J, Q, K, A)
@@ -694,14 +695,16 @@ def train_ml_model():
     X = np.array(X)
     y = np.array(y)
     
-    if ML_LIB == "catboost":
-        model = CatBoostClassifier(
-            iterations=200,
-            depth=6,
-            learning_rate=0.08,
-            random_seed=42,
-            verbose=False,
-            loss_function='MultiClass'
+    if ML_LIB == "lightgbm":
+        model = lgb.LGBMClassifier(
+            n_estimators=100,
+            max_depth=5,
+            learning_rate=0.1,
+            num_leaves=25,
+            min_child_samples=20,
+            random_state=42,
+            n_jobs=1,
+            verbosity=-1
         )
     else:
         return False
@@ -933,7 +936,6 @@ def send_stats_report():
   Догон 2: {stats['by_dogon'].get(2, 0)}
   Догон 3: {stats['by_dogon'].get(3, 0)}"""
 
-    # Топ-5 карт (вынесено отдельно)
     msg += "\n\nТоп-5 карт:\n"
     if stats["card_hits"]:
         sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
@@ -1213,6 +1215,8 @@ def main():
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES and not ml_initialized:
                     train_ml_model()
+                    # Очищаем память после обучения
+                    gc.collect()
                 last_train_time = current_time
             
             if current_time - last_stats_time > 3600:
