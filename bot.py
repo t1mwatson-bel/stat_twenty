@@ -8,7 +8,7 @@ import os
 
 REQUIRED_PACKAGES = [
     'numpy',
-    'lightgbm',
+    'catboost',
     'scikit-learn',
     'requests',
     'pytz'
@@ -74,24 +74,18 @@ import gc
 warnings.filterwarnings('ignore')
 
 # =====================================================================
-# ML-БИБЛИОТЕКА (LightGBM — экономит память)
+# ML-БИБЛИОТЕКА (CatBoost — НЕ ТРЕБУЕТ libomp!)
 # =====================================================================
 ML_AVAILABLE = False
 ML_LIB = None
 
 try:
-    import lightgbm as lgb
+    from catboost import CatBoostClassifier
     ML_AVAILABLE = True
-    ML_LIB = "lightgbm"
-    print("✅ LightGBM загружен!", flush=True)
+    ML_LIB = "catboost"
+    print("✅ CatBoost загружен!", flush=True)
 except ImportError:
-    try:
-        from catboost import CatBoostClassifier
-        ML_AVAILABLE = True
-        ML_LIB = "catboost"
-        print("✅ CatBoost загружен!", flush=True)
-    except ImportError:
-        print("⚠️ ML-библиотеки не установлены. Работаем без ML.", flush=True)
+    print("⚠️ CatBoost не установлен. Работаем без ML.", flush=True)
 
 # =====================================================================
 # ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
@@ -120,14 +114,12 @@ if not BOT_TOKEN or not CHANNEL_STATS or not CHANNEL_PROGNOZ:
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-36553.pro"
 
-# Файлы
 DATA_FILE = "cards_data.json"
 HISTORY_FILE = "cards_history.json"
 ML_MODEL_FILE = "cards_model.pkl"
 OFFSET_FILE = "cards_offset.txt"
 GAME_HISTORY_FILE = "cards_game_history.json"
 
-# Настройки (уменьшены для экономии памяти)
 MAX_RECORDS = 10000
 CHECK_INTERVAL = 3
 OFFSET = 10
@@ -136,7 +128,6 @@ MAX_HISTORY = 2000
 MAX_GAME_HISTORY = 10
 DOGON_GAMES = 3
 
-# 16 карт для прогноза (J, Q, K, A)
 TARGET_CARDS = [
     "J♠️", "J♣️", "J♦️", "J♥️",
     "Q♠️", "Q♣️", "Q♦️", "Q♥️",
@@ -695,16 +686,18 @@ def train_ml_model():
     X = np.array(X)
     y = np.array(y)
     
-    if ML_LIB == "lightgbm":
-        model = lgb.LGBMClassifier(
-            n_estimators=100,
-            max_depth=5,
+    if ML_LIB == "catboost":
+        model = CatBoostClassifier(
+            iterations=80,
+            depth=5,
             learning_rate=0.1,
-            num_leaves=25,
-            min_child_samples=20,
-            random_state=42,
-            n_jobs=1,
-            verbosity=-1
+            random_seed=42,
+            verbose=False,
+            loss_function='MultiClass',
+            early_stopping_rounds=20,
+            l2_leaf_reg=3,
+            subsample=0.8,
+            thread_count=1
         )
     else:
         return False
@@ -1215,7 +1208,6 @@ def main():
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES and not ml_initialized:
                     train_ml_model()
-                    # Очищаем память после обучения
                     gc.collect()
                 last_train_time = current_time
             
