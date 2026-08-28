@@ -931,7 +931,7 @@ def send_stats_report():
   Догон 0: {stats['by_dogon'].get(0, 0)}
   Догон 1: {stats['by_dogon'].get(1, 0)}
   Догон 2: {stats['by_dogon'].get(2, 0)}
-  Догон 3: {stats['by_dogon'].get(3, 0})"""
+  Догон 3: {stats['by_dogon'].get(3, 0)}"""
 
     # Топ-5 карт (вынесено отдельно)
     msg += "\n\nТоп-5 карт:\n"
