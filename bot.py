@@ -926,11 +926,13 @@ def send_stats_report():
   Догон 2: {stats['by_dogon'].get(2, 0)}
   Догон 3: {stats['by_dogon'].get(3, 0)}
 
-Топ-5 карт:
-"""
-    sorted_cards = sorted(stats["card_hits"].items(), key=lambda x: x[1], reverse=True)[:5]
+msg += "\nТоп-5 карт:\n"
+if stats["card_hits"]:
+    sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
     for card, count in sorted_cards:
         msg += f"  {card}: {count}\n"
+else:
+    msg += "  (пока нет данных)\n"
     
     if ml_initialized:
         msg += "\n🤖 ML: АКТИВНА"
