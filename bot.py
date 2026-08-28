@@ -109,7 +109,7 @@ if not BOT_TOKEN or not CHANNEL_STATS or not CHANNEL_PROGNOZ:
     sys.exit(1)
 
 # =====================================================================
-# НАСТРОЙКИ (ОПТИМИЗИРОВАНЫ)
+# НАСТРОЙКИ
 # =====================================================================
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 BASE_URL = "https://1xlite-36553.pro"
@@ -708,7 +708,6 @@ def train_ml_model():
             loss_function='MultiClass',
             early_stopping_rounds=20,
             l2_leaf_reg=3,
-            subsample=0.8,
             thread_count=1
         )
     else:
@@ -957,7 +956,7 @@ def send_stats_report():
     send_message(CHANNEL_STATS, msg)
 
 # =====================================================================
-# СБОР ДАННЫХ
+# СБОР ДАННЫХ (С SEQUENCE!)
 # =====================================================================
 def collect_game_data():
     global collection_active, finished_games
@@ -995,6 +994,23 @@ def collect_game_data():
             def format_card(c):
                 return {"rank": RANKS.get(c.get("CV", 0), "?"), "suit": SUITS_NAMES.get(c.get("CS", 0), "?")}
             
+            # =========================================================
+            # ФОРМИРУЕМ SEQUENCE (КАК В КЛАССИКЕ)
+            # =========================================================
+            sequence = []
+            max_len = max(len(player_cards), len(dealer_cards))
+            for i in range(max_len):
+                if i < len(player_cards):
+                    pc = player_cards[i]
+                    rank = RANKS.get(pc.get("CV", 0), "?")
+                    suit = SUITS_NAMES.get(pc.get("CS", 0), "?")
+                    sequence.append({"position": i*2+1, "who": "P", "rank": rank, "suit": suit})
+                if i < len(dealer_cards):
+                    dc = dealer_cards[i]
+                    rank = RANKS.get(dc.get("CV", 0), "?")
+                    suit = SUITS_NAMES.get(dc.get("CS", 0), "?")
+                    sequence.append({"position": i*2+2, "who": "D", "rank": rank, "suit": suit})
+            
             record = {
                 "game_id": game_id,
                 "timestamp_msk": timestamp_msk_str,
@@ -1002,6 +1018,7 @@ def collect_game_data():
                 "state": state,
                 "player_cards": [format_card(c) for c in player_cards],
                 "dealer_cards": [format_card(c) for c in dealer_cards],
+                "sequence": sequence,  # ← ДОБАВЛЕНО!
             }
             
             data = save_data(record)
