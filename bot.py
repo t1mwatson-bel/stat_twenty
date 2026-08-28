@@ -372,12 +372,24 @@ def get_game_data(game_id):
         return None, None, None, None
 
 def parse_cards_and_state(data):
-    sc = data.get("Value", {}).get("SC", {})
+    if not data or not isinstance(data, dict):
+        return [], [], None
+    
+    sc = data.get("Value", {})
+    if not isinstance(sc, dict):
+        return [], [], None
+    
+    sc = sc.get("SC", {})
+    if not isinstance(sc, dict):
+        return [], [], None
+    
     player_cards = []
     dealer_cards = []
     state = None
     
     for item in sc.get("S", []):
+        if not isinstance(item, dict):
+            continue
         if item.get("Key") == "P1":
             try:
                 player_cards = json.loads(item.get("Value", "[]"))
@@ -969,10 +981,12 @@ def collect_game_data():
             continue
         
         game_data, latency, start_time, end_time = get_game_data(game_id)
-if not game_data or not isinstance(game_data, dict):
-    continue
-
-player_cards, dealer_cards, state = parse_cards_and_state(game_data)
+        
+        if not game_data or not isinstance(game_data, dict):
+            print(f"⚠️ Игра {game_id}: нет данных", flush=True)
+            continue
+        
+        player_cards, dealer_cards, state = parse_cards_and_state(game_data)
         
         if player_cards or dealer_cards:
             timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ) if start_time else datetime.now(MOSCOW_TZ)
