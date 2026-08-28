@@ -969,10 +969,10 @@ def collect_game_data():
             continue
         
         game_data, latency, start_time, end_time = get_game_data(game_id)
-        if not game_data:
-            continue
-        
-        player_cards, dealer_cards, state = parse_cards_and_state(game_data)
+if not game_data or not isinstance(game_data, dict):
+    continue
+
+player_cards, dealer_cards, state = parse_cards_and_state(game_data)
         
         if player_cards or dealer_cards:
             timestamp = datetime.fromtimestamp(start_time, MOSCOW_TZ) if start_time else datetime.now(MOSCOW_TZ)
