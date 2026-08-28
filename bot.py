@@ -130,10 +130,10 @@ GAME_HISTORY_FILE = "cards_game_history.json"
 MAX_RECORDS = 10000
 CHECK_INTERVAL = 3
 OFFSET = 10
-MIN_TRAIN_SAMPLES = 500  # Для 16 классов нужно больше данных
+MIN_TRAIN_SAMPLES = 500
 MAX_HISTORY = 3000
 MAX_GAME_HISTORY = 20
-DOGON_GAMES = 3  # 3 игры догона
+DOGON_GAMES = 3
 
 # 16 карт для прогноза (J, Q, K, A)
 TARGET_CARDS = [
@@ -156,7 +156,7 @@ RANK_VALUES = {'6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
 
 # =====================================================================
-# ТАБЛИЦА ЗАДЕРЖЕК (ТВОЯ)
+# ТАБЛИЦА ЗАДЕРЖЕК
 # =====================================================================
 LATENCY_CARDS = {
     (93, 95): ["Q♣️", "A♥️"],
@@ -542,7 +542,6 @@ def get_history_features():
             all_cards.extend(g.get("cards", []))
         
         if all_cards:
-            # Последняя карта в истории
             last_card = all_cards[-1] if all_cards else ""
             if last_card in TARGET_CARDS:
                 features["prev_card"] = TARGET_CARDS.index(last_card)
@@ -654,7 +653,6 @@ def train_ml_model():
     for game in data:
         all_cards = game.get("player_cards", []) + game.get("dealer_cards", [])
         
-        # Ищем целевую карту в игре (любая позиция, игрок или дилер)
         target_found = False
         for card in all_cards:
             rank = card.get("rank", "")
@@ -760,7 +758,6 @@ def predict_ml(features):
         feature_vector = np.array([feature_vector])
         probs = ml_model.predict_proba(feature_vector)[0]
         
-        # Топ-2 карты
         top_indices = np.argsort(probs)[-2:][::-1]
         top_cards = [(TARGET_CARDS[i], probs[i]) for i in top_indices]
         confidence = probs[top_indices[0]]
@@ -782,11 +779,9 @@ def get_cards_by_latency(latency):
 def get_prediction(latency, current_game_data):
     global game_history
     
-    # 1. Правила — по задержке (Топ-2)
     rules_cards = get_cards_by_latency(latency)
     rules_pred = rules_cards if rules_cards else None
     
-    # 2. ML-прогноз (если доступен)
     ml_cards = None
     ml_conf = None
     ml_features = None
@@ -797,7 +792,6 @@ def get_prediction(latency, current_game_data):
             ml_features = features
             ml_cards, ml_conf = predict_ml(features)
     
-    # 3. Гибридное решение
     if ml_cards and ml_conf and ml_conf > 0.7:
         return ml_cards, "ml", ml_conf, ml_features
     elif rules_pred:
@@ -809,7 +803,6 @@ def get_prediction(latency, current_game_data):
 # ПРОВЕРКА РЕЗУЛЬТАТОВ
 # =====================================================================
 def check_card_in_game(game_data, cards):
-    """Проверяет, есть ли одна из предсказанных карт в игре (игрок или дилер)"""
     if not game_data:
         return False, None
     
@@ -843,7 +836,6 @@ def check_results(history):
         
         data = load_data()
         
-        # Проверяем целевую игру и догоны
         for i in range(DOGON_GAMES + 1):
             check_game = target + i
             
@@ -907,32 +899,48 @@ def update_stats(dogon_number, result, method="rules"):
 
 def send_stats_report():
     now = datetime.now(MOSCOW_TZ)
+    
+    win_percent = 0
+    if stats['total'] > 0:
+        win_percent = stats['win'] / stats['total'] * 100
+    
+    rules_total = stats['rules_wins'] + stats['rules_losses']
+    rules_percent = 0
+    if rules_total > 0:
+        rules_percent = stats['rules_wins'] / rules_total * 100
+    
+    ml_total = stats['ml_wins'] + stats['ml_losses']
+    ml_percent = 0
+    if ml_total > 0:
+        ml_percent = stats['ml_wins'] / ml_total * 100
+    
     msg = f"""
 📊 СТАТИСТИКА (ТОЧНАЯ КАРТА — ТОП-2)
 ⏰ {now.strftime('%d.%m.%Y %H:%M:%S')}
 ══════════════════════════════════════════
 📊 Собрано игр: {stats['games_collected']}/{MAX_RECORDS}
 📈 Всего прогнозов: {stats['total']}
-✅ Зашло: {stats['win']} ({stats['win']/stats['total']*100:.1f}% если total>0 else '0'})
+✅ Зашло: {stats['win']} ({win_percent:.1f}%)
 ❌ Не зашло: {stats['lose']}
 
 По методам:
-  📌 Правила: {stats['rules_wins']}✅ / {stats['rules_losses']}❌
-  🤖 ML: {stats['ml_wins']}✅ / {stats['ml_losses']}❌
+  📌 Правила: {stats['rules_wins']}✅ / {stats['rules_losses']}❌ ({rules_percent:.1f}%)
+  🤖 ML: {stats['ml_wins']}✅ / {stats['ml_losses']}❌ ({ml_percent:.1f}%)
 
 По догонам ({DOGON_GAMES} игр):
   Догон 0: {stats['by_dogon'].get(0, 0)}
   Догон 1: {stats['by_dogon'].get(1, 0)}
   Догон 2: {stats['by_dogon'].get(2, 0)}
-  Догон 3: {stats['by_dogon'].get(3, 0)}
+  Догон 3: {stats['by_dogon'].get(3, 0})"""
 
-msg += "\nТоп-5 карт:\n"
-if stats["card_hits"]:
-    sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
-    for card, count in sorted_cards:
-        msg += f"  {card}: {count}\n"
-else:
-    msg += "  (пока нет данных)\n"
+    # Топ-5 карт (вынесено отдельно)
+    msg += "\n\nТоп-5 карт:\n"
+    if stats["card_hits"]:
+        sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
+        for card, count in sorted_cards:
+            msg += f"  {card}: {count}\n"
+    else:
+        msg += "  (пока нет данных)\n"
     
     if ml_initialized:
         msg += "\n🤖 ML: АКТИВНА"
@@ -1014,7 +1022,6 @@ def check_and_predict():
     
     print(f"🔥 До цели #{target_num} осталось {games_left} игр! Делаю прогноз...", flush=True)
     
-    # Получаем задержку
     latency = None
     active_games = get_active_games()
     for game in active_games:
@@ -1028,26 +1035,22 @@ def check_and_predict():
         print("⏳ Не удалось получить задержку", flush=True)
         return
     
-    # Получаем данные текущей игры
     current_game_data = None
     for msg in all_messages:
         if f"#N{current_num}" in msg:
             current_game_data = parse_game_from_text(msg)
             break
     
-    # Делаем прогноз
     predicted_cards, method, confidence, ml_features = get_prediction(latency, current_game_data)
     
     if not predicted_cards or len(predicted_cards) < 2:
         print(f"⏭️ Нет прогноза для #{target_num}", flush=True)
         return
     
-    # Обновляем историю
     if current_game_data:
         all_cards = current_game_data.get("player_cards", []) + current_game_data.get("dealer_cards", [])
         update_game_history(latency, all_cards, current_num)
     
-    # Формируем сообщение
     total_prob = 0
     msg = f"🔮 ТОЧНАЯ КАРТА (ТОП-2)\n\n"
     msg += f"🎯 Целевая игра: #N{target_num} (+{OFFSET})\n"
