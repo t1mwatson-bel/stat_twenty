@@ -1211,11 +1211,26 @@ def main():
     print(f"📈 Загружено истории: {len(game_history)} игр", flush=True)
     
     predictions = load_history()
+    
+    # ============================================================
+    # 🔥 ВОССТАНАВЛИВАЕМ ЗАГРУЗКУ МОДЕЛИ (было в оригинале)
+    # ============================================================
+    print("🔄 Загружаю ML модель...", flush=True)
     load_ml_model()
+    
+    if ml_initialized:
+        print(f"✅ Модель загружена успешно!", flush=True)
+    else:
+        print(f"⏳ Модель не загружена. Ждём накопления данных...", flush=True)
+        print(f"   Сейчас: {len(existing_data)} игр. Нужно: {MIN_TRAIN_SAMPLES}", flush=True)
+    
     stats["games_collected"] = len(existing_data)
     
     send_startup_message()
     
+    # ============================================================
+    # 🔥 ЗАГРУЖАЕМ ИСТОРИЮ СООБЩЕНИЙ (было в оригинале)
+    # ============================================================
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"chat_id": CHANNEL_STATS, "limit": 100}
