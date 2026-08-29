@@ -1010,12 +1010,38 @@ def check_and_predict():
                 current_game_data = parse_game_from_text(text)
                 break
         
+        if not current_game_data:
+            print(f"⏳ Нет данных о текущей игре #{current_num}", flush=True)
+            continue
+        
+        # Получаем прогноз
         predicted_cards, method, confidence = get_prediction(latency, current_game_data)
         
         if not predicted_cards or len(predicted_cards) < 2:
             print(f"⏭️ Нет прогноза от ML для #{target}", flush=True)
             continue
         
+        # ============================================================
+        # 🔥 НОВОЕ УСЛОВИЕ: Проверяем масти в текущей игре
+        # ============================================================
+        predicted_suit = predicted_cards[0][0][-1]  # Берём масть из первой прогнозируемой карты
+        current_cards = current_game_data.get("player_cards", []) + current_game_data.get("dealer_cards", [])
+        
+        # Проверяем первые 4 карты (2 у игрока + 2 у дилера) или все, если меньше
+        check_cards = current_cards[:4]
+        blocked = False
+        for card in check_cards:
+            if card.get("suit") == predicted_suit:
+                blocked = True
+                break
+        
+        if blocked:
+            print(f"⏭️ Масть {predicted_suit} уже была в текущей игре → пропускаю прогноз для #{target}", flush=True)
+            continue
+        
+        # ============================================================
+        # Если проверка пройдена → отправляем прогноз
+        # ============================================================
         if current_game_data:
             all_cards = current_game_data.get("player_cards", []) + current_game_data.get("dealer_cards", [])
             update_game_history(latency, all_cards, current_num)
