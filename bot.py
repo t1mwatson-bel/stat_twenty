@@ -121,7 +121,7 @@ OFFSET_FILE = "cards_offset.txt"
 GAME_HISTORY_FILE = "cards_game_history.json"
 
 MAX_RECORDS = 10000
-CHECK_INTERVAL = 3
+CHECK_INTERVAL = 5
 OFFSET = 10
 MIN_TRAIN_SAMPLES = 300
 MAX_HISTORY = 2000
@@ -148,7 +148,7 @@ RANK_VALUES = {'6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
 
 # =====================================================================
-# ТАБЛИЦА ЗАДЕРЖЕК
+# ТАБЛИЦА ЗАДЕРЖЕК (ДЛЯ ПРАВИЛ)
 # =====================================================================
 LATENCY_CARDS = {
     (93, 95): ["Q♣️", "A♥️"],
@@ -994,9 +994,7 @@ def collect_game_data():
             def format_card(c):
                 return {"rank": RANKS.get(c.get("CV", 0), "?"), "suit": SUITS_NAMES.get(c.get("CS", 0), "?")}
             
-            # =========================================================
-            # ФОРМИРУЕМ SEQUENCE (КАК В КЛАССИКЕ)
-            # =========================================================
+            # Формируем sequence
             sequence = []
             max_len = max(len(player_cards), len(dealer_cards))
             for i in range(max_len):
@@ -1018,7 +1016,7 @@ def collect_game_data():
                 "state": state,
                 "player_cards": [format_card(c) for c in player_cards],
                 "dealer_cards": [format_card(c) for c in dealer_cards],
-                "sequence": sequence,  # ← ДОБАВЛЕНО!
+                "sequence": sequence,
             }
             
             data = save_data(record)
@@ -1043,11 +1041,16 @@ def check_and_predict():
     target_num = get_target_game()
     games_left = target_num - current_num
     
+    # Диагностика
+    print(f"🔍 ДИАГНОСТИКА: current={current_num}, target={target_num}, left={games_left}", flush=True)
+    
+    # Прогноз когда до цели осталось 1-2 игры
     if games_left != 2 and games_left != 1:
         return
     
     print(f"🔥 До цели #{target_num} осталось {games_left} игр! Делаю прогноз...", flush=True)
     
+    # Получаем задержку
     latency = None
     active_games = get_active_games()
     for game in active_games:
@@ -1061,6 +1064,7 @@ def check_and_predict():
         print("⏳ Не удалось получить задержку", flush=True)
         return
     
+    # Получаем данные текущей игры
     current_game_data = None
     for msg in all_messages:
         if f"#N{current_num}" in msg:
@@ -1161,6 +1165,7 @@ def main():
     
     send_startup_message()
     
+    # Загружаем последние сообщения из канала
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"chat_id": CHANNEL_STATS, "limit": 100}
@@ -1188,8 +1193,10 @@ def main():
         try:
             current_time = time.time()
             
+            # Сбор данных
             collect_game_data()
             
+            # Обработка сообщений из Telegram
             updates = get_updates(offset)
             for update in updates.get("result", []):
                 offset = update["update_id"] + 1
@@ -1219,6 +1226,7 @@ def main():
                     game_number = int(game_id_match.group(1))
                     print(f"📥 Получена игра #{game_number}", flush=True)
                     
+                    # Проверяем завершённые прогнозы
                     history = load_history()
                     for entry in history:
                         if entry.get("status") == "pending":
@@ -1226,15 +1234,18 @@ def main():
                             if target == game_number:
                                 check_results(history)
             
+            # Прогноз по времени
             if current_time - last_check_time >= CHECK_INTERVAL:
                 check_and_predict()
                 last_check_time = current_time
             
+            # Проверка результатов
             history = load_history()
             for entry in history:
                 if entry.get("status") == "pending":
                     check_results(history)
             
+            # Обучение ML
             if current_time - last_train_time > 300:
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES and not ml_initialized:
@@ -1242,10 +1253,12 @@ def main():
                     gc.collect()
                 last_train_time = current_time
             
+            # Статистика
             if current_time - last_stats_time > 3600:
                 send_stats_report()
                 last_stats_time = current_time
             
+            # Очистка
             if len(processed_games) > 500:
                 processed_games.clear()
             
