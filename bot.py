@@ -821,7 +821,8 @@ def check_card_in_game(game_data, cards):
     return False, None
 
 def check_results():
-    global predictions, stats
+    """Проверяет результаты прогнозов через all_messages (как в гибриде)"""
+    global predictions, stats, all_messages
     
     for entry in predictions:
         if entry.get("status") != "pending":
@@ -836,21 +837,32 @@ def check_results():
         if not cards or not message_id:
             continue
         
-        data = load_data()
+        max_games_to_check = DOGON_GAMES
         
-        for i in range(DOGON_GAMES + 1):
-            check_game = target + i
+        for i in range(max_games_to_check):
+            game_to_check = target + i
             
-            found = False
-            found_card = None
-            
-            for game in data:
-                if game.get("game_id") == str(check_game):
-                    found, found_card = check_card_in_game(game, cards)
+            # Ищем завершённую игру в all_messages
+            game_msg = None
+            for msg in all_messages:
+                if f"#N{game_to_check}" in msg and ('✅' in msg or '🔰' in msg):
+                    game_msg = msg
                     break
             
+            if not game_msg:
+                print(f"⏳ Ждём завершённую игру #N{game_to_check} для проверки карт {', '.join(cards)}", flush=True)
+                continue
+            
+            # Парсим карты из сообщения
+            game_data = parse_game_from_text(game_msg)
+            if not game_data:
+                continue
+            
+            # Проверяем наличие карты у игрока
+            found, found_card = check_card_in_game(game_data, cards)
+            
             if found:
-                print(f"🎯 КАРТА НАЙДЕНА! {found_card} в игре #{check_game} (догон {i})", flush=True)
+                print(f"🎯 КАРТА НАЙДЕНА! {found_card} в игре #{game_to_check} (догон {i})", flush=True)
                 
                 # Обновляем статистику
                 stats["total"] += 1
@@ -862,18 +874,36 @@ def check_results():
                     stats["rules_wins"] += 1
                 stats["card_hits"][found_card] += 1
                 
+                # Редактируем сообщение
                 if i == 0:
-                    result_text = f"\n\n✅ ЗАШЛО в целевой игре: #{check_game}\n   Выпала: {found_card}"
+                    result_text = f"\n\n✅ ЗАШЛО в целевой игре: #{game_to_check}\n   Выпала: {found_card}"
                 else:
-                    result_text = f"\n\n✅ ЗАШЛО на догоне {i}: #{check_game}\n   Выпала: {found_card}"
+                    result_text = f"\n\n✅ ЗАШЛО на догоне {i}: #{game_to_check}\n   Выпала: {found_card}"
                 
                 if message_id:
                     edit_message(message_id, original_text + result_text)
                 entry["status"] = "win"
-                entry["result_game"] = check_game
+                entry["result_game"] = game_to_check
                 entry["dogon"] = i
                 entry["found_card"] = found_card
                 save_history(predictions)
+                return
+        
+        # Если не зашло за все догоны
+        print(f"❌ Карты {', '.join(cards)} НЕ НАЙДЕНЫ за {DOGON_GAMES} игр", flush=True)
+        
+        stats["total"] += 1
+        stats["lose"] += 1
+        if method == "ml":
+            stats["ml_losses"] += 1
+        else:
+            stats["rules_losses"] += 1
+        
+        result_text = f"\n\n❌ НЕ ЗАШЛО (проверено {DOGON_GAMES} игр)"
+        if message_id:
+            edit_message(message_id, original_text + result_text)
+        entry["status"] = "lose"
+        save_history(predictions)
                 return
         
         # Если не зашло
