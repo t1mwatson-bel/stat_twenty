@@ -1,63 +1,3 @@
-# =====================================================================
-# АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ
-# =====================================================================
-import subprocess
-import sys
-import importlib
-import os
-
-REQUIRED_PACKAGES = [
-    'numpy',
-    'catboost',
-    'scikit-learn',
-    'requests',
-    'pytz'
-]
-
-def install_package(package):
-    print(f"📦 Устанавливаю: {package}...", flush=True)
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
-        print(f"✅ {package} установлен!", flush=True)
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка установки {package}: {e}", flush=True)
-        return False
-
-def check_and_install_dependencies():
-    print("=" * 60, flush=True)
-    print("🔍 ПРОВЕРКА ЗАВИСИМОСТЕЙ...", flush=True)
-    print("=" * 60, flush=True)
-    
-    missing = []
-    for package in REQUIRED_PACKAGES:
-        try:
-            importlib.import_module(package.replace('-', '_'))
-            print(f"✅ {package} - уже установлен", flush=True)
-        except ImportError:
-            print(f"⚠️ {package} - НЕ НАЙДЕН", flush=True)
-            missing.append(package)
-    
-    if missing:
-        print(f"\n📦 Нужно установить: {', '.join(missing)}", flush=True)
-        for package in missing:
-            if not install_package(package):
-                print(f"❌ Не удалось установить {package}", flush=True)
-                return False
-        print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
-    else:
-        print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
-    
-    print("=" * 60, flush=True)
-    return True
-
-if not check_and_install_dependencies():
-    print("❌ ОШИБКА: Невозможно продолжить работу", flush=True)
-    sys.exit(1)
-
-# =====================================================================
-# ИМПОРТЫ
-# =====================================================================
 import os
 import sys
 import requests
@@ -72,6 +12,65 @@ from collections import deque, defaultdict
 import warnings
 import gc
 warnings.filterwarnings('ignore')
+
+# =====================================================================
+# АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ
+# =====================================================================
+try:
+    import subprocess
+    import importlib
+
+    REQUIRED_PACKAGES = [
+        'numpy',
+        'catboost',
+        'scikit-learn',
+        'requests',
+        'pytz'
+    ]
+
+    def install_package(package):
+        print(f"📦 Устанавливаю: {package}...", flush=True)
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+            print(f"✅ {package} установлен!", flush=True)
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка установки {package}: {e}", flush=True)
+            return False
+
+    def check_and_install_dependencies():
+        print("=" * 60, flush=True)
+        print("🔍 ПРОВЕРКА ЗАВИСИМОСТЕЙ...", flush=True)
+        print("=" * 60, flush=True)
+        
+        missing = []
+        for package in REQUIRED_PACKAGES:
+            try:
+                importlib.import_module(package.replace('-', '_'))
+                print(f"✅ {package} - уже установлен", flush=True)
+            except ImportError:
+                print(f"⚠️ {package} - НЕ НАЙДЕН", flush=True)
+                missing.append(package)
+        
+        if missing:
+            print(f"\n📦 Нужно установить: {', '.join(missing)}", flush=True)
+            for package in missing:
+                if not install_package(package):
+                    print(f"❌ Не удалось установить {package}", flush=True)
+                    return False
+            print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
+        else:
+            print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
+        
+        print("=" * 60, flush=True)
+        return True
+
+    if not check_and_install_dependencies():
+        print("❌ ОШИБКА: Невозможно продолжить работу", flush=True)
+        sys.exit(1)
+
+except Exception as e:
+    print(f"⚠️ Ошибка при проверке зависимостей: {e}", flush=True)
 
 # =====================================================================
 # ML-БИБЛИОТЕКА
@@ -794,7 +793,7 @@ def get_prediction(latency, current_game_data):
         return None, None, None, ml_features
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ (ПРАВИЛЬНАЯ)
+# НОРМАЛЬНАЯ ПРОВЕРКА РЕЗУЛЬТАТА
 # =====================================================================
 def check_results():
     global predictions, stats, all_messages
@@ -812,8 +811,23 @@ def check_results():
         if not predicted_cards or not message_id:
             continue
 
-        any_game_found = False
+        # Сначала проверяем, есть ли ХОТЯ БЫ ОДНА завершённая игра из догона
+        found_any_game = False
+        for i in range(DOGON_GAMES):
+            game_to_check = target + i
+            for msg in all_messages:
+                if f"#N{game_to_check}" in msg and ('✅' in msg or '🔰' in msg):
+                    found_any_game = True
+                    break
+            if found_any_game:
+                break
 
+        # Если нет ни одной завершённой игры — ждём
+        if not found_any_game:
+            print(f"⏳ Ждём завершения игр #{target}-#{target + DOGON_GAMES - 1}...", flush=True)
+            continue
+
+        # Теперь проверяем каждую игру по порядку
         for i in range(DOGON_GAMES):
             game_to_check = target + i
 
@@ -825,8 +839,6 @@ def check_results():
 
             if not game_msg:
                 continue
-
-            any_game_found = True
 
             game_data = parse_game_from_text(game_msg)
             if not game_data:
@@ -872,10 +884,7 @@ def check_results():
                 save_history(predictions)
                 return
 
-        if not any_game_found:
-            print(f"⏳ Ни одна из игр #{target}-#{target + DOGON_GAMES - 1} ещё не завершена, ждём...", flush=True)
-            continue
-
+        # Если дошли до сюда — значит игры были, но карты не нашли
         print(f"❌ Карты {', '.join(predicted_cards)} НЕ НАЙДЕНЫ за {DOGON_GAMES} игр", flush=True)
 
         stats["total"] += 1
