@@ -619,7 +619,7 @@ def extract_features_from_game(game_data, latency, game_num):
     return features
 
 # =====================================================================
-# ОБУЧЕНИЕ МОДЕЛИ
+# 🔥 НОВАЯ ФУНКЦИЯ ОБУЧЕНИЯ (УЧИТСЯ НА ВСЕХ ИГРАХ)
 # =====================================================================
 def train_ml_model():
     global ml_model, ml_initialized
@@ -684,7 +684,7 @@ def train_ml_model():
             early_stopping_rounds=30,
             l2_leaf_reg=5,
             thread_count=1,
-            class_weights='Balanced'  # ⚠️ ЭТО ВЫЗЫВАЕТ ОШИБКУ!
+            class_weights='Balanced'
         )
     else:
         return False
@@ -775,7 +775,7 @@ def get_prediction(latency, current_game_data):
         return None, None, None
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ
+# 🔥 НОВАЯ ФУНКЦИЯ ПРОВЕРКИ РЕЗУЛЬТАТОВ (УЧИТСЯ НА ОШИБКАХ)
 # =====================================================================
 def check_results():
     global predictions, stats, all_messages, ml_model
@@ -832,6 +832,9 @@ def check_results():
                     found_card = card_str
                     break
 
+            # ===========================================
+            # СЛУЧАЙ 1: ПРОГНОЗ ЗАШЁЛ
+            # ===========================================
             if found:
                 print(f"🎯 КАРТА НАЙДЕНА! {found_card} в игре #{game_to_check} (догон {i})", flush=True)
 
@@ -855,6 +858,9 @@ def check_results():
                 save_history(predictions)
                 return
 
+            # ===========================================
+            # СЛУЧАЙ 2: ПРОГНОЗ НЕ ЗАШЁЛ → УЧИМСЯ
+            # ===========================================
             if i == max_games_to_check - 1 and not found:
                 print(f"❌ Карты {', '.join(predicted_cards)} НЕ НАЙДЕНЫ за {max_games_to_check} игр", flush=True)
 
@@ -870,6 +876,7 @@ def check_results():
                     stats["lose"] += 1
                     stats["ml_losses"] += 1
 
+                    # 🔥 ДООБУЧАЕМ МОДЕЛЬ НА ЭТОЙ ОШИБКЕ
                     try:
                         features = extract_features_from_game(game_data, game_data.get("latency_ms", 0), target)
                         if features and ml_initialized:
@@ -1258,7 +1265,7 @@ def main():
             
             check_results()
             
-            # Переобучение каждые 3 минуты
+            # 🔥 ПЕРЕОБУЧЕНИЕ КАЖДЫЕ 3 МИНУТЫ
             if current_time - last_train_time > 180:
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES:
