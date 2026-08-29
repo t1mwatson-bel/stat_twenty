@@ -673,6 +673,7 @@ def train_ml_model():
     X = np.array(X)
     y = np.array(y)
     
+    # 🔥 ИСПРАВЛЕННЫЙ CatBoost (без class_weights)
     if ML_LIB == "catboost":
         model = CatBoostClassifier(
             iterations=200,
@@ -683,8 +684,7 @@ def train_ml_model():
             loss_function='MultiClass',
             early_stopping_rounds=30,
             l2_leaf_reg=5,
-            thread_count=1,
-            class_weights='Balanced'
+            thread_count=1
         )
     else:
         return False
