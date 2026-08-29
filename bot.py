@@ -774,7 +774,12 @@ def get_prediction(latency, current_game_data):
         return None, None, None
     
     ml_cards, confidence = predict_ml(features)
-    return ml_cards, "ml", confidence
+    
+    # ML ДАЁТ ПРОГНОЗ ТОЛЬКО ЕСЛИ УВЕРЕН > 70%
+    if ml_cards and confidence and confidence > 0.7:
+        return ml_cards, "ml", confidence
+    else:
+        return None, None, None
 
 # =====================================================================
 # ПРОВЕРКА РЕЗУЛЬТАТА (С ПРИНУДИТЕЛЬНОЙ ПРОВЕРКОЙ ПО ВРЕМЕНИ)
