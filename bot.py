@@ -1,63 +1,3 @@
-# =====================================================================
-# АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ
-# =====================================================================
-import subprocess
-import sys
-import importlib
-import os
-
-REQUIRED_PACKAGES = [
-    'numpy',
-    'catboost',
-    'scikit-learn',
-    'requests',
-    'pytz'
-]
-
-def install_package(package):
-    print(f"📦 Устанавливаю: {package}...", flush=True)
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
-        print(f"✅ {package} установлен!", flush=True)
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка установки {package}: {e}", flush=True)
-        return False
-
-def check_and_install_dependencies():
-    print("=" * 60, flush=True)
-    print("🔍 ПРОВЕРКА ЗАВИСИМОСТЕЙ...", flush=True)
-    print("=" * 60, flush=True)
-    
-    missing = []
-    for package in REQUIRED_PACKAGES:
-        try:
-            importlib.import_module(package.replace('-', '_'))
-            print(f"✅ {package} - уже установлен", flush=True)
-        except ImportError:
-            print(f"⚠️ {package} - НЕ НАЙДЕН", flush=True)
-            missing.append(package)
-    
-    if missing:
-        print(f"\n📦 Нужно установить: {', '.join(missing)}", flush=True)
-        for package in missing:
-            if not install_package(package):
-                print(f"❌ Не удалось установить {package}", flush=True)
-                return False
-        print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
-    else:
-        print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
-    
-    print("=" * 60, flush=True)
-    return True
-
-if not check_and_install_dependencies():
-    print("❌ ОШИБКА: Невозможно продолжить работу", flush=True)
-    sys.exit(1)
-
-# =====================================================================
-# ИМПОРТЫ
-# =====================================================================
 import os
 import sys
 import requests
@@ -74,7 +14,66 @@ import gc
 warnings.filterwarnings('ignore')
 
 # =====================================================================
-# ML-БИБЛИОТЕКА (CatBoost — НЕ ТРЕБУЕТ libomp!)
+# АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ
+# =====================================================================
+try:
+    import subprocess
+    import importlib
+
+    REQUIRED_PACKAGES = [
+        'numpy',
+        'catboost',
+        'scikit-learn',
+        'requests',
+        'pytz'
+    ]
+
+    def install_package(package):
+        print(f"📦 Устанавливаю: {package}...", flush=True)
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+            print(f"✅ {package} установлен!", flush=True)
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка установки {package}: {e}", flush=True)
+            return False
+
+    def check_and_install_dependencies():
+        print("=" * 60, flush=True)
+        print("🔍 ПРОВЕРКА ЗАВИСИМОСТЕЙ...", flush=True)
+        print("=" * 60, flush=True)
+        
+        missing = []
+        for package in REQUIRED_PACKAGES:
+            try:
+                importlib.import_module(package.replace('-', '_'))
+                print(f"✅ {package} - уже установлен", flush=True)
+            except ImportError:
+                print(f"⚠️ {package} - НЕ НАЙДЕН", flush=True)
+                missing.append(package)
+        
+        if missing:
+            print(f"\n📦 Нужно установить: {', '.join(missing)}", flush=True)
+            for package in missing:
+                if not install_package(package):
+                    print(f"❌ Не удалось установить {package}", flush=True)
+                    return False
+            print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
+        else:
+            print("\n✅ ВСЕ ЗАВИСИМОСТИ УСТАНОВЛЕНЫ!", flush=True)
+        
+        print("=" * 60, flush=True)
+        return True
+
+    if not check_and_install_dependencies():
+        print("❌ ОШИБКА: Невозможно продолжить работу", flush=True)
+        sys.exit(1)
+
+except Exception as e:
+    print(f"⚠️ Ошибка при проверке зависимостей: {e}", flush=True)
+
+# =====================================================================
+# ML-БИБЛИОТЕКА
 # =====================================================================
 ML_AVAILABLE = False
 ML_LIB = None
@@ -147,9 +146,6 @@ SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANK_VALUES = {'6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14}
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
 
-# =====================================================================
-# ТАБЛИЦА ЗАДЕРЖЕК (ДЛЯ ПРАВИЛ)
-# =====================================================================
 LATENCY_CARDS = {
     (93, 95): ["Q♣️", "A♥️"],
     (95, 97): ["J♠️", "K♦️"],
@@ -565,19 +561,15 @@ def extract_features_from_game(game_data, latency, game_num):
     features = {
         "latency": latency,
         "game_num": game_num % 100,
-        
         "p1_rank_val": 0, "p1_suit": -1,
         "p2_rank_val": 0, "p2_suit": -1,
         "p3_rank_val": 0, "p3_suit": -1,
-        
         "d1_rank_val": 0, "d1_suit": -1,
         "d2_rank_val": 0, "d2_suit": -1,
-        
         "player_total": 0,
         "dealer_total": 0,
         "player_count": len(player_cards),
         "dealer_count": len(dealer_cards),
-        
         "prev_latency": 0,
         "latency_delta": 0,
         "latency_trend": 0,
@@ -801,7 +793,7 @@ def get_prediction(latency, current_game_data):
         return None, None, None, ml_features
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ (ИСПРАВЛЕННАЯ, ЧЕРЕЗ all_messages)
+# ПРОВЕРКА РЕЗУЛЬТАТОВ (ИСПРАВЛЕННАЯ)
 # =====================================================================
 def check_card_in_game(game_data, cards):
     if not game_data:
@@ -821,7 +813,6 @@ def check_card_in_game(game_data, cards):
     return False, None
 
 def check_results():
-    """Проверяет результаты прогнозов через all_messages (как в гибриде)"""
     global predictions, stats, all_messages
     
     for entry in predictions:
@@ -838,11 +829,11 @@ def check_results():
             continue
         
         max_games_to_check = DOGON_GAMES
+        any_game_found = False
         
         for i in range(max_games_to_check):
             game_to_check = target + i
             
-            # Ищем завершённую игру в all_messages
             game_msg = None
             for msg in all_messages:
                 if f"#N{game_to_check}" in msg and ('✅' in msg or '🔰' in msg):
@@ -850,21 +841,19 @@ def check_results():
                     break
             
             if not game_msg:
-                print(f"⏳ Ждём завершённую игру #N{game_to_check} для проверки карт {', '.join(cards)}", flush=True)
                 continue
             
-            # Парсим карты из сообщения
+            any_game_found = True
+            
             game_data = parse_game_from_text(game_msg)
             if not game_data:
                 continue
             
-            # Проверяем наличие карты у игрока
             found, found_card = check_card_in_game(game_data, cards)
             
             if found:
                 print(f"🎯 КАРТА НАЙДЕНА! {found_card} в игре #{game_to_check} (догон {i})", flush=True)
                 
-                # Обновляем статистику
                 stats["total"] += 1
                 stats["win"] += 1
                 stats["by_dogon"][i] = stats["by_dogon"].get(i, 0) + 1
@@ -874,7 +863,6 @@ def check_results():
                     stats["rules_wins"] += 1
                 stats["card_hits"][found_card] += 1
                 
-                # Редактируем сообщение
                 if i == 0:
                     result_text = f"\n\n✅ ЗАШЛО в целевой игре: #{game_to_check}\n   Выпала: {found_card}"
                 else:
@@ -889,7 +877,10 @@ def check_results():
                 save_history(predictions)
                 return
         
-        # Если не зашло за все догоны
+        if not any_game_found:
+            print(f"⏳ Ни одна из игр #{target}-#{target + DOGON_GAMES - 1} ещё не завершена, ждём...", flush=True)
+            continue
+        
         print(f"❌ Карты {', '.join(cards)} НЕ НАЙДЕНЫ за {DOGON_GAMES} игр", flush=True)
         
         stats["total"] += 1
@@ -906,14 +897,13 @@ def check_results():
         save_history(predictions)
 
 # =====================================================================
-# ПЛАНИРОВЩИК ПРОГНОЗОВ
+# ПЛАНИРОВЩИК
 # =====================================================================
 def schedule_for_game(game_number):
     global predictions
     
     target = game_number + OFFSET
     
-    # Проверяем, не запланирован ли уже этот прогноз
     for entry in predictions:
         if entry.get("target") == target and entry.get("status") in ("scheduled", "pending"):
             return
@@ -928,7 +918,6 @@ def schedule_for_game(game_number):
         "created": datetime.now(MOSCOW_TZ).isoformat(),
     })
     
-    # Ограничиваем размер
     if len(predictions) > 200:
         predictions = predictions[-200:]
     
@@ -951,7 +940,6 @@ def check_and_predict():
         
         print(f"🔥 До цели #{target} осталось {games_left} игр! Делаю прогноз...", flush=True)
         
-        # Получаем задержку
         latency = None
         active_games = get_active_games()
         for game in active_games:
@@ -965,7 +953,6 @@ def check_and_predict():
             print("⏳ Не удалось получить задержку", flush=True)
             continue
         
-        # Получаем данные текущей игры
         current_game_data = None
         for msg in all_messages:
             if f"#N{current_num}" in msg:
