@@ -758,20 +758,36 @@ def get_prediction(latency, current_game_data):
     global game_history
     
     if not ml_initialized:
+        print(f"⏳ ML модель не инициализирована", flush=True)
         return None, None, None
     
     if not current_game_data:
+        print(f"⏳ Нет данных о текущей игре", flush=True)
         return None, None, None
     
     features = extract_features_from_game(current_game_data, latency, 0)
     if not features:
+        print(f"⏳ Не удалось извлечь признаки", flush=True)
         return None, None, None
     
     ml_cards, confidence = predict_ml(features)
     
-    if ml_cards and confidence and confidence >= ML_CONFIDENCE_THRESHOLD:
-        return ml_cards, "ml", confidence
+    if ml_cards and confidence:
+        # 🔥 Показываем ВСЕ вероятности (топ-5)
+        print(f"📊 ML: топ-5 карт:", flush=True)
+        for i, (card, prob) in enumerate(ml_cards, 1):
+            print(f"   {i}. {card} — {prob*100:.1f}%", flush=True)
+        print(f"   Максимальная уверенность: {confidence*100:.1f}%", flush=True)
+        print(f"   Порог: {ML_CONFIDENCE_THRESHOLD*100:.0f}%", flush=True)
+        
+        if confidence >= ML_CONFIDENCE_THRESHOLD:
+            print(f"✅ Уверенность {confidence*100:.1f}% >= {ML_CONFIDENCE_THRESHOLD*100:.0f}% → ДАЮ ПРОГНОЗ!", flush=True)
+            return ml_cards, "ml", confidence
+        else:
+            print(f"⏭️ Уверенность {confidence*100:.1f}% < {ML_CONFIDENCE_THRESHOLD*100:.0f}% → ПРОПУСКАЮ", flush=True)
+            return None, None, None
     else:
+        print(f"⏭️ ML не выдал карты", flush=True)
         return None, None, None
 
 # =====================================================================
