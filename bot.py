@@ -169,7 +169,7 @@ stats = {
 
 processed_games = set()
 finished_games = set()
-all_messages = []  # (text, time)
+all_messages = []
 predictions = []
 
 # =====================================================================
@@ -802,9 +802,13 @@ def check_results():
             game_to_check = target + i
 
             game_msg = None
-            for msg, _ in all_messages:
-                if f"#N{game_to_check}" in msg and ('✅' in msg or '🔰' in msg):
-                    game_msg = msg
+            for msg in all_messages:
+                if isinstance(msg, tuple):
+                    text = msg[0]
+                else:
+                    text = msg
+                if f"#N{game_to_check}" in text and ('✅' in text or '🔰' in text):
+                    game_msg = text
                     break
 
             if not game_msg:
@@ -898,6 +902,3 @@ def schedule_for_game(game_number):
 
 def check_and_predict():
     global predictions, all_messages, game_history
-    
-    for entry in predictions:
-        if entry.get("status") !=
