@@ -74,7 +74,7 @@ import gc
 warnings.filterwarnings('ignore')
 
 # =====================================================================
-# ML-БИБЛИОТЕКА (CatBoost)
+# ML-БИБЛИОТЕКА (CatBoost — НЕ ТРЕБУЕТ libomp!)
 # =====================================================================
 ML_AVAILABLE = False
 ML_LIB = None
@@ -185,7 +185,7 @@ stats = {
 processed_games = set()
 finished_games = set()
 all_messages = []
-predictions = []  # ← ХРАНИМ ВСЕ ЗАПЛАНИРОВАННЫЕ ПРОГНОЗЫ
+predictions = []
 
 # =====================================================================
 # ФУНКЦИИ ТЕЛЕГРАМ
@@ -801,7 +801,7 @@ def get_prediction(latency, current_game_data):
         return None, None, None, ml_features
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ
+# ПРОВЕРКА РЕЗУЛЬТАТОВ (ИСПРАВЛЕННАЯ, ЧЕРЕЗ all_messages)
 # =====================================================================
 def check_card_in_game(game_data, cards):
     if not game_data:
@@ -900,23 +900,6 @@ def check_results():
             stats["rules_losses"] += 1
         
         result_text = f"\n\n❌ НЕ ЗАШЛО (проверено {DOGON_GAMES} игр)"
-        if message_id:
-            edit_message(message_id, original_text + result_text)
-        entry["status"] = "lose"
-        save_history(predictions)
-                return
-        
-        # Если не зашло
-        print(f"❌ Карты {', '.join(cards)} НЕ НАЙДЕНЫ за {DOGON_GAMES+1} игр", flush=True)
-        
-        stats["total"] += 1
-        stats["lose"] += 1
-        if method == "ml":
-            stats["ml_losses"] += 1
-        else:
-            stats["rules_losses"] += 1
-        
-        result_text = f"\n\n❌ НЕ ЗАШЛО (проверено {DOGON_GAMES+1} игр)"
         if message_id:
             edit_message(message_id, original_text + result_text)
         entry["status"] = "lose"
@@ -1057,60 +1040,6 @@ def check_and_predict():
             print(f"✅ ПРОГНОЗ ОТПРАВЛЕН: #{target} → {', '.join(cards_list)} ({method})", flush=True)
 
 # =====================================================================
-# СТАТИСТИКА
-# =====================================================================
-def send_stats_report():
-    now = datetime.now(MOSCOW_TZ)
-    
-    win_percent = 0
-    if stats['total'] > 0:
-        win_percent = stats['win'] / stats['total'] * 100
-    
-    rules_total = stats['rules_wins'] + stats['rules_losses']
-    rules_percent = 0
-    if rules_total > 0:
-        rules_percent = stats['rules_wins'] / rules_total * 100
-    
-    ml_total = stats['ml_wins'] + stats['ml_losses']
-    ml_percent = 0
-    if ml_total > 0:
-        ml_percent = stats['ml_wins'] / ml_total * 100
-    
-    msg = f"""
-📊 СТАТИСТИКА (ТОЧНАЯ КАРТА — ТОП-2)
-⏰ {now.strftime('%d.%m.%Y %H:%M:%S')}
-══════════════════════════════════════════
-📊 Собрано игр: {stats['games_collected']}/{MAX_RECORDS}
-📈 Всего прогнозов: {stats['total']}
-✅ Зашло: {stats['win']} ({win_percent:.1f}%)
-❌ Не зашло: {stats['lose']}
-
-По методам:
-  📌 Правила: {stats['rules_wins']}✅ / {stats['rules_losses']}❌ ({rules_percent:.1f}%)
-  🤖 ML: {stats['ml_wins']}✅ / {stats['ml_losses']}❌ ({ml_percent:.1f}%)
-
-По догонам ({DOGON_GAMES} игр):
-  Догон 0: {stats['by_dogon'].get(0, 0)}
-  Догон 1: {stats['by_dogon'].get(1, 0)}
-  Догон 2: {stats['by_dogon'].get(2, 0)}
-  Догон 3: {stats['by_dogon'].get(3, 0)}"""
-
-    msg += "\n\nТоп-5 карт:\n"
-    if stats["card_hits"]:
-        sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
-        for card, count in sorted_cards:
-            msg += f"  {card}: {count}\n"
-    else:
-        msg += "  (пока нет данных)\n"
-    
-    if ml_initialized:
-        msg += "\n🤖 ML: АКТИВНА"
-    else:
-        msg += f"\n🤖 ML: ОЖИДАЕТ ({stats['games_collected']}/{MIN_TRAIN_SAMPLES})"
-    
-    send_message(CHANNEL_STATS, msg)
-
-# =====================================================================
 # СБОР ДАННЫХ
 # =====================================================================
 def collect_game_data():
@@ -1186,6 +1115,60 @@ def collect_game_data():
         time.sleep(0.5)
 
 # =====================================================================
+# СТАТИСТИКА
+# =====================================================================
+def send_stats_report():
+    now = datetime.now(MOSCOW_TZ)
+    
+    win_percent = 0
+    if stats['total'] > 0:
+        win_percent = stats['win'] / stats['total'] * 100
+    
+    rules_total = stats['rules_wins'] + stats['rules_losses']
+    rules_percent = 0
+    if rules_total > 0:
+        rules_percent = stats['rules_wins'] / rules_total * 100
+    
+    ml_total = stats['ml_wins'] + stats['ml_losses']
+    ml_percent = 0
+    if ml_total > 0:
+        ml_percent = stats['ml_wins'] / ml_total * 100
+    
+    msg = f"""
+📊 СТАТИСТИКА (ТОЧНАЯ КАРТА — ТОП-2)
+⏰ {now.strftime('%d.%m.%Y %H:%M:%S')}
+══════════════════════════════════════════
+📊 Собрано игр: {stats['games_collected']}/{MAX_RECORDS}
+📈 Всего прогнозов: {stats['total']}
+✅ Зашло: {stats['win']} ({win_percent:.1f}%)
+❌ Не зашло: {stats['lose']}
+
+По методам:
+  📌 Правила: {stats['rules_wins']}✅ / {stats['rules_losses']}❌ ({rules_percent:.1f}%)
+  🤖 ML: {stats['ml_wins']}✅ / {stats['ml_losses']}❌ ({ml_percent:.1f}%)
+
+По догонам ({DOGON_GAMES} игр):
+  Догон 0: {stats['by_dogon'].get(0, 0)}
+  Догон 1: {stats['by_dogon'].get(1, 0)}
+  Догон 2: {stats['by_dogon'].get(2, 0)}
+  Догон 3: {stats['by_dogon'].get(3, 0)}"""
+
+    msg += "\n\nТоп-5 карт:\n"
+    if stats["card_hits"]:
+        sorted_cards = sorted(dict(stats["card_hits"]).items(), key=lambda x: x[1], reverse=True)[:5]
+        for card, count in sorted_cards:
+            msg += f"  {card}: {count}\n"
+    else:
+        msg += "  (пока нет данных)\n"
+    
+    if ml_initialized:
+        msg += "\n🤖 ML: АКТИВНА"
+    else:
+        msg += f"\n🤖 ML: ОЖИДАЕТ ({stats['games_collected']}/{MIN_TRAIN_SAMPLES})"
+    
+    send_message(CHANNEL_STATS, msg)
+
+# =====================================================================
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
@@ -1210,15 +1193,12 @@ def main():
     game_history = load_game_history()
     print(f"📈 Загружено истории: {len(game_history)} игр", flush=True)
     
-    # Загружаем сохранённые прогнозы
     predictions = load_history()
-    
     load_ml_model()
     stats["games_collected"] = len(existing_data)
     
     send_startup_message()
     
-    # Загружаем последние сообщения из канала
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         params = {"chat_id": CHANNEL_STATS, "limit": 100}
@@ -1246,10 +1226,8 @@ def main():
         try:
             current_time = time.time()
             
-            # Сбор данных
             collect_game_data()
             
-            # Обработка сообщений из Telegram
             updates = get_updates(offset)
             for update in updates.get("result", []):
                 offset = update["update_id"] + 1
@@ -1278,22 +1256,15 @@ def main():
                 if game_id_match:
                     game_number = int(game_id_match.group(1))
                     print(f"📥 Получена игра #{game_number}", flush=True)
-                    
-                    # Планируем прогноз для каждой новой игры
                     schedule_for_game(game_number)
-                    
-                    # Проверяем завершённые прогнозы
                     check_results()
             
-            # Проверяем прогнозы по времени
             if current_time - last_check_time >= CHECK_INTERVAL:
                 check_and_predict()
                 last_check_time = current_time
             
-            # Ещё раз проверяем результаты
             check_results()
             
-            # Обучение ML
             if current_time - last_train_time > 300:
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES and not ml_initialized:
@@ -1301,12 +1272,10 @@ def main():
                     gc.collect()
                 last_train_time = current_time
             
-            # Статистика
             if current_time - last_stats_time > 3600:
                 send_stats_report()
                 last_stats_time = current_time
             
-            # Очистка
             if len(processed_games) > 500:
                 processed_games.clear()
             if len(predictions) > 200:
