@@ -980,9 +980,19 @@ def check_and_predict():
         
         msg += f"⏰ Прогноз: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}\n\n"
         msg += f"📊 Топ-2 карты:\n"
-        for i, (card, prob) in enumerate(predicted_cards, 1):
-            msg += f"  {i}️⃣ {card} — {prob*100:.1f}%\n"
-            total_prob += prob
+        
+        cards_list = []
+        i = 1
+        for item in predicted_cards:
+            if isinstance(item, tuple) and len(item) == 2:
+                card, prob = item
+                cards_list.append(card)
+                msg += f"  {i}️⃣ {card} — {prob*100:.1f}%\n"
+                total_prob += prob
+            elif isinstance(item, str):
+                cards_list.append(item)
+                msg += f"  {i}️⃣ {item}\n"
+            i += 1
         
         msg += f"\n📊 Суммарная вероятность: {total_prob*100:.1f}%\n"
         msg += f"📈 Догон: {DOGON_GAMES} игр\n"
@@ -1006,7 +1016,6 @@ def check_and_predict():
         message_id = send_message(CHANNEL_PROGNOZ, msg)
         
         if message_id:
-            cards_list = [card for card, _ in predicted_cards]
             entry["cards"] = cards_list
             entry["method"] = method
             entry["message_id"] = message_id
