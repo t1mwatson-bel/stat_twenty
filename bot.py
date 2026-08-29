@@ -126,7 +126,7 @@ MIN_TRAIN_SAMPLES = 300
 MAX_HISTORY = 2000
 MAX_GAME_HISTORY = 10
 DOGON_GAMES = 4
-ML_CONFIDENCE_THRESHOLD = 0.28
+ML_CONFIDENCE_THRESHOLD = 0.70
 
 TARGET_CARDS = [
     "J♠️", "J♣️", "J♦️", "J♥️",
@@ -754,7 +754,7 @@ def predict_ml(features):
         return None, None
 
 # =====================================================================
-# ПРОГНОЗ (ТОЛЬКО ML, ПРИ УВЕРЕННОСТИ >= 28%)
+# ПРОГНОЗ (ТОЛЬКО ML, ПРИ УВЕРЕННОСТИ >= 70%)
 # =====================================================================
 def get_prediction(latency, current_game_data):
     global game_history
