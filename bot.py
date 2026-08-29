@@ -119,10 +119,10 @@ ML_MODEL_FILE = "cards_model.pkl"
 OFFSET_FILE = "cards_offset.txt"
 GAME_HISTORY_FILE = "cards_game_history.json"
 
-MAX_RECORDS = 50000
+MAX_RECORDS = 10000
 CHECK_INTERVAL = 5
 OFFSET = 1
-MIN_TRAIN_SAMPLES = 100
+MIN_TRAIN_SAMPLES = 300
 MAX_HISTORY = 2000
 MAX_GAME_HISTORY = 10
 DOGON_GAMES = 4
@@ -619,7 +619,7 @@ def extract_features_from_game(game_data, latency, game_num):
     return features
 
 # =====================================================================
-# ОБУЧЕНИЕ МОДЕЛИ
+# 🔥 НОВАЯ ФУНКЦИЯ ОБУЧЕНИЯ (УЧИТСЯ НА ВСЕХ ИГРАХ)
 # =====================================================================
 def train_ml_model():
     global ml_model, ml_initialized
@@ -775,7 +775,7 @@ def get_prediction(latency, current_game_data):
         return None, None, None
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ И ОБУЧЕНИЕ НА ОШИБКАХ
+# 🔥 НОВАЯ ФУНКЦИЯ ПРОВЕРКИ РЕЗУЛЬТАТОВ (УЧИТСЯ НА ОШИБКАХ)
 # =====================================================================
 def check_results():
     global predictions, stats, all_messages, ml_model
@@ -832,6 +832,9 @@ def check_results():
                     found_card = card_str
                     break
 
+            # ===========================================
+            # СЛУЧАЙ 1: ПРОГНОЗ ЗАШЁЛ
+            # ===========================================
             if found:
                 print(f"🎯 КАРТА НАЙДЕНА! {found_card} в игре #{game_to_check} (догон {i})", flush=True)
 
@@ -855,6 +858,9 @@ def check_results():
                 save_history(predictions)
                 return
 
+            # ===========================================
+            # СЛУЧАЙ 2: ПРОГНОЗ НЕ ЗАШЁЛ → УЧИМСЯ
+            # ===========================================
             if i == max_games_to_check - 1 and not found:
                 print(f"❌ Карты {', '.join(predicted_cards)} НЕ НАЙДЕНЫ за {max_games_to_check} игр", flush=True)
 
@@ -870,6 +876,7 @@ def check_results():
                     stats["lose"] += 1
                     stats["ml_losses"] += 1
 
+                    # 🔥 ДООБУЧАЕМ МОДЕЛЬ НА ЭТОЙ ОШИБКЕ
                     try:
                         features = extract_features_from_game(game_data, game_data.get("latency_ms", 0), target)
                         if features and ml_initialized:
@@ -883,6 +890,22 @@ def check_results():
                             if hasattr(ml_model, 'partial_fit'):
                                 ml_model.partial_fit(X_new, [y_new])
                                 print(f"✅ Мгновенное обучение: запомнил {actual_target}")
+                            else:
+                                error_file = "learning_errors.json"
+                                errors = []
+                                if os.path.exists(error_file):
+                                    with open(error_file, 'r') as f:
+                                        errors = json.load(f)
+                                errors.append({
+                                    "timestamp": datetime.now(MOSCOW_TZ).isoformat(),
+                                    "features": features,
+                                    "correct_card": actual_target,
+                                    "predicted_cards": predicted_cards,
+                                    "game_num": target
+                                })
+                                with open(error_file, 'w') as f:
+                                    json.dump(errors, f, indent=2)
+                                print(f"📝 Ошибка сохранена в {error_file}")
                     except Exception as e:
                         print(f"⚠️ Ошибка при дообучении: {e}")
 
@@ -1242,6 +1265,7 @@ def main():
             
             check_results()
             
+            # 🔥 ПЕРЕОБУЧЕНИЕ КАЖДЫЕ 3 МИНУТЫ
             if current_time - last_train_time > 180:
                 data_count = len(load_data())
                 if data_count >= MIN_TRAIN_SAMPLES:
