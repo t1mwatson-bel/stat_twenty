@@ -436,6 +436,349 @@ stats = {
     "card_hits": defaultdict(int)
 }
 
+# =====================================================================
+# Глобальная переменная для отслеживания новых игр
+# =====================================================================
+seen_upcoming_games = set()
+
+# =====================================================================
+# СОЗДАНИЕ ПРОГНОЗА (ОБНОВЛЕННАЯ ВЕРСИЯ)
+# =====================================================================
+
+def check_upcoming_games():
+
+    global predictions
+    global seen_upcoming_games
+
+    upcoming = (
+        get_upcoming_games()
+    )
+
+    if not upcoming:
+
+        return
+
+    for game in upcoming:
+
+        scheduled_game_num = (
+            game.get(
+                "game_num"
+            )
+        )
+
+        game_id = (
+            game.get(
+                "game_id"
+            )
+        )
+
+        if (
+            not scheduled_game_num
+            or not game_id
+        ):
+
+            continue
+
+        target_game_num = (
+            add_game_offset(
+                scheduled_game_num,
+                FORECAST_OFFSET
+            )
+        )
+
+        # =========================================================
+        # ЕСЛИ ИГРА НОВАЯ (еще не видели) - СРАЗУ замеряем!
+        # =========================================================
+        if game_id not in seen_upcoming_games:
+            seen_upcoming_games.add(game_id)
+            
+            print(
+                f"\n🆕 НОВАЯ ИГРА #{scheduled_game_num} "
+                f"появилась в лобби!",
+                flush=True
+            )
+            print(
+                f"⏰ До старта: "
+                f"{game.get('minutes_until', 0):.1f} минут",
+                flush=True
+            )
+            print(
+                f"🔮 Прогноз будет на +{FORECAST_OFFSET}: "
+                f"#{target_game_num}",
+                flush=True
+            )
+
+            if has_prediction_for_target(
+                target_game_num
+            ):
+
+                print(
+                    f"⏭️ На #{target_game_num} "
+                    f"прогноз уже существует",
+                    flush=True
+                )
+
+                continue
+
+            print(
+                "📡 СРОЧНЫЙ ЗАМЕР ЗАДЕРЖКИ...",
+                flush=True
+            )
+
+            (
+                _,
+                measured_latency,
+                _,
+                _
+            ) = get_game_data(
+                game_id
+            )
+
+            if measured_latency is not None:
+
+                latency = (
+                    measured_latency
+                )
+
+                if (
+                    game_id
+                    not in game_latency_cache
+                ):
+
+                    cache_game_latency(
+                        game_id,
+                        latency,
+                        scheduled_game_num
+                    )
+
+            else:
+
+                latency = 500.0
+
+                print(
+                    "⚠️ Использую задержку "
+                    "по умолчанию 500мс",
+                    flush=True
+                )
+
+            update_game_history(
+                latency,
+                scheduled_game_num
+            )
+
+            (
+                predicted_cards,
+                method,
+                confidence,
+                matches_count,
+                base_card,
+                base_probability
+            ) = get_prediction(
+                latency,
+                target_game_num
+            )
+
+            if (
+                not predicted_cards
+            ):
+
+                print(
+                    f"⏭️ Нет прогноза "
+                    f"для #{target_game_num}",
+                    flush=True
+                )
+
+                continue
+
+            cards_list = [
+
+                card
+
+                for card, _
+                in predicted_cards
+            ]
+
+            msg = (
+                "🔮 ТОЧНАЯ КАРТА "
+                "(ИСТОРИЯ + ML)\n\n"
+            )
+
+            msg += (
+                f"🎯 Целевая игра: "
+                f"#N{target_game_num}\n"
+            )
+
+            msg += (
+                f"📌 От запланированной: "
+                f"{FORECAST_OFFSET:+d} "
+                f"(#{scheduled_game_num} → "
+                f"#{target_game_num})\n"
+            )
+
+            msg += (
+                "🤖 Метод: "
+                "История + ML\n"
+            )
+
+            msg += (
+                f"📚 Найдено аналогов: "
+                f"{matches_count}\n"
+            )
+
+            msg += (
+                f"⏰ Прогноз: "
+                f"{datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}"
+                "\n\n"
+            )
+
+            if base_card:
+
+                msg += (
+                    f"📊 Лидер анализа: "
+                    f"{base_card} — "
+                    f"{base_probability * 100:.1f}%\n\n"
+                )
+
+            # Если 2 карты - показываем обе, если 1 - только одну
+            if len(cards_list) == 2:
+                msg += (
+                    f"1️⃣ {cards_list[0]}\n"
+                )
+                msg += (
+                    f"2️⃣ {cards_list[1]}"
+                )
+            else:
+                msg += (
+                    f"1️⃣ {cards_list[0]}"
+                )
+
+            msg += (
+                f"\n\n📈 Догон: "
+                f"{DOGON_GAMES - 1} игр"
+            )
+
+            msg += (
+                "\n📍 Ищем: любую позицию "
+                "(игрок/дилер)"
+            )
+
+            message_id = send_message(
+                CHANNEL_PROGNOZ,
+                msg
+            )
+
+            if not message_id:
+
+                print(
+                    "❌ Не удалось отправить "
+                    "прогноз",
+                    flush=True
+                )
+
+                continue
+
+            entry = {
+
+                "source": (
+                    scheduled_game_num
+                ),
+
+                "target": (
+                    target_game_num
+                ),
+
+                "cards": (
+                    cards_list
+                ),
+
+                "base_card": (
+                    base_card
+                ),
+
+                "base_probability": (
+                    base_probability
+                ),
+
+                "method": method,
+
+                "message_id": (
+                    message_id
+                ),
+
+                "channel_id": (
+                    CHANNEL_PROGNOZ
+                ),
+
+                "original_text": (
+                    msg
+                ),
+
+                "status": "pending",
+
+                "latency": latency,
+
+                "confidence": confidence,
+
+                "historical_matches": (
+                    matches_count
+                ),
+
+                "forecast_offset": (
+                    FORECAST_OFFSET
+                ),
+
+                "dogon_games": (
+                    DOGON_GAMES
+                ),
+
+                "created": datetime.now(
+                    MOSCOW_TZ
+                ).isoformat()
+            }
+
+            predictions.append(
+                entry
+            )
+
+            if len(predictions) > 200:
+
+                predictions = (
+                    predictions[-200:]
+                )
+
+            save_history(
+                predictions
+            )
+
+            print(
+                "\n✅ ПРОГНОЗ ОТПРАВЛЕН",
+                flush=True
+            )
+
+            print(
+                f"📌 Источник: "
+                f"#{scheduled_game_num}",
+                flush=True
+            )
+
+            print(
+                f"🎯 Цель: "
+                f"#{target_game_num}",
+                flush=True
+            )
+
+            print(
+                f"🃏 Прогноз: "
+                f"{' + '.join(cards_list)}",
+                flush=True
+            )
+
+            print(
+                f"📢 Канал прогноза: "
+                f"{CHANNEL_PROGNOZ}",
+                flush=True
+            )
+
 
 # =====================================================================
 # TELEGRAM
