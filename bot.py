@@ -297,7 +297,7 @@ MAX_SIMILAR_GAMES = 300
 # ЛОГИКА ПРОГНОЗА
 # =====================================================================
 
-FORECAST_OFFSET = 0
+FORECAST_OFFSET = -1
 
 MIN_FORECAST_PROBABILITY = 0.29
 
