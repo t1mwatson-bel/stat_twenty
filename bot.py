@@ -915,6 +915,15 @@ def check_and_predict():
         
         print(f"📊 Проверка #{target}: current_num={current_num}, games_left={games_left}", flush=True)
         
+        # ============================================================
+        # 🔥 АВТОМАТИЧЕСКАЯ ОЧИСТКА СТАРЫХ ПРОГНОЗОВ
+        # ============================================================
+        if games_left < -1:
+            print(f"🗑️ Прогноз #{target} устарел (games_left={games_left}) → удаляю", flush=True)
+            entry["status"] = "expired"
+            save_history(predictions)
+            continue
+        
         if games_left != 2 and games_left != 1:
             continue
         
@@ -952,10 +961,23 @@ def check_and_predict():
             print(f"📋 all_messages содержит {len(all_messages)} сообщений", flush=True)
             continue
         
-        # Показываем карты из source-игры
+        # ============================================================
+        # 🔥 ВЫВОД КАРТ ИЗ SOURCE-ИГРЫ
+        # ============================================================
         player_cards = current_game_data.get("player_cards", [])
         dealer_cards = current_game_data.get("dealer_cards", [])
-        print(f"🃏 Source-игра #{current_num}: P1:{player_cards[0]['rank']}{player_cards[0]['suit'] if player_cards else '?'} D1:{dealer_cards[0]['rank']}{dealer_cards[0]['suit'] if dealer_cards else '?'} P2:{player_cards[1]['rank']}{player_cards[1]['suit'] if len(player_cards) > 1 else '?'}", flush=True)
+        
+        cards_str = ""
+        if len(player_cards) > 0:
+            cards_str += f"P1:{player_cards[0]['rank']}{player_cards[0]['suit']} "
+        if len(dealer_cards) > 0:
+            cards_str += f"D1:{dealer_cards[0]['rank']}{dealer_cards[0]['suit']} "
+        if len(player_cards) > 1:
+            cards_str += f"P2:{player_cards[1]['rank']}{player_cards[1]['suit']} "
+        if len(dealer_cards) > 1:
+            cards_str += f"D2:{dealer_cards[1]['rank']}{dealer_cards[1]['suit']}"
+        
+        print(f"🃏 Source-игра #{current_num}: {cards_str}", flush=True)
         
         predicted_cards, method, confidence = get_prediction(latency, current_game_data)
         
