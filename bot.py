@@ -916,7 +916,7 @@ def check_and_predict():
         print(f"📊 Проверка #{target}: current_num={current_num}, games_left={games_left}", flush=True)
         
         # ============================================================
-        # 🔥 АВТОМАТИЧЕСКАЯ ОЧИСТКА СТАРЫХ ПРОГНОЗОВ
+        # 🔥 УДАЛЯЕМ СТАРЫЕ ПРОГНОЗЫ
         # ============================================================
         if games_left < -1:
             print(f"🗑️ Прогноз #{target} устарел (games_left={games_left}) → удаляю", flush=True)
@@ -924,10 +924,13 @@ def check_and_predict():
             save_history(predictions)
             continue
         
+        # ============================================================
+        # 🔥 УБИРАЕМ ПРОВЕРКУ games_left != 2 and games_left != 1
+        # ============================================================
         # if games_left != 2 and games_left != 1:
         #     continue
         
-        print(f"🔥 До цели #{target} осталось {games_left} игр! Делаю прогноз...", flush=True)
+        print(f"🔥 Делаю прогноз для #{target} (games_left={games_left})", flush=True)
         
         latency = None
         active_games = get_active_games()
@@ -985,7 +988,6 @@ def check_and_predict():
             print(f"⏭️ Нет прогноза от ML для #{target} (уверенность < {ML_CONFIDENCE_THRESHOLD*100:.0f}%)", flush=True)
             continue
         
-        # Показываем прогноз
         print(f"📊 Прогноз для #{target}: {predicted_cards[0][0]} ({predicted_cards[0][1]*100:.1f}%), {predicted_cards[1][0]} ({predicted_cards[1][1]*100:.1f}%)", flush=True)
         
         # ============================================================
