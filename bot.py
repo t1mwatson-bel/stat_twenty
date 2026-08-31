@@ -2982,67 +2982,67 @@ def get_prediction(
     )
 
     # ============================================================
-# ПРОВЕРКА: ЕСЛИ TOP-2 ИМЕЮТ ОДИНАКОВЫЙ ПРОЦЕНТ
-# ============================================================
-if math.isclose(
-    top_prob_1,
-    top_prob_2,
-    rel_tol=1e-9,
-    abs_tol=1e-9
-):
-    print(
-        "\n⚠️ TOP-2 ИМЕЮТ ОДИНАКОВЫЙ ПРОЦЕНТ",
-        flush=True
-    )
-    print(
-        f"   {top_card_1} — {top_prob_1 * 100:.2f}%",
-        flush=True
-    )
-    print(
-        f"   {top_card_2} — {top_prob_2 * 100:.2f}%",
-        flush=True
-    )
-    
-    # Проверяем что оба выше минимума
-    if top_prob_1 >= MIN_FORECAST_PROBABILITY and top_prob_2 >= MIN_FORECAST_PROBABILITY:
+    # ПРОВЕРКА: ЕСЛИ TOP-2 ИМЕЮТ ОДИНАКОВЫЙ ПРОЦЕНТ
+    # ============================================================
+    if math.isclose(
+        top_prob_1,
+        top_prob_2,
+        rel_tol=1e-9,
+        abs_tol=1e-9
+    ):
         print(
-            f"\n✅ ОБЕ КАРТЫ ВЫШЕ МИНИМУМА "
-            f"({MIN_FORECAST_PROBABILITY * 100:.0f}%)",
+            "\n⚠️ TOP-2 ИМЕЮТ ОДИНАКОВЫЙ ПРОЦЕНТ",
             flush=True
         )
         print(
-            f"🎯 ПРОГНОЗ: {top_card_1} + {top_card_2}",
+            f"   {top_card_1} — {top_prob_1 * 100:.2f}%",
+            flush=True
+        )
+        print(
+            f"   {top_card_2} — {top_prob_2 * 100:.2f}%",
             flush=True
         )
         
-        # Возвращаем 2 карты
-        predicted_cards = [top_card_1, top_card_2]
-        result_cards = [
-            (card, top_prob_1)
-            for card in predicted_cards
-        ]
-        return (
-            result_cards,
-            "history+ml",
-            top_prob_1,
-            matches_count,
-            top_card_1,
-            top_prob_1
-        )
-    else:
-        print(
-            f"\n⛔ ОДНА ИЗ КАРТ НИЖЕ МИНИМУМА "
-            f"({MIN_FORECAST_PROBABILITY * 100:.0f}%)",
-            flush=True
-        )
-        return (
-            None,
-            None,
-            None,
-            matches_count,
-            top_card_1,
-            top_prob_1
-        )
+        # Проверяем что оба выше минимума
+        if top_prob_1 >= MIN_FORECAST_PROBABILITY and top_prob_2 >= MIN_FORECAST_PROBABILITY:
+            print(
+                f"\n✅ ОБЕ КАРТЫ ВЫШЕ МИНИМУМА "
+                f"({MIN_FORECAST_PROBABILITY * 100:.0f}%)",
+                flush=True
+            )
+            print(
+                f"🎯 ПРОГНОЗ: {top_card_1} + {top_card_2}",
+                flush=True
+            )
+            
+            # Возвращаем 2 карты
+            predicted_cards = [top_card_1, top_card_2]
+            result_cards = [
+                (card, top_prob_1)
+                for card in predicted_cards
+            ]
+            return (
+                result_cards,
+                "history+ml",
+                top_prob_1,
+                matches_count,
+                top_card_1,
+                top_prob_1
+            )
+        else:
+            print(
+                f"\n⛔ ОДНА ИЗ КАРТ НИЖЕ МИНИМУМА "
+                f"({MIN_FORECAST_PROBABILITY * 100:.0f}%)",
+                flush=True
+            )
+            return (
+                None,
+                None,
+                None,
+                matches_count,
+                top_card_1,
+                top_prob_1
+            )
 
     if (
         top_prob_1
