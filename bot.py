@@ -924,8 +924,8 @@ def check_and_predict():
             save_history(predictions)
             continue
         
-        if games_left != 2 and games_left != 1:
-            continue
+        # if games_left != 2 and games_left != 1:
+        #     continue
         
         print(f"🔥 До цели #{target} осталось {games_left} игр! Делаю прогноз...", flush=True)
         
