@@ -63,7 +63,6 @@ try:
 
             return False
 
-
     def check_and_install_dependencies():
 
         print("=" * 60, flush=True)
@@ -75,7 +74,6 @@ try:
         for package in REQUIRED_PACKAGES:
 
             try:
-
                 importlib.import_module(
                     package.replace("-", "_")
                 )
@@ -115,7 +113,6 @@ try:
         print("=" * 60, flush=True)
 
         return True
-
 
     if not check_and_install_dependencies():
         sys.exit(1)
@@ -306,31 +303,90 @@ MIN_FORECAST_PROBABILITY = 0.29
 
 
 # =====================================================================
-# ЗЕРКАЛЬНЫЕ МАСТИ
+# НОВАЯ ЛОГИКА ПРОГНОЗА МАСТЕЙ ПО ЧЕТНОСТИ
 # =====================================================================
 
-MIRROR_SUITS = {
+SUITS = ["♠️", "♥️", "♦️", "♣️"]
 
-    "♠️": [
-        "♣️",
-        "♦️"
-    ],
-
-    "♣️": [
-        "♠️",
-        "♥️"
-    ],
-
-    "♦️": [
-        "♠️",
-        "♥️"
-    ],
-
-    "♥️": [
-        "♣️",
-        "♦️"
-    ]
+# Противоположная масть для ЧЕТНОЙ игры
+OPPOSITE_SUIT = {
+    "♦️": "♣️",
+    "♣️": "♦️",
+    "♥️": "♠️",
+    "♠️": "♥️",
 }
+
+# Зеркальная логика для НЕЧЕТНОЙ игры
+MIRROR_SUITS = {
+    "♦️": ["♠️", "♥️"],
+    "♣️": ["♠️", "♥️"],
+    "♥️": ["♦️", "♣️"],
+    "♠️": ["♦️", "♣️"],
+}
+
+
+def make_suit_predictions(leader_card, target_game_number):
+    """
+    ЧЕТНАЯ игра:
+        лидер + противоположная масть
+
+        J♦️ -> J♦️ + J♣️
+        J♣️ -> J♣️ + J♦️
+        J♥️ -> J♥️ + J♠️
+        J♠️ -> J♠️ + J♥️
+
+    НЕЧЕТНАЯ игра:
+        текущая зеркальная логика
+
+        J♦️ -> J♠️ + J♥️
+        J♣️ -> J♠️ + J♥️
+        J♥️ -> J♦️ + J♣️
+        J♠️ -> J♦️ + J♣️
+    """
+
+    if not leader_card:
+        return []
+
+    leader_suit = None
+    rank = None
+
+    # Определяем масть и ранг карты
+    for suit in SUITS:
+        if leader_card.endswith(suit):
+            leader_suit = suit
+            rank = leader_card[:-len(suit)]
+            break
+
+    if not leader_suit or not rank:
+        return [leader_card]
+
+    # ========================================================
+    # ЧЕТНАЯ ЦЕЛЕВАЯ ИГРА
+    # ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ
+    # ========================================================
+    if target_game_number % 2 == 0:
+
+        opposite_suit = OPPOSITE_SUIT.get(leader_suit)
+
+        predictions = [
+            leader_card,
+            f"{rank}{opposite_suit}"
+        ]
+
+    # ========================================================
+    # НЕЧЕТНАЯ ЦЕЛЕВАЯ ИГРА
+    # ТЕКУЩАЯ ЗЕРКАЛЬНАЯ ЛОГИКА
+    # ========================================================
+    else:
+
+        mirror_suits = MIRROR_SUITS.get(leader_suit, [])
+
+        predictions = [
+            f"{rank}{suit}"
+            for suit in mirror_suits
+        ]
+
+    return predictions[:2]
 
 
 # =====================================================================
@@ -358,14 +414,6 @@ TARGET_CARDS = [
     "A♣️",
     "A♦️",
     "A♥️"
-]
-
-
-SUITS = [
-    "♠️",
-    "♣️",
-    "♦️",
-    "♥️"
 ]
 
 
@@ -718,7 +766,7 @@ def send_startup_message():
     )
 
     msg = f"""
-🃏 ТОЧНАЯ КАРТА — ИСТОРИЯ + ML + ЗЕРКАЛО
+🃏 ТОЧНАЯ КАРТА — ИСТОРИЯ + ML + ЧЕТНОСТЬ
 
 📊 Собрано игр: {data_count}/{MAX_RECORDS}
 🧠 ML: {'✅ АКТИВНА' if ml_initialized else '⏳ ОЖИДАЕТ'}
@@ -726,7 +774,7 @@ def send_startup_message():
 
 🎯 Прогноз: +{FORECAST_OFFSET}
 🎯 Минимум лидера: {MIN_FORECAST_PROBABILITY * 100:.0f}%
-🪞 Зеркальные масти: ✅
+🎯 Четность целевой игры: АКТИВНА
 📈 Догон: {DOGON_GAMES - 1} игр
 
 🔎 Проверка:
@@ -1933,8 +1981,7 @@ def extract_prematch_features(
 
         "is_weekend": float(
             1
-            if now.weekday() >= 5
-            else 0
+            if now.weekday() >= 5            else 0
         ),
 
         "prev_latency": 0.0,
@@ -2830,57 +2877,7 @@ def predict_ml(
 
 
 # =====================================================================
-# ЗЕРКАЛЬНЫЕ КАРТЫ
-# =====================================================================
-
-def get_mirror_cards(
-    card
-):
-
-    if not card:
-
-        return []
-
-    suit = None
-
-    for current_suit in SUITS:
-
-        if card.endswith(
-            current_suit
-        ):
-
-            suit = current_suit
-
-            break
-
-    if not suit:
-
-        return []
-
-    rank = card[
-        :-len(suit)
-    ]
-
-    mirror_suits = MIRROR_SUITS.get(
-        suit,
-        []
-    )
-
-    result = []
-
-    for mirror_suit in (
-        mirror_suits
-    ):
-
-        result.append(
-            rank + mirror_suit
-        )
-
-    return result
-
-
-# =====================================================================
-# ИТОГОВЫЙ ПРОГНОЗ
+# ИТОГОВЫЙ ПРОГНОЗ (ОБНОВЛЕННЫЙ)
 # =====================================================================
 
 def get_prediction(
@@ -3136,17 +3133,20 @@ def get_prediction(
             top_prob_1
         )
 
-    mirror_cards = (
-        get_mirror_cards(
-            top_card_1
-        )
+    # ============================================================
+    # НОВАЯ ЛОГИКА: ПРОГНОЗ ПО ЧЕТНОСТИ
+    # ============================================================
+    
+    predicted_cards = make_suit_predictions(
+        top_card_1,
+        game_num  # target_game_number
     )
 
-    if len(mirror_cards) != 2:
+    if len(predicted_cards) != 2:
 
         print(
             "\n⛔ НЕ УДАЛОСЬ ПОЛУЧИТЬ "
-            "2 ЗЕРКАЛЬНЫЕ КАРТЫ",
+            "2 КАРТЫ ДЛЯ ПРОГНОЗА",
             flush=True
         )
 
@@ -3160,23 +3160,44 @@ def get_prediction(
         )
 
     print(
-        "\n🪞 ЗЕРКАЛЬНЫЕ КАРТЫ",
+        f"\n🎯 ЧЕТНОСТЬ ЦЕЛЕВОЙ ИГРЫ: "
+        f"{'ЧЕТНАЯ' if game_num % 2 == 0 else 'НЕЧЕТНАЯ'} "
+        f"(#{game_num})",
         flush=True
     )
 
-    for mirror_card in (
-        mirror_cards
-    ):
+    print(
+        "\n🃏 ПРОГНОЗ ПО ЧЕТНОСТИ",
+        flush=True
+    )
+
+    if game_num % 2 == 0:
+
+        print(
+            "   ЧЕТНАЯ игра → "
+            "ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ",
+            flush=True
+        )
+
+    else:
+
+        print(
+            "   НЕЧЕТНАЯ игра → "
+            "ЗЕРКАЛЬНАЯ ЛОГИКА",
+            flush=True
+        )
+
+    for card in predicted_cards:
 
         mirror_prob = (
             normalized_probs.get(
-                mirror_card,
+                card,
                 0.0
             )
         )
 
         print(
-            f"   🎯 {mirror_card} — "
+            f"   🎯 {card} — "
             f"{mirror_prob * 100:.2f}%",
             flush=True
         )
@@ -3189,27 +3210,20 @@ def get_prediction(
 
     print(
         f"🎯 ИТОГОВЫЙ ПРОГНОЗ: "
-        f"{mirror_cards[0]} + "
-        f"{mirror_cards[1]}",
+        f"{predicted_cards[0]} + "
+        f"{predicted_cards[1]}",
         flush=True
     )
 
-    predicted_cards = [
-
-        (
-            mirror_cards[0],
-            top_prob_1
-        ),
-
-        (
-            mirror_cards[1],
-            top_prob_1
-        )
+    # Преобразуем в формат, который ожидает остальной код
+    result_cards = [
+        (card, top_prob_1)
+        for card in predicted_cards
     ]
 
     return (
-        predicted_cards,
-        "history+ml+mirror",
+        result_cards,
+        "history+ml+suit_parity",
         top_prob_1,
         matches_count,
         top_card_1,
@@ -3394,9 +3408,11 @@ def check_upcoming_games():
             in predicted_cards
         ]
 
+        parity_text = "ЧЕТНАЯ" if target_game_num % 2 == 0 else "НЕЧЕТНАЯ"
+        
         msg = (
             "🔮 ТОЧНАЯ КАРТА "
-            "(ИСТОРИЯ + ML + ЗЕРКАЛО)\n\n"
+            "(ИСТОРИЯ + ML + ЧЕТНОСТЬ)\n\n"
         )
 
         msg += (
@@ -3413,7 +3429,11 @@ def check_upcoming_games():
 
         msg += (
             "🤖 Метод: "
-            "История + ML + зеркальная масть\n"
+            "История + ML + четность\n"
+        )
+
+        msg += (
+            f"🎯 Четность: {parity_text}\n"
         )
 
         msg += (
@@ -3435,9 +3455,10 @@ def check_upcoming_games():
                 f"{base_probability * 100:.1f}%\n\n"
             )
 
-        msg += (
-            "🎯 ПРОГНОЗ ЗЕРКАЛЬНОЙ МАСТИ:\n\n"
-        )
+        if target_game_num % 2 == 0:
+            msg += "🎯 ЛОГИКА (ЧЕТНАЯ): ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ\n\n"
+        else:
+            msg += "🎯 ЛОГИКА (НЕЧЕТНАЯ): ЗЕРКАЛЬНЫЕ МАСТИ\n\n"
 
         msg += (
             f"1️⃣ {cards_list[0]}\n"
@@ -4022,8 +4043,7 @@ def check_results():
         # =========================================================
 
         for i in range(
-            DOGON_GAMES
-        ):
+            DOGON_GAMES        ):
 
             game_to_check = (
                 add_game_offset(
@@ -4873,7 +4893,7 @@ def send_stats_report():
 
 🎯 Прогноз: +{FORECAST_OFFSET}
 🎯 Минимум лидера: {MIN_FORECAST_PROBABILITY * 100:.0f}%
-🪞 Зеркальные масти: АКТИВНЫ
+🎯 Четность целевой игры: АКТИВНА
 
 📢 Канал прогнозов:
 {CHANNEL_PROGNOZ}
@@ -5236,7 +5256,7 @@ def main():
 
     print(
         "🔮 ТОЧНАЯ КАРТА "
-        "(ИСТОРИЯ + ML + ЗЕРКАЛО)",
+        "(ИСТОРИЯ + ML + ЧЕТНОСТЬ)",
         flush=True
     )
 
@@ -5271,8 +5291,8 @@ def main():
     )
 
     print(
-        "🪞 Зеркальные масти: "
-        "АКТИВНЫ",
+        "🎯 Четность целевой игры: "
+        "АКТИВНА",
         flush=True
     )
 
@@ -5472,7 +5492,7 @@ def main():
     )
 
     print(
-        "🪞 Зеркальная логика: "
+        "🎯 Четность целевой игры: "
         "АКТИВНА",
         flush=True
     )
