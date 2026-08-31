@@ -1,4 +1,4 @@
-Как код тут измеряет задержку и выдает прогноз import os
+import os
 import sys
 import requests
 import json
@@ -903,6 +903,8 @@ def schedule_for_game(game_number):
 def check_and_predict():
     global predictions, all_messages, game_history
     
+    print(f"🔍 check_and_predict() запущена. Прогнозов в очереди: {len([p for p in predictions if p.get('status') == 'scheduled'])}", flush=True)
+    
     for entry in predictions:
         if entry.get("status") != "scheduled":
             continue
@@ -911,6 +913,8 @@ def check_and_predict():
         current_num = get_game_number_by_time()
         games_left = target - current_num
         
+        print(f"📊 Проверка #{target}: current_num={current_num}, games_left={games_left}", flush=True)
+        
         if games_left != 2 and games_left != 1:
             continue
         
@@ -918,11 +922,14 @@ def check_and_predict():
         
         latency = None
         active_games = get_active_games()
+        print(f"📡 Активных игр: {len(active_games)}", flush=True)
+        
         for game in active_games:
             game_id = str(game.get("id"))
             data, measured_latency, _, _ = get_game_data(game_id)
             if data:
                 latency = measured_latency
+                print(f"⏱️ Задержка от игры {game_id}: {latency:.1f}ms", flush=True)
                 break
         
         if latency is None:
@@ -937,13 +944,55 @@ def check_and_predict():
                 text = msg
             if f"#N{current_num}" in text:
                 current_game_data = parse_game_from_text(text)
+                print(f"📥 Найдена игра #{current_num} в сообщениях", flush=True)
                 break
+        
+        if not current_game_data:
+            print(f"⏳ Нет данных о текущей игре #{current_num} в all_messages", flush=True)
+            print(f"📋 all_messages содержит {len(all_messages)} сообщений", flush=True)
+            continue
+        
+        # Показываем карты из source-игры
+        player_cards = current_game_data.get("player_cards", [])
+        dealer_cards = current_game_data.get("dealer_cards", [])
+        print(f"🃏 Source-игра #{current_num}: P1:{player_cards[0]['rank']}{player_cards[0]['suit'] if player_cards else '?'} D1:{dealer_cards[0]['rank']}{dealer_cards[0]['suit'] if dealer_cards else '?'} P2:{player_cards[1]['rank']}{player_cards[1]['suit'] if len(player_cards) > 1 else '?'}", flush=True)
         
         predicted_cards, method, confidence = get_prediction(latency, current_game_data)
         
         if not predicted_cards or len(predicted_cards) < 2:
             print(f"⏭️ Нет прогноза от ML для #{target} (уверенность < {ML_CONFIDENCE_THRESHOLD*100:.0f}%)", flush=True)
             continue
+        
+        # Показываем прогноз
+        print(f"📊 Прогноз для #{target}: {predicted_cards[0][0]} ({predicted_cards[0][1]*100:.1f}%), {predicted_cards[1][0]} ({predicted_cards[1][1]*100:.1f}%)", flush=True)
+        
+        # ============================================================
+        # 🔥 ПРОВЕРКА: прогнозируемая карта НЕ должна быть среди P1, D1, P2, D2
+        # ============================================================
+        check_cards = []
+        if len(player_cards) > 0:
+            check_cards.append(player_cards[0])  # P1
+        if len(dealer_cards) > 0:
+            check_cards.append(dealer_cards[0])  # D1
+        if len(player_cards) > 1:
+            check_cards.append(player_cards[1])  # P2
+        if len(dealer_cards) > 1:
+            check_cards.append(dealer_cards[1])  # D2
+        
+        predicted_card = predicted_cards[0][0]
+        blocked = False
+        for card in check_cards:
+            card_str = card.get("rank", "") + card.get("suit", "")
+            if card_str == predicted_card:
+                blocked = True
+                print(f"⛔ Карта {predicted_card} уже есть среди P1, D1, P2, D2 → блокирую", flush=True)
+                break
+        
+        if blocked:
+            print(f"⏭️ Прогнозируемая карта {predicted_card} уже есть среди P1, D1, P2, D2 → пропускаю прогноз для #{target}", flush=True)
+            continue
+        
+        print(f"✅ Проверка пройдена: {predicted_card} нет среди P1, D1, P2, D2", flush=True)
         
         if current_game_data:
             all_cards = current_game_data.get("player_cards", []) + current_game_data.get("dealer_cards", [])
