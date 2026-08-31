@@ -303,93 +303,6 @@ MIN_FORECAST_PROBABILITY = 0.29
 
 
 # =====================================================================
-# НОВАЯ ЛОГИКА ПРОГНОЗА МАСТЕЙ ПО ЧЕТНОСТИ
-# =====================================================================
-
-SUITS = ["♠️", "♥️", "♦️", "♣️"]
-
-# Противоположная масть для ЧЕТНОЙ игры
-OPPOSITE_SUIT = {
-    "♦️": "♣️",
-    "♣️": "♦️",
-    "♥️": "♠️",
-    "♠️": "♥️",
-}
-
-# Зеркальная логика для НЕЧЕТНОЙ игры
-MIRROR_SUITS = {
-    "♦️": ["♠️", "♥️"],
-    "♣️": ["♠️", "♥️"],
-    "♥️": ["♦️", "♣️"],
-    "♠️": ["♦️", "♣️"],
-}
-
-
-def make_suit_predictions(leader_card, target_game_number):
-    """
-    ЧЕТНАЯ игра:
-        лидер + противоположная масть
-
-        J♦️ -> J♦️ + J♣️
-        J♣️ -> J♣️ + J♦️
-        J♥️ -> J♥️ + J♠️
-        J♠️ -> J♠️ + J♥️
-
-    НЕЧЕТНАЯ игра:
-        текущая зеркальная логика
-
-        J♦️ -> J♠️ + J♥️
-        J♣️ -> J♠️ + J♥️
-        J♥️ -> J♦️ + J♣️
-        J♠️ -> J♦️ + J♣️
-    """
-
-    if not leader_card:
-        return []
-
-    leader_suit = None
-    rank = None
-
-    # Определяем масть и ранг карты
-    for suit in SUITS:
-        if leader_card.endswith(suit):
-            leader_suit = suit
-            rank = leader_card[:-len(suit)]
-            break
-
-    if not leader_suit or not rank:
-        return [leader_card]
-
-    # ========================================================
-    # ЧЕТНАЯ ЦЕЛЕВАЯ ИГРА
-    # ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ
-    # ========================================================
-    if target_game_number % 2 == 0:
-
-        opposite_suit = OPPOSITE_SUIT.get(leader_suit)
-
-        predictions = [
-            leader_card,
-            f"{rank}{opposite_suit}"
-        ]
-
-    # ========================================================
-    # НЕЧЕТНАЯ ЦЕЛЕВАЯ ИГРА
-    # ТЕКУЩАЯ ЗЕРКАЛЬНАЯ ЛОГИКА
-    # ========================================================
-    else:
-
-        mirror_suits = MIRROR_SUITS.get(leader_suit, [])
-
-        predictions = [
-            f"{rank}{suit}"
-            for suit in mirror_suits
-        ]
-
-    return predictions[:2]
-
-
-# =====================================================================
 # КАРТЫ
 # =====================================================================
 
@@ -766,7 +679,7 @@ def send_startup_message():
     )
 
     msg = f"""
-🃏 ТОЧНАЯ КАРТА — ИСТОРИЯ + ML + ЧЕТНОСТЬ
+🃏 ТОЧНАЯ КАРТА — ИСТОРИЯ + ML
 
 📊 Собрано игр: {data_count}/{MAX_RECORDS}
 🧠 ML: {'✅ АКТИВНА' if ml_initialized else '⏳ ОЖИДАЕТ'}
@@ -774,7 +687,6 @@ def send_startup_message():
 
 🎯 Прогноз: +{FORECAST_OFFSET}
 🎯 Минимум лидера: {MIN_FORECAST_PROBABILITY * 100:.0f}%
-🎯 Четность целевой игры: АКТИВНА
 📈 Догон: {DOGON_GAMES - 1} игр
 
 🔎 Проверка:
@@ -2877,7 +2789,7 @@ def predict_ml(
 
 
 # =====================================================================
-# ИТОГОВЫЙ ПРОГНОЗ (ОБНОВЛЕННЫЙ)
+# ИТОГОВЫЙ ПРОГНОЗ (ОБНОВЛЕННЫЙ - ТОЛЬКО ЛИДЕР)
 # =====================================================================
 
 def get_prediction(
@@ -3134,19 +3046,16 @@ def get_prediction(
         )
 
     # ============================================================
-    # НОВАЯ ЛОГИКА: ПРОГНОЗ ПО ЧЕТНОСТИ
+    # ПРОГНОЗ: ТОЛЬКО ЛИДЕР (ОДНА КАРТА)
     # ============================================================
     
-    predicted_cards = make_suit_predictions(
-        top_card_1,
-        game_num  # target_game_number
-    )
+    # Берем только лидера - одну карту
+    predicted_cards = [top_card_1]
 
-    if len(predicted_cards) != 2:
+    if not predicted_cards:
 
         print(
-            "\n⛔ НЕ УДАЛОСЬ ПОЛУЧИТЬ "
-            "2 КАРТЫ ДЛЯ ПРОГНОЗА",
+            "\n⛔ НЕТ КАРТЫ ДЛЯ ПРОГНОЗА",
             flush=True
         )
 
@@ -3160,58 +3069,13 @@ def get_prediction(
         )
 
     print(
-        f"\n🎯 ЧЕТНОСТЬ ЦЕЛЕВОЙ ИГРЫ: "
-        f"{'ЧЕТНАЯ' if game_num % 2 == 0 else 'НЕЧЕТНАЯ'} "
-        f"(#{game_num})",
-        flush=True
-    )
-
-    print(
-        "\n🃏 ПРОГНОЗ ПО ЧЕТНОСТИ",
-        flush=True
-    )
-
-    if game_num % 2 == 0:
-
-        print(
-            "   ЧЕТНАЯ игра → "
-            "ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ",
-            flush=True
-        )
-
-    else:
-
-        print(
-            "   НЕЧЕТНАЯ игра → "
-            "ЗЕРКАЛЬНАЯ ЛОГИКА",
-            flush=True
-        )
-
-    for card in predicted_cards:
-
-        mirror_prob = (
-            normalized_probs.get(
-                card,
-                0.0
-            )
-        )
-
-        print(
-            f"   🎯 {card} — "
-            f"{mirror_prob * 100:.2f}%",
-            flush=True
-        )
-
-    print(
-        f"\n🔥 ОСНОВА: {top_card_1} — "
+        f"\n🔥 ЛИДЕР АНАЛИЗА: {top_card_1} — "
         f"{top_prob_1 * 100:.2f}%",
         flush=True
     )
 
     print(
-        f"🎯 ИТОГОВЫЙ ПРОГНОЗ: "
-        f"{predicted_cards[0]} + "
-        f"{predicted_cards[1]}",
+        f"🎯 ИТОГОВЫЙ ПРОГНОЗ: {predicted_cards[0]}",
         flush=True
     )
 
@@ -3223,7 +3087,7 @@ def get_prediction(
 
     return (
         result_cards,
-        "history+ml+suit_parity",
+        "history+ml",
         top_prob_1,
         matches_count,
         top_card_1,
@@ -3389,7 +3253,7 @@ def check_upcoming_games():
 
         if (
             not predicted_cards
-            or len(predicted_cards) != 2
+            or len(predicted_cards) != 1
         ):
 
             print(
@@ -3408,11 +3272,9 @@ def check_upcoming_games():
             in predicted_cards
         ]
 
-        parity_text = "ЧЕТНАЯ" if target_game_num % 2 == 0 else "НЕЧЕТНАЯ"
-        
         msg = (
             "🔮 ТОЧНАЯ КАРТА "
-            "(ИСТОРИЯ + ML + ЧЕТНОСТЬ)\n\n"
+            "(ИСТОРИЯ + ML)\n\n"
         )
 
         msg += (
@@ -3429,11 +3291,7 @@ def check_upcoming_games():
 
         msg += (
             "🤖 Метод: "
-            "История + ML + четность\n"
-        )
-
-        msg += (
-            f"🎯 Четность: {parity_text}\n"
+            "История + ML\n"
         )
 
         msg += (
@@ -3455,17 +3313,8 @@ def check_upcoming_games():
                 f"{base_probability * 100:.1f}%\n\n"
             )
 
-        if target_game_num % 2 == 0:
-            msg += "🎯 ЛОГИКА (ЧЕТНАЯ): ЛИДЕР + ПРОТИВОПОЛОЖНАЯ МАСТЬ\n\n"
-        else:
-            msg += "🎯 ЛОГИКА (НЕЧЕТНАЯ): ЗЕРКАЛЬНЫЕ МАСТИ\n\n"
-
         msg += (
-            f"1️⃣ {cards_list[0]}\n"
-        )
-
-        msg += (
-            f"2️⃣ {cards_list[1]}"
+            f"1️⃣ {cards_list[0]}"
         )
 
         msg += (
@@ -3585,8 +3434,7 @@ def check_upcoming_games():
 
         print(
             f"🃏 Прогноз: "
-            f"{cards_list[0]} + "
-            f"{cards_list[1]}",
+            f"{cards_list[0]}",
             flush=True
         )
 
@@ -4893,7 +4741,6 @@ def send_stats_report():
 
 🎯 Прогноз: +{FORECAST_OFFSET}
 🎯 Минимум лидера: {MIN_FORECAST_PROBABILITY * 100:.0f}%
-🎯 Четность целевой игры: АКТИВНА
 
 📢 Канал прогнозов:
 {CHANNEL_PROGNOZ}
@@ -5256,7 +5103,7 @@ def main():
 
     print(
         "🔮 ТОЧНАЯ КАРТА "
-        "(ИСТОРИЯ + ML + ЧЕТНОСТЬ)",
+        "(ИСТОРИЯ + ML)",
         flush=True
     )
 
@@ -5287,12 +5134,6 @@ def main():
     print(
         f"🎯 Минимум лидера: "
         f"{MIN_FORECAST_PROBABILITY * 100:.0f}%",
-        flush=True
-    )
-
-    print(
-        "🎯 Четность целевой игры: "
-        "АКТИВНА",
         flush=True
     )
 
@@ -5488,12 +5329,6 @@ def main():
     print(
         f"🎯 Прогнозирование: "
         f"+{FORECAST_OFFSET}",
-        flush=True
-    )
-
-    print(
-        "🎯 Четность целевой игры: "
-        "АКТИВНА",
         flush=True
     )
 
