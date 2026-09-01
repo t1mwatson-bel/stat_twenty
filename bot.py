@@ -26,11 +26,6 @@ BOT_TOKEN = (
 
 CHANNEL_STATS = os.getenv("CHANNEL_STATS_BACCARA")
 CHANNEL_PROGNOZ = os.getenv("CHANNEL_PROGNOZ_BACCARA")
-
-# ================================================================
-# НОВАЯ ПЕРЕМЕННАЯ:
-# STATIC = ID канала, куда отправлять почасовую статистику
-# ================================================================
 STATIC = os.getenv("STATIC")
 
 if not BOT_TOKEN or not CHANNEL_STATS or not CHANNEL_PROGNOZ or not STATIC:
@@ -65,8 +60,6 @@ OFFSET_FILE = "cards_offset_baccarat.txt"
 MODEL_FILE = "baccarat_sgd_model.pkl"
 SCANNER_FILE = "baccarat_pattern_scanner.pkl"
 
-# Отдельный файл состояния статистики.
-# Он нужен, чтобы статистика не терялась после перезапуска.
 STATIC_STATS_FILE = "baccarat_static_stats.json"
 
 DOGON_GAMES = 4
@@ -233,37 +226,25 @@ def normalize_stats_structure():
             0: int(
                 old_dogon.get(
                     0,
-                    old_dogon.get(
-                        "0",
-                        0
-                    )
+                    old_dogon.get("0", 0)
                 )
             ),
             1: int(
                 old_dogon.get(
                     1,
-                    old_dogon.get(
-                        "1",
-                        0
-                    )
+                    old_dogon.get("1", 0)
                 )
             ),
             2: int(
                 old_dogon.get(
                     2,
-                    old_dogon.get(
-                        "2",
-                        0
-                    )
+                    old_dogon.get("2", 0)
                 )
             ),
             3: int(
                 old_dogon.get(
                     3,
-                    old_dogon.get(
-                        "3",
-                        0
-                    )
+                    old_dogon.get("3", 0)
                 )
             ),
         }
@@ -288,22 +269,13 @@ def normalize_stats_structure():
 
         stats["model"] = {
             "total": int(
-                old_model.get(
-                    "total",
-                    0
-                )
+                old_model.get("total", 0)
             ),
             "win": int(
-                old_model.get(
-                    "win",
-                    0
-                )
+                old_model.get("win", 0)
             ),
             "lose": int(
-                old_model.get(
-                    "lose",
-                    0
-                )
+                old_model.get("lose", 0)
             ),
         }
 
@@ -350,27 +322,21 @@ def save_static_stats():
 
             "by_dogon": {
                 str(k): int(v)
-                for k, v in stats[
-                    "by_dogon"
-                ].items()
+                for k, v in stats["by_dogon"].items()
             },
 
             "suit_hits": {
                 str(k): int(v)
-                for k, v in stats[
-                    "suit_hits"
-                ].items()
+                for k, v in stats["suit_hits"].items()
             },
 
             "model": {
                 "total": int(
                     stats["model"]["total"]
                 ),
-
                 "win": int(
                     stats["model"]["win"]
                 ),
-
                 "lose": int(
                     stats["model"]["lose"]
                 ),
@@ -400,8 +366,7 @@ def save_static_stats():
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка сохранения STATIC "
-            f"статистики: {e}",
+            f"⚠️ Ошибка сохранения STATIC статистики: {e}",
             flush=True
         )
 
@@ -409,10 +374,6 @@ def save_static_stats():
 def load_static_stats():
 
     global stats
-
-    # ================================================================
-    # Сначала пытаемся загрузить отдельную статистику
-    # ================================================================
 
     if os.path.exists(
         STATIC_STATS_FILE
@@ -438,8 +399,8 @@ def load_static_stats():
                 normalize_stats_structure()
 
                 print(
-                    "📊 Накопительная статистика "
-                    "STATIC загружена: "
+                    "📊 Накопительная статистика STATIC "
+                    "загружена: "
                     f"{stats['total']} прогнозов",
                     flush=True
                 )
@@ -449,15 +410,9 @@ def load_static_stats():
         except Exception as e:
 
             print(
-                f"⚠️ Ошибка загрузки STATIC "
-                f"статистики: {e}",
+                f"⚠️ Ошибка загрузки STATIC статистики: {e}",
                 flush=True
             )
-
-    # ================================================================
-    # Если отдельного файла нет — восстанавливаем
-    # статистику из истории прогнозов.
-    # ================================================================
 
     stats = {
         "total": 0,
@@ -500,7 +455,6 @@ def load_static_stats():
                 continue
 
             stats["total"] += 1
-
             stats["model"]["total"] += 1
 
             if status == "win":
@@ -513,11 +467,8 @@ def load_static_stats():
                 )
 
                 try:
-
                     dogon = int(dogon)
-
                 except Exception:
-
                     dogon = None
 
                 if dogon in (
@@ -531,19 +482,18 @@ def load_static_stats():
                         "by_dogon"
                     ][dogon] += 1
 
-                suit = entry.get(
-                    "found_suit"
-                ) or entry.get(
-                    "model_suit"
+                suit = (
+                    entry.get("found_suit")
+                    or
+                    entry.get("model_suit")
                 )
 
                 if suit:
-
                     stats[
                         "suit_hits"
                     ][suit] += 1
 
-            elif status == "lose":
+            else:
 
                 stats["lose"] += 1
                 stats["model"]["lose"] += 1
@@ -551,8 +501,7 @@ def load_static_stats():
     save_static_stats()
 
     print(
-        "📊 STATIC статистика "
-        "восстановлена из истории: "
+        "📊 STATIC статистика восстановлена из истории: "
         f"{stats['total']} прогнозов",
         flush=True
     )
@@ -572,26 +521,17 @@ def get_cumulative_stats_text():
         stats["lose"]
     )
 
-    if total > 0:
-
-        percent = (
-            win
-            /
-            total
-            *
-            100
-        )
-
-    else:
-
-        percent = 0.0
+    percent = (
+        win / total * 100
+        if total > 0
+        else 0.0
+    )
 
     return (
         f"🎯 Всего: {total}\n"
         f"✅ Зашло: {win}\n"
         f"❌ Проигрыш: {lose}\n\n"
-        f"📈 Проходимость: "
-        f"{percent:.1f}%"
+        f"📈 Проходимость: {percent:.1f}%"
     )
 
 
@@ -639,16 +579,14 @@ def send_hourly_static():
     if message_id:
 
         print(
-            "📊 Почасовая статистика "
-            "отправлена в STATIC",
+            "📊 Почасовая статистика отправлена в STATIC",
             flush=True
         )
 
         return True
 
     print(
-        "⚠️ Не удалось отправить "
-        "почасовую статистику в STATIC",
+        "⚠️ Не удалось отправить почасовую статистику в STATIC",
         flush=True
     )
 
@@ -762,7 +700,6 @@ def load_data():
             data,
             list
         ):
-
             return data
 
         if isinstance(
@@ -789,8 +726,7 @@ def load_data():
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка загрузки "
-            f"{CARDS_DATA_FILE}: {e}",
+            f"⚠️ Ошибка загрузки {CARDS_DATA_FILE}: {e}",
             flush=True
         )
 
@@ -807,11 +743,7 @@ def save_data(
             -MAX_RECORDS:
         ]
 
-        tmp = (
-            CARDS_DATA_FILE
-            +
-            ".tmp"
-        )
+        tmp = CARDS_DATA_FILE + ".tmp"
 
         with open(
             tmp,
@@ -836,8 +768,7 @@ def save_data(
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка сохранения "
-            f"{CARDS_DATA_FILE}: {e}",
+            f"⚠️ Ошибка сохранения {CARDS_DATA_FILE}: {e}",
             flush=True
         )
 
@@ -863,15 +794,11 @@ def load_history():
 
         return (
             data
-            if isinstance(
-                data,
-                list
-            )
+            if isinstance(data, list)
             else []
         )
 
     except Exception:
-
         return []
 
 
@@ -913,7 +840,6 @@ def get_offset():
             )
 
     except Exception:
-
         return 0
 
 
@@ -1023,8 +949,7 @@ def extract_player_cards(
         ):
 
             match = re.search(
-                r"(10|[2-9AJQK])"
-                r"([♠♣♦♥])",
+                r"(10|[2-9AJQK])([♠♣♦♥])",
                 card.replace(
                     "\ufe0f",
                     ""
@@ -1035,13 +960,10 @@ def extract_player_cards(
 
                 result.append(
                     {
-                        "rank":
-                            match.group(1),
-
-                        "suit":
-                            normalize_suit(
-                                match.group(2)
-                            ),
+                        "rank": match.group(1),
+                        "suit": normalize_suit(
+                            match.group(2)
+                        ),
                     }
                 )
 
@@ -1054,11 +976,8 @@ def extract_player_suits(
 
     return [
         card["suit"]
-        for card in extract_player_cards(
-            record
-        )
-        if card.get("suit")
-        in TARGET_SUITS
+        for card in extract_player_cards(record)
+        if card.get("suit") in TARGET_SUITS
     ]
 
 
@@ -1091,8 +1010,7 @@ def parse_suits_from_text(
         suits = []
 
         for suit in re.findall(
-            r"(?:10|[2-9AJQK])"
-            r"([♠♣♦♥])",
+            r"(?:10|[2-9AJQK])([♠♣♦♥])",
             match.group(1)
         ):
 
@@ -1108,7 +1026,6 @@ def parse_suits_from_text(
         return suits
 
     except Exception:
-
         return []
 
 
@@ -1141,25 +1058,20 @@ def parse_full_cards_from_text(
         result = []
 
         for rank, suit in re.findall(
-            r"(10|[2-9AJQK])"
-            r"([♠♣♦♥])",
+            r"(10|[2-9AJQK])([♠♣♦♥])",
             match.group(1)
         ):
 
             result.append(
                 {
                     "rank": rank,
-                    "suit":
-                        normalize_suit(
-                            suit
-                        ),
+                    "suit": normalize_suit(suit),
                 }
             )
 
         return result
 
     except Exception:
-
         return []
 
 
@@ -1197,9 +1109,7 @@ def get_game_number_from_timestamp(
 
             if dt.tzinfo is None:
 
-                dt = MOSCOW_TZ.localize(
-                    dt
-                )
+                dt = MOSCOW_TZ.localize(dt)
 
             else:
 
@@ -1208,7 +1118,6 @@ def get_game_number_from_timestamp(
                 )
 
     except Exception:
-
         return None
 
     start = dt.replace(
@@ -1270,48 +1179,28 @@ def record_signature(
                 "?"
             )
         )
-        for card in extract_player_cards(
-            record
-        )
+        for card in extract_player_cards(record)
     ]
 
     game_number = (
         int(
-            record.get(
-                "game_number"
-            )
+            record.get("game_number")
         )
         if str(
-            record.get(
-                "game_number",
-                ""
-            )
+            record.get("game_number", "")
         ).isdigit()
         else get_game_number_from_timestamp(
-            record.get(
-                "timestamp_msk"
-            )
+            record.get("timestamp_msk")
         )
     )
 
     return {
-        "suits": set(
-            suits
-        ),
-
+        "suits": set(suits),
         "ranks": ranks,
-
-        "count": len(
-            suits
-        ),
-
+        "count": len(suits),
         "state": str(
-            record.get(
-                "state",
-                ""
-            )
+            record.get("state", "")
         ),
-
         "game_num": game_number,
     }
 
@@ -1326,13 +1215,10 @@ def _tail_streak(
 
     count = 0
 
-    for value in reversed(
-        values
-    ):
+    for value in reversed(values):
 
         if value:
             count += 1
-
         else:
             break
 
@@ -1354,25 +1240,19 @@ def build_scanner_feature_map(
         return features
 
     history = [
-        record_signature(
-            record
-        )
+        record_signature(record)
         for record in data[:idx]
     ]
 
     current = history[-1]
 
-    # ================================================================
-    # LAG FEATURES
-    # ================================================================
+    # =================================================================
+    # LAGS
+    # =================================================================
 
     for lag in PATTERN_LAGS:
 
-        pos = (
-            len(history)
-            -
-            lag
-        )
+        pos = len(history) - lag
 
         if pos < 0:
             continue
@@ -1397,15 +1277,13 @@ def build_scanner_feature_map(
             f"lag{lag}_cards"
         ] = historical["count"]
 
-    # ================================================================
-    # WINDOW FEATURES
-    # ================================================================
+    # =================================================================
+    # WINDOWS
+    # =================================================================
 
     for window in PATTERN_WINDOWS:
 
-        sequence = history[
-            -window:
-        ]
+        sequence = history[-window:]
 
         if not sequence:
             continue
@@ -1419,9 +1297,7 @@ def build_scanner_feature_map(
                 for item in sequence
             ]
 
-            total = sum(
-                values
-            )
+            total = sum(values)
 
             features[
                 f"win{window}_cnt_{suit}"
@@ -1430,9 +1306,7 @@ def build_scanner_feature_map(
             features[
                 f"win{window}_rate_{suit}"
             ] = (
-                total
-                /
-                len(sequence)
+                total / len(sequence)
             )
 
             features[
@@ -1441,20 +1315,12 @@ def build_scanner_feature_map(
 
             features[
                 f"win{window}_streak_{suit}"
-            ] = _tail_streak(
-                values
-            )
+            ] = _tail_streak(values)
 
             features[
                 f"win{window}_majority_{suit}"
             ] = int(
-                total
-                >=
-                (
-                    len(sequence)
-                    *
-                    0.50
-                )
+                total >= len(sequence) * 0.50
             )
 
             features[
@@ -1474,9 +1340,9 @@ def build_scanner_feature_map(
             len(sequence)
         )
 
-    # ================================================================
+    # =================================================================
     # PREVIOUS GAME
-    # ================================================================
+    # =================================================================
 
     features[
         "prev_cards"
@@ -1496,21 +1362,15 @@ def build_scanner_feature_map(
             suit not in current["suits"]
         )
 
-    # ================================================================
+    # =================================================================
     # PAIRS
-    # ================================================================
+    # =================================================================
 
-    for i, suit_a in enumerate(
-        TARGET_SUITS
-    ):
+    for i, suit_a in enumerate(TARGET_SUITS):
 
-        for suit_b in TARGET_SUITS[
-            i + 1:
-        ]:
+        for suit_b in TARGET_SUITS[i + 1:]:
 
-            pair_name = (
-                f"{suit_a}_{suit_b}"
-            )
+            pair_name = f"{suit_a}_{suit_b}"
 
             features[
                 f"prev_pair_{pair_name}"
@@ -1520,37 +1380,28 @@ def build_scanner_feature_map(
                 suit_b in current["suits"]
             )
 
-    # ================================================================
+    # =================================================================
     # TRIPLES
-    # ================================================================
+    # =================================================================
 
-    for i, suit_a in enumerate(
-        TARGET_SUITS
-    ):
+    for i, suit_a in enumerate(TARGET_SUITS):
 
-        for j, suit_b in enumerate(
-            TARGET_SUITS
-        ):
+        for j, suit_b in enumerate(TARGET_SUITS):
 
             if j <= i:
                 continue
 
-            for k, suit_c in enumerate(
-                TARGET_SUITS
-            ):
+            for k, suit_c in enumerate(TARGET_SUITS):
 
                 if k <= j:
                     continue
 
                 triple_name = (
-                    f"{suit_a}_"
-                    f"{suit_b}_"
-                    f"{suit_c}"
+                    f"{suit_a}_{suit_b}_{suit_c}"
                 )
 
                 features[
-                    f"prev_triple_"
-                    f"{triple_name}"
+                    f"prev_triple_{triple_name}"
                 ] = int(
                     suit_a in current["suits"]
                     and
@@ -1559,9 +1410,9 @@ def build_scanner_feature_map(
                     suit_c in current["suits"]
                 )
 
-    # ================================================================
+    # =================================================================
     # TRANSITIONS
-    # ================================================================
+    # =================================================================
 
     if len(history) >= 2:
 
@@ -1572,8 +1423,7 @@ def build_scanner_feature_map(
             for suit_b in TARGET_SUITS:
 
                 features[
-                    f"transition_"
-                    f"{suit_a}_{suit_b}"
+                    f"transition_{suit_a}_{suit_b}"
                 ] = int(
                     suit_a in previous["suits"]
                     and
@@ -1581,17 +1431,16 @@ def build_scanner_feature_map(
                 )
 
                 features[
-                    f"transition_not_"
-                    f"{suit_a}_{suit_b}"
+                    f"transition_not_{suit_a}_{suit_b}"
                 ] = int(
                     suit_a not in previous["suits"]
                     and
                     suit_b in current["suits"]
                 )
 
-    # ================================================================
-    # LAST TWO GAMES
-    # ================================================================
+    # =================================================================
+    # LAST TWO
+    # =================================================================
 
     if len(history) >= 2:
 
@@ -1604,31 +1453,23 @@ def build_scanner_feature_map(
 
             features[
                 f"repeat2_{suit}"
-            ] = int(
-                a and b
-            )
+            ] = int(a and b)
 
             features[
                 f"break2_{suit}"
-            ] = int(
-                a and not b
-            )
+            ] = int(a and not b)
 
             features[
                 f"return2_{suit}"
-            ] = int(
-                not a and b
-            )
+            ] = int(not a and b)
 
             features[
                 f"absent2_{suit}"
-            ] = int(
-                not a and not b
-            )
+            ] = int(not a and not b)
 
-    # ================================================================
-    # LAST THREE GAMES
-    # ================================================================
+    # =================================================================
+    # LAST THREE
+    # =================================================================
 
     if len(history) >= 3:
 
@@ -1649,14 +1490,12 @@ def build_scanner_feature_map(
             )
 
             features[
-                f"last3_"
-                f"{suit}_"
-                f"{pattern_name}"
+                f"last3_{suit}_{pattern_name}"
             ] = 1
 
-    # ================================================================
-    # LAST FIVE GAMES
-    # ================================================================
+    # =================================================================
+    # LAST FIVE
+    # =================================================================
 
     if len(history) >= 5:
 
@@ -1672,32 +1511,21 @@ def build_scanner_feature_map(
             ]
 
             alternating = all(
-                values[i]
-                !=
-                values[i - 1]
-                for i in range(
-                    1,
-                    len(values)
-                )
+                values[i] != values[i - 1]
+                for i in range(1, len(values))
             )
 
             features[
                 f"alternate5_{suit}"
-            ] = int(
-                alternating
-            )
+            ] = int(alternating)
 
             features[
                 f"hot5_{suit}"
-            ] = int(
-                sum(values) >= 3
-            )
+            ] = int(sum(values) >= 3)
 
             features[
                 f"cold5_{suit}"
-            ] = int(
-                sum(values) == 0
-            )
+            ] = int(sum(values) == 0)
 
     return features
 
@@ -1711,16 +1539,12 @@ def target_presence(
 ):
 
     suits = set(
-        extract_player_suits(
-            record
-        )
+        extract_player_suits(record)
     )
 
     return np.array(
         [
-            1
-            if suit in suits
-            else 0
+            1 if suit in suits else 0
             for suit in TARGET_SUITS
         ],
         dtype=int
@@ -1739,16 +1563,12 @@ def train_pattern_scanner(
     global scanner_last_train_count
 
     if len(data) < MIN_TRAIN_SAMPLES:
-
         return False
 
     feature_rows = []
     targets = []
 
-    for i in range(
-        1,
-        len(data)
-    ):
+    for i in range(1, len(data)):
 
         features = build_scanner_feature_map(
             data,
@@ -1758,18 +1578,13 @@ def train_pattern_scanner(
         if not features:
             continue
 
-        feature_rows.append(
-            features
-        )
+        feature_rows.append(features)
 
         targets.append(
-            target_presence(
-                data[i]
-            )
+            target_presence(data[i])
         )
 
     if len(feature_rows) < MIN_TRAIN_SAMPLES:
-
         return False
 
     names = sorted(
@@ -1780,9 +1595,7 @@ def train_pattern_scanner(
         }
     )
 
-    target_array = np.array(
-        targets
-    )
+    target_array = np.array(targets)
 
     baseline = np.mean(
         target_array,
@@ -1795,10 +1608,7 @@ def train_pattern_scanner(
 
         values = np.array(
             [
-                row.get(
-                    name,
-                    0.0
-                )
+                row.get(name, 0.0)
                 for row in feature_rows
             ],
             dtype=float
@@ -1807,16 +1617,12 @@ def train_pattern_scanner(
         if len(values) == 0:
             continue
 
-        if np.all(
-            values == values[0]
-        ):
+        if np.all(values == values[0]):
             continue
 
         mask = values > 0
 
-        support = int(
-            mask.sum()
-        )
+        support = int(mask.sum())
 
         if support < PATTERN_MIN_SUPPORT:
             continue
@@ -1824,9 +1630,7 @@ def train_pattern_scanner(
         if support < len(values) * 0.02:
             continue
 
-        for class_idx, suit in enumerate(
-            TARGET_SUITS
-        ):
+        for class_idx, suit in enumerate(TARGET_SUITS):
 
             precision = float(
                 np.mean(
@@ -1843,17 +1647,13 @@ def train_pattern_scanner(
             lift = (
                 precision
                 /
-                float(
-                    baseline[class_idx]
-                )
+                float(baseline[class_idx])
             )
 
             if (
-                precision
-                >= PATTERN_MIN_PRECISION
+                precision >= PATTERN_MIN_PRECISION
                 and
-                lift
-                >= PATTERN_MIN_LIFT
+                lift >= PATTERN_MIN_LIFT
             ):
 
                 discovered.append(
@@ -1868,9 +1668,7 @@ def train_pattern_scanner(
 
     discovered.sort(
         key=lambda x: (
-            x["lift"]
-            *
-            x["precision"],
+            x["lift"] * x["precision"],
             x["support"]
         ),
         reverse=True
@@ -1880,9 +1678,7 @@ def train_pattern_scanner(
         :PATTERN_MAX_FEATURES
     ]
 
-    scanner_last_train_count = len(
-        data
-    )
+    scanner_last_train_count = len(data)
 
     try:
 
@@ -1906,28 +1702,6 @@ def train_pattern_scanner(
         flush=True
     )
 
-    if scanner_patterns:
-
-        print(
-            "   ⭐ TOP PATTERNS:",
-            flush=True
-        )
-
-        for pattern in scanner_patterns[:10]:
-
-            print(
-                "   "
-                f"{pattern['feature']} → "
-                f"{pattern['suit']} | "
-                f"precision="
-                f"{pattern['precision'] * 100:.1f}% | "
-                f"lift="
-                f"{pattern['lift']:.2f} | "
-                f"support="
-                f"{pattern['support']}",
-                flush=True
-            )
-
     return True
 
 
@@ -1942,15 +1716,9 @@ def load_pattern_scanner():
             "rb"
         ) as f:
 
-            patterns = pickle.load(
-                f
-            )
+            patterns = pickle.load(f)
 
-        if isinstance(
-            patterns,
-            list
-        ):
-
+        if isinstance(patterns, list):
             scanner_patterns = patterns
 
     except Exception:
@@ -1967,40 +1735,24 @@ def scanner_scores_for_target(
     target_record
 ):
 
-    if (
-        not scanner_patterns
-        or
-        not data
-    ):
+    if not scanner_patterns or not data:
 
         return {
             suit: 0.0
             for suit in TARGET_SUITS
         }
 
-    temp = list(
-        data
-    )
+    temp = list(data)
 
     target_copy = dict(
         target_record
     )
 
-    target_copy[
-        "player_cards"
-    ] = []
+    target_copy["player_cards"] = []
+    target_copy["dealer_cards"] = []
+    target_copy["sequence"] = []
 
-    target_copy[
-        "dealer_cards"
-    ] = []
-
-    target_copy[
-        "sequence"
-    ] = []
-
-    temp.append(
-        target_copy
-    )
+    temp.append(target_copy)
 
     features = build_scanner_feature_map(
         temp,
@@ -2025,9 +1777,7 @@ def scanner_scores_for_target(
         weight = max(
             0.0,
             (
-                pattern["lift"]
-                -
-                1.0
+                pattern["lift"] - 1.0
             )
             *
             pattern["precision"]
@@ -2035,11 +1785,7 @@ def scanner_scores_for_target(
 
         scores[
             pattern["suit"]
-        ] += (
-            value
-            *
-            weight
-        )
+        ] += value * weight
 
         weights[
             pattern["suit"]
@@ -2073,29 +1819,17 @@ def scanner_feature_vector(
     target_record
 ):
 
-    temp = list(
-        data
-    )
+    temp = list(data)
 
     target_copy = dict(
         target_record
     )
 
-    target_copy[
-        "player_cards"
-    ] = []
+    target_copy["player_cards"] = []
+    target_copy["dealer_cards"] = []
+    target_copy["sequence"] = []
 
-    target_copy[
-        "dealer_cards"
-    ] = []
-
-    target_copy[
-        "sequence"
-    ] = []
-
-    temp.append(
-        target_copy
-    )
+    temp.append(target_copy)
 
     return build_scanner_feature_map(
         temp,
@@ -2114,10 +1848,7 @@ def build_ml_training(
     rows = []
     targets = []
 
-    for i in range(
-        1,
-        len(data)
-    ):
+    for i in range(1, len(data)):
 
         features = build_scanner_feature_map(
             data,
@@ -2127,14 +1858,10 @@ def build_ml_training(
         if not features:
             continue
 
-        rows.append(
-            features
-        )
+        rows.append(features)
 
         targets.append(
-            target_presence(
-                data[i]
-            )
+            target_presence(data[i])
         )
 
     if not rows:
@@ -2157,10 +1884,7 @@ def build_ml_training(
         [
             [
                 float(
-                    row.get(
-                        name,
-                        0.0
-                    )
+                    row.get(name, 0.0)
                 )
                 for name in names
             ]
@@ -2197,16 +1921,13 @@ def train_ml_model():
 
         print(
             f"⏳ SGD: "
-            f"{len(data)}/"
-            f"{MIN_TRAIN_SAMPLES}",
+            f"{len(data)}/{MIN_TRAIN_SAMPLES}",
             flush=True
         )
 
         return False
 
-    X, Y, names = build_ml_training(
-        data
-    )
+    X, Y, names = build_ml_training(data)
 
     if (
         X is None
@@ -2220,9 +1941,7 @@ def train_ml_model():
 
         scaler = StandardScaler()
 
-        X_scaled = scaler.fit_transform(
-            X
-        )
+        X_scaled = scaler.fit_transform(X)
 
         estimators = []
 
@@ -2252,9 +1971,7 @@ def train_ml_model():
 
         ml_scaler = scaler
 
-        ml_last_train_count = len(
-            data
-        )
+        ml_last_train_count = len(data)
 
         with open(
             MODEL_FILE,
@@ -2308,17 +2025,10 @@ def load_ml_model():
             "rb"
         ) as f:
 
-            obj = pickle.load(
-                f
-            )
+            obj = pickle.load(f)
 
-        ml_model = obj.get(
-            "model"
-        )
-
-        ml_scaler = obj.get(
-            "scaler"
-        )
+        ml_model = obj.get("model")
+        ml_scaler = obj.get("scaler")
 
         return bool(
             ml_model
@@ -2377,9 +2087,7 @@ def get_ml_prediction(
             dtype=float
         )
 
-        X_scaled = ml_scaler.transform(
-            X
-        )
+        X_scaled = ml_scaler.transform(X)
 
         result = {}
 
@@ -2401,9 +2109,7 @@ def get_ml_prediction(
                 ).index(1)
 
                 probability = float(
-                    probabilities[
-                        class_index
-                    ]
+                    probabilities[class_index]
                 )
 
             else:
@@ -2415,9 +2121,7 @@ def get_ml_prediction(
             ] = probability
 
         confidence = (
-            max(
-                result.values()
-            )
+            max(result.values())
             if result
             else 0.0
         )
@@ -2454,8 +2158,7 @@ def get_model_prediction(
     if target_record is None:
 
         target_record = {
-            "timestamp_msk":
-                timestamp_msk
+            "timestamp_msk": timestamp_msk
         }
 
     else:
@@ -2468,11 +2171,9 @@ def get_model_prediction(
             "timestamp_msk"
         ] = timestamp_msk
 
-    model_probs, confidence = (
-        get_ml_prediction(
-            data,
-            target_record
-        )
+    model_probs, confidence = get_ml_prediction(
+        data,
+        target_record
     )
 
     if not model_probs:
@@ -2484,19 +2185,19 @@ def get_model_prediction(
             "ml_confidence": 0.0,
         }
 
-    scanner_probs = (
-        scanner_scores_for_target(
-            data,
-            target_record
-        )
+    scanner_probs = scanner_scores_for_target(
+        data,
+        target_record
     )
 
-    # ================================================================
-    # COMBINATION
+    # =================================================================
+    # СТАРАЯ КОМБИНАЦИЯ:
     #
     # SGD = 85%
     # Scanner = 15%
-    # ================================================================
+    #
+    # НИЖЕ НИЧЕГО НЕ МЕНЯЕМ.
+    # =================================================================
 
     combined_probs = {}
 
@@ -2523,10 +2224,7 @@ def get_model_prediction(
         key=combined_probs.get
     )
 
-    if (
-        confidence
-        < ML_CONFIDENCE_THRESHOLD
-    ):
+    if confidence < ML_CONFIDENCE_THRESHOLD:
 
         model_suit = None
 
@@ -2570,10 +2268,7 @@ def get_upcoming_games():
 
         data = response.json()
 
-        if not isinstance(
-            data,
-            list
-        ):
+        if not isinstance(data, list):
             return []
 
         now = datetime.now(
@@ -2594,9 +2289,7 @@ def get_upcoming_games():
                 []
             ):
 
-                if sport.get(
-                    "id"
-                ) != SPORT_ID:
+                if sport.get("id") != SPORT_ID:
                     continue
 
                 for liga in sport.get(
@@ -2604,9 +2297,7 @@ def get_upcoming_games():
                     []
                 ):
 
-                    if liga.get(
-                        "id"
-                    ) != LIGA_ID:
+                    if liga.get("id") != LIGA_ID:
                         continue
 
                     for game in liga.get(
@@ -2626,31 +2317,22 @@ def get_upcoming_games():
                         if not start_ts:
                             continue
 
-                        start_time = (
-                            datetime.fromtimestamp(
-                                start_ts,
-                                MOSCOW_TZ
-                            )
+                        start_time = datetime.fromtimestamp(
+                            start_ts,
+                            MOSCOW_TZ
                         )
 
                         minutes = (
-                            start_time
-                            -
-                            now
+                            start_time - now
                         ).total_seconds() / 60
 
-                        if (
-                            0 < minutes <= 20
-                        ):
+                        if 0 < minutes <= 20:
 
                             games.append(
                                 {
-                                    "game_id":
-                                        str(
-                                            game.get(
-                                                "id"
-                                            )
-                                        ),
+                                    "game_id": str(
+                                        game.get("id")
+                                    ),
 
                                     "game_num":
                                         get_game_number_from_timestamp(
@@ -2667,6 +2349,30 @@ def get_upcoming_games():
                                         minutes,
                                 }
                             )
+
+        # =============================================================
+        # ВАЖНО:
+        # Сортируем по времени начала.
+        #
+        # Раньше цикл мог прогнать сразу несколько будущих игр.
+        # Все они получали одинаковую текущую историю и поэтому
+        # одинаковый прогноз.
+        #
+        # Теперь возвращаем игры строго по ближайшему времени.
+        # =============================================================
+
+        games.sort(
+            key=lambda x: (
+                x.get(
+                    "start_ts",
+                    0
+                ),
+                x.get(
+                    "game_num",
+                    0
+                )
+            )
+        )
 
         return games
 
@@ -2706,173 +2412,181 @@ def check_upcoming_games():
 
     upcoming = get_upcoming_games()
 
-    for game in upcoming:
+    if not upcoming:
+        return
 
-        target_num = game.get(
-            "game_num"
-        )
+    # ================================================================
+    # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+    #
+    # Берём ТОЛЬКО БЛИЖАЙШУЮ игру.
+    #
+    # Нельзя одновременно делать прогнозы для #1085, #1086,
+    # #1087, #1088 и т.д., потому что история для них одна и та же.
+    # ================================================================
 
-        game_id = game.get(
-            "game_id"
-        )
+    game = upcoming[0]
 
-        if (
-            not target_num
-            or
-            not game_id
-            or
-            game_id in seen_upcoming_games
-        ):
-            continue
+    target_num = game.get(
+        "game_num"
+    )
 
-        seen_upcoming_games.add(
-            game_id
-        )
+    game_id = game.get(
+        "game_id"
+    )
 
-        if has_prediction_for_target(
-            target_num
-        ):
-            continue
+    if not target_num or not game_id:
+        return
 
-        now = datetime.now(
-            MOSCOW_TZ
-        )
+    # ================================================================
+    # Если уже существует прогноз для этой игры — ничего не делаем.
+    # ================================================================
 
-        timestamp = now.strftime(
-            "%H:%M:%S"
-        )
+    if has_prediction_for_target(
+        target_num
+    ):
 
-        target_meta = {
-            "game_id":
-                game_id,
+        return
 
-            "game_number":
-                target_num,
+    # ================================================================
+    # Защита от повторной обработки одного API game_id.
+    # ================================================================
 
-            "timestamp_msk":
-                timestamp,
+    if game_id in seen_upcoming_games:
 
-            "start_ts":
-                game.get(
-                    "start_ts"
-                ),
-        }
+        return
 
-        result = get_model_prediction(
+    now = datetime.now(
+        MOSCOW_TZ
+    )
+
+    timestamp = now.strftime(
+        "%H:%M:%S"
+    )
+
+    target_meta = {
+        "game_id":
+            game_id,
+
+        "game_number":
+            target_num,
+
+        "timestamp_msk":
             timestamp,
-            target_meta
-        )
 
-        model_suit = result.get(
-            "model_suit"
-        )
+        "start_ts":
+            game.get("start_ts"),
+    }
 
-        if not model_suit:
+    result = get_model_prediction(
+        timestamp,
+        target_meta
+    )
 
-            print(
-                f"⏭️ Нет прогноза модели "
-                f"для #{target_num}",
-                flush=True
-            )
+    model_suit = result.get(
+        "model_suit"
+    )
 
-            continue
-
-        model_probs = result.get(
-            "model_probs",
-            {}
-        )
-
-        scanner_probs = result.get(
-            "scanner_probs",
-            {}
-        )
-
-        confidence = result.get(
-            "ml_confidence",
-            0.0
-        )
-
-        # ============================================================
-        # ВАЖНО:
-        # Пользователю больше НЕ показываем:
-        #
-        # - вероятности
-        # - Pattern Scanner
-        # - уверенность SGD
-        # - догон
-        # - технические данные
-        #
-        # ОСТАВЛЯЕМ ТОЛЬКО:
-        #
-        # 🎯 Игра: #N1079: ♦️
-        # ============================================================
-
-        msg = (
-            f"🎯 Игра: "
-            f"#N{target_num}: "
-            f"{model_suit}"
-        )
-
-        msg_id = send_message(
-            CHANNEL_PROGNOZ,
-            msg
-        )
-
-        if not msg_id:
-            continue
-
-        entry = {
-            "target": target_num,
-
-            "source": target_num,
-
-            "game_id": game_id,
-
-            "message_id": msg_id,
-
-            "original_text": msg,
-
-            "status": "pending",
-
-            "timestamp_msk": timestamp,
-
-            "model_suit": model_suit,
-
-            "model_probs": model_probs,
-
-            "scanner_probs": scanner_probs,
-
-            "ml_confidence": confidence,
-
-            "created": now.isoformat(),
-        }
-
-        # Совместимость
-        entry[
-            "main_suit"
-        ] = model_suit
-
-        entry[
-            "additional_suit"
-        ] = None
-
-        predictions.append(
-            entry
-        )
-
-        save_history(
-            predictions
-        )
+    if not model_suit:
 
         print(
-            f"🔮 #{target_num}: "
-            f"{model_suit} | "
-            f"уверенность="
-            f"{confidence * 100:.1f}% | "
-            f"сообщение отправлено "
-            "в минимальном формате",
+            f"⏭️ Нет прогноза модели "
+            f"для #{target_num}",
             flush=True
         )
+
+        return
+
+    model_probs = result.get(
+        "model_probs",
+        {}
+    )
+
+    scanner_probs = result.get(
+        "scanner_probs",
+        {}
+    )
+
+    confidence = result.get(
+        "ml_confidence",
+        0.0
+    )
+
+    # ================================================================
+    # МИНИМАЛЬНЫЙ ФОРМАТ.
+    #
+    # НИКАКИХ:
+    # - вероятностей
+    # - Pattern Scanner
+    # - уверенности SGD
+    # - догонов
+    # - технической информации
+    # ================================================================
+
+    msg = (
+        f"🎯 Игра: "
+        f"#N{target_num}: "
+        f"{model_suit}"
+    )
+
+    msg_id = send_message(
+        CHANNEL_PROGNOZ,
+        msg
+    )
+
+    if not msg_id:
+        return
+
+    # Только после успешной отправки считаем игру обработанной.
+    seen_upcoming_games.add(
+        game_id
+    )
+
+    entry = {
+        "target": target_num,
+
+        "source": target_num,
+
+        "game_id": game_id,
+
+        "message_id": msg_id,
+
+        "original_text": msg,
+
+        "status": "pending",
+
+        "timestamp_msk": timestamp,
+
+        "model_suit": model_suit,
+
+        "model_probs": model_probs,
+
+        "scanner_probs": scanner_probs,
+
+        "ml_confidence": confidence,
+
+        "created": now.isoformat(),
+    }
+
+    # Совместимость
+    entry["main_suit"] = model_suit
+    entry["additional_suit"] = None
+
+    predictions.append(
+        entry
+    )
+
+    save_history(
+        predictions
+    )
+
+    print(
+        f"🔮 #{target_num}: "
+        f"{model_suit} | "
+        f"уверенность="
+        f"{confidence * 100:.1f}% | "
+        f"прогноз отправлен",
+        flush=True
+    )
 
 
 # =====================================================================
@@ -2888,9 +2602,7 @@ def cache_result(
         int(num)
     ] = text
 
-    if len(
-        games_cache
-    ) > 1000:
+    if len(games_cache) > 1000:
 
         for key in list(
             games_cache
@@ -2921,20 +2633,15 @@ def add_game_to_cards_data(
         return False
 
     signature = "".join(
-        f"{card['rank']}"
-        f"{card['suit']}"
+        f"{card['rank']}{card['suit']}"
         for card in cards
     )
 
     for old in data:
 
         if str(
-            old.get(
-                "game_id"
-            )
-        ) != str(
-            game_num
-        ):
+            old.get("game_id")
+        ) != str(game_num):
             continue
 
         old_signature = "".join(
@@ -2944,10 +2651,7 @@ def add_game_to_cards_data(
                 "player_cards",
                 []
             )
-            if isinstance(
-                card,
-                dict
-            )
+            if isinstance(card, dict)
         )
 
         if old_signature == signature:
@@ -2959,13 +2663,10 @@ def add_game_to_cards_data(
     )
 
     record = {
-        "game_id":
-            str(game_num),
+        "game_id": str(game_num),
 
         "timestamp_msk":
-            now.strftime(
-                "%H:%M:%S"
-            ),
+            now.strftime("%H:%M:%S"),
 
         "recorded_at":
             now.isoformat(),
@@ -2990,13 +2691,9 @@ def add_game_to_cards_data(
         record
     )
 
-    data = data[
-        -MAX_RECORDS:
-    ]
+    data = data[-MAX_RECORDS:]
 
-    return save_data(
-        data
-    )
+    return save_data(data)
 
 
 # =====================================================================
@@ -3029,11 +2726,6 @@ def check_results():
 
         msg_id = entry.get(
             "message_id"
-        )
-
-        original = entry.get(
-            "original_text",
-            ""
         )
 
         if (
@@ -3073,33 +2765,21 @@ def check_results():
                 continue
 
             actual = set(
-                parse_suits_from_text(
-                    text
-                )
+                parse_suits_from_text(text)
             )
 
             model_hit = (
-                model_suit
-                in actual
+                model_suit in actual
             )
 
             if model_hit:
 
                 found = {
-                    "num":
-                        num,
-
-                    "dogon":
-                        dogon,
-
-                    "suit":
-                        model_suit,
-
-                    "model_hit":
-                        True,
-
-                    "text":
-                        text,
+                    "num": num,
+                    "dogon": dogon,
+                    "suit": model_suit,
+                    "model_hit": True,
+                    "text": text,
                 }
 
                 break
@@ -3110,13 +2790,8 @@ def check_results():
 
         if found:
 
-            stats[
-                "total"
-            ] += 1
-
-            stats[
-                "win"
-            ] += 1
+            stats["total"] += 1
+            stats["win"] += 1
 
             stats[
                 "by_dogon"
@@ -3132,25 +2807,11 @@ def check_results():
 
             stats[
                 "model"
-            ][
-                "total"
-            ] += 1
+            ]["total"] += 1
 
             stats[
                 "model"
-            ][
-                "win"
-            ] += 1
-
-            # ========================================================
-            # МИНИМАЛЬНЫЙ РЕЗУЛЬТАТ
-            #
-            # Было:
-            # огромный блок с догоном, моделью и т.д.
-            #
-            # Теперь:
-            # 🎯 Игра: #N1079: ♦️ ✅
-            # ========================================================
+            ]["win"] += 1
 
             result_text = (
                 f"🎯 Игра: "
@@ -3165,8 +2826,7 @@ def check_results():
 
             entry.update(
                 {
-                    "status":
-                        "win",
+                    "status": "win",
 
                     "result_game":
                         found["num"],
@@ -3202,36 +2862,22 @@ def check_results():
         # ============================================================
 
         if not all_available:
-
             continue
 
         # ============================================================
         # LOSE
         # ============================================================
 
-        stats[
-            "total"
-        ] += 1
-
-        stats[
-            "lose"
-        ] += 1
+        stats["total"] += 1
+        stats["lose"] += 1
 
         stats[
             "model"
-        ][
-            "total"
-        ] += 1
+        ]["total"] += 1
 
         stats[
             "model"
-        ][
-            "lose"
-        ] += 1
-
-        # ============================================================
-        # МИНИМАЛЬНЫЙ РЕЗУЛЬТАТ
-        # ============================================================
+        ]["lose"] += 1
 
         result_text = (
             f"🎯 Игра: "
@@ -3244,9 +2890,7 @@ def check_results():
             result_text
         )
 
-        entry[
-            "status"
-        ] = "lose"
+        entry["status"] = "lose"
 
         changed = True
 
@@ -3257,7 +2901,6 @@ def check_results():
         save_static_stats()
 
     if changed:
-
         print_stats()
 
 
@@ -3285,23 +2928,14 @@ def process_updates(
         if update_id is None:
             continue
 
-        offset = (
-            update_id
-            + 1
-        )
+        offset = update_id + 1
 
-        save_offset(
-            offset
-        )
+        save_offset(offset)
 
         post = (
-            update.get(
-                "channel_post"
-            )
+            update.get("channel_post")
             or
-            update.get(
-                "edited_channel_post"
-            )
+            update.get("edited_channel_post")
         )
 
         if not post:
@@ -3352,10 +2986,6 @@ def process_updates(
             text
         )
 
-        # ============================================================
-        # ВСЕ ИГРЫ ИДУТ В DATA
-        # ============================================================
-
         add_game_to_cards_data(
             num,
             text
@@ -3380,27 +3010,13 @@ def maybe_retrain_models():
     if count < MIN_TRAIN_SAMPLES:
         return
 
-    # ================================================================
-    # PATTERN SCANNER
-    # ================================================================
-
-    if (
-        scanner_last_train_count
-        != count
-    ):
+    if scanner_last_train_count != count:
 
         train_pattern_scanner(
             data
         )
 
-    # ================================================================
-    # SGD
-    # ================================================================
-
-    if (
-        ml_last_train_count
-        != count
-    ):
+    if ml_last_train_count != count:
 
         train_ml_model()
 
@@ -3411,39 +3027,22 @@ def maybe_retrain_models():
 
 def print_stats():
 
-    total = stats[
-        "total"
-    ]
+    total = stats["total"]
+    win = stats["win"]
+    lose = stats["lose"]
 
-    win = stats[
-        "win"
-    ]
-
-    lose = stats[
-        "lose"
-    ]
-
-    if total > 0:
-
-        percent = (
-            win
-            /
-            total
-            *
-            100
-        )
-
-    else:
-
-        percent = 0.0
+    percent = (
+        win / total * 100
+        if total > 0
+        else 0.0
+    )
 
     print(
         "📊 "
         f"Всего={total} | "
         f"WIN={win} | "
         f"LOSE={lose} | "
-        f"Проходимость="
-        f"{percent:.2f}%",
+        f"Проходимость={percent:.2f}%",
         flush=True
     )
 
@@ -3472,27 +3071,17 @@ def main():
     )
 
     print(
-        "🔎 Pattern Scanner: "
-        "LAG + WINDOWS + TRANSITIONS + "
-        "PAIR + TRIPLE + STREAK + "
-        "REPEAT + ALTERNATION",
-        flush=True
-    )
-
-    print(
         "⏱ Миллисекундные признаки: ОТКЛЮЧЕНЫ",
         flush=True
     )
 
     print(
-        f"📚 История: максимум "
-        f"{MAX_RECORDS} игр",
+        f"📚 История: максимум {MAX_RECORDS} игр",
         flush=True
     )
 
     print(
-        f"📊 STATIC канал: "
-        f"{STATIC}",
+        f"📊 STATIC канал: {STATIC}",
         flush=True
     )
 
@@ -3502,8 +3091,7 @@ def main():
     )
 
     print(
-        "📊 Статистика: "
-        "накопительная + 1 раз в час",
+        "📊 Статистика: накопительная + 1 раз в час",
         flush=True
     )
 
@@ -3512,9 +3100,9 @@ def main():
         flush=True
     )
 
-    # ================================================================
+    # =================================================================
     # DATA
-    # ================================================================
+    # =================================================================
 
     data = load_data()
 
@@ -3524,9 +3112,9 @@ def main():
         flush=True
     )
 
-    # ================================================================
+    # =================================================================
     # SCANNER
-    # ================================================================
+    # =================================================================
 
     load_pattern_scanner()
 
@@ -3540,14 +3128,13 @@ def main():
 
         print(
             "⏳ Pattern Scanner: "
-            f"{len(data)}/"
-            f"{MIN_TRAIN_SAMPLES}",
+            f"{len(data)}/{MIN_TRAIN_SAMPLES}",
             flush=True
         )
 
-    # ================================================================
+    # =================================================================
     # MODEL
-    # ================================================================
+    # =================================================================
 
     model_loaded = load_ml_model()
 
@@ -3565,14 +3152,13 @@ def main():
     else:
 
         print(
-            "⏳ Недостаточно данных "
-            "для обучения SGD",
+            "⏳ Недостаточно данных для обучения SGD",
             flush=True
         )
 
-    # ================================================================
+    # =================================================================
     # PREDICTIONS
-    # ================================================================
+    # =================================================================
 
     predictions = load_history()
 
@@ -3589,17 +3175,17 @@ def main():
         flush=True
     )
 
-    # ================================================================
-    # STATIC STATS
-    # ================================================================
+    # =================================================================
+    # STATIC
+    # =================================================================
 
     load_static_stats()
 
     print_stats()
 
-    # ================================================================
+    # =================================================================
     # TELEGRAM OFFSET
-    # ================================================================
+    # =================================================================
 
     offset = get_offset()
 
@@ -3607,13 +3193,10 @@ def main():
     last_result = 0
     last_retrain = 0
 
-    # ================================================================
-    # ПОЧАСОВАЯ СТАТИСТИКА
-    # ================================================================
+    # =================================================================
+    # HOURLY STATIC
+    # =================================================================
 
-    # Отправляем статистику только при наступлении нового часа.
-    # После старта бот запоминает текущий час и не отправляет
-    # сообщение сразу.
     current_hour_key = (
         datetime.now(
             MOSCOW_TZ
@@ -3630,26 +3213,29 @@ def main():
     )
 
     print(
-        "🤖 Режим: "
-        "SGD 85% + Pattern Scanner 15%",
+        "🤖 Режим: SGD 85% + Pattern Scanner 15%",
         flush=True
     )
 
     print(
-        "📨 Формат прогноза: "
-        "🎯 Игра: #NXXXX: МАСТЬ",
+        "📨 Формат: 🎯 Игра: #NXXXX: МАСТЬ",
         flush=True
     )
 
     print(
-        "📊 STATIC: "
-        "новое сообщение 1 раз в час",
+        "📊 STATIC: новое сообщение 1 раз в час",
         flush=True
     )
 
-    # ================================================================
+    print(
+        "🎯 Прогнозируется только ближайшая "
+        "будущая игра",
+        flush=True
+    )
+
+    # =================================================================
     # MAIN LOOP
-    # ================================================================
+    # =================================================================
 
     while True:
 
@@ -3657,9 +3243,9 @@ def main():
 
             now = time.time()
 
-            # ========================================================
+            # =========================================================
             # UPCOMING
-            # ========================================================
+            # =========================================================
 
             if (
                 now
@@ -3672,9 +3258,9 @@ def main():
 
                 last_upcoming = now
 
-            # ========================================================
-            # RESULT CHECK
-            # ========================================================
+            # =========================================================
+            # RESULT
+            # =========================================================
 
             if (
                 now
@@ -3687,9 +3273,9 @@ def main():
 
                 last_result = now
 
-            # ========================================================
+            # =========================================================
             # RETRAIN
-            # ========================================================
+            # =========================================================
 
             if (
                 now
@@ -3702,18 +3288,15 @@ def main():
 
                 last_retrain = now
 
-            # ========================================================
+            # =========================================================
             # TELEGRAM
-            # ========================================================
+            # =========================================================
 
             updates = telegram_request(
                 "getUpdates",
                 {
-                    "offset":
-                        offset,
-
-                    "timeout":
-                        5,
+                    "offset": offset,
+                    "timeout": 5,
                 },
                 timeout=10
             )
@@ -3725,9 +3308,9 @@ def main():
                     offset
                 )
 
-            # ========================================================
-            # ПОЧАСОВАЯ STATIC СТАТИСТИКА
-            # ========================================================
+            # =========================================================
+            # STATIC HOURLY
+            # =========================================================
 
             moscow_now = datetime.now(
                 MOSCOW_TZ
@@ -3738,14 +3321,6 @@ def main():
             )
 
             if hour_key != last_stats_hour:
-
-                # ====================================================
-                # Отправляем НОВОЕ сообщение.
-                # Старые сообщения НЕ редактируются.
-                #
-                # Внутри отображаются накопительные данные
-                # за всё время.
-                # ====================================================
 
                 send_hourly_static()
 
