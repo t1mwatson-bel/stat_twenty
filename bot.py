@@ -2219,14 +2219,48 @@ def get_model_prediction(
             0.15 * scanner_value
         )
 
-    model_suit = max(
-        combined_probs,
-        key=combined_probs.get
+    # ============================================================
+    # ФИЛЬТР ПО РАЗРЫВУ МЕЖДУ МАСТЯМИ
+    # ============================================================
+
+    # Сортируем масти по убыванию вероятности
+    sorted_items = sorted(
+        combined_probs.items(),
+        key=lambda x: x[1],
+        reverse=True
     )
 
-    if confidence < ML_CONFIDENCE_THRESHOLD:
+    best_suit = sorted_items[0][0]
+    best_prob = sorted_items[0][1]
+    second_prob = sorted_items[1][1]
 
-        model_suit = None
+    gap = best_prob - second_prob
+
+    # Если разрыв меньше 7% — прогноз НЕ выдаём
+    if gap < 0.07:
+        return {
+            "model_suit": None,
+            "model_probs": combined_probs,
+            "scanner_probs": scanner_probs,
+            "ml_confidence": confidence,
+            "filter_reason": f"gap_too_small ({gap:.2%})"
+        }
+
+    # Если уверенность ниже порога — прогноз НЕ выдаём
+    if confidence < ML_CONFIDENCE_THRESHOLD:
+        return {
+            "model_suit": None,
+            "model_probs": combined_probs,
+            "scanner_probs": scanner_probs,
+            "ml_confidence": confidence,
+            "filter_reason": "low_confidence"
+        }
+
+    # ============================================================
+    # ВСЁ ОК — ВЫДАЁМ ПРОГНОЗ
+    # ============================================================
+
+    model_suit = best_suit
 
     return {
         "model_suit": model_suit,
