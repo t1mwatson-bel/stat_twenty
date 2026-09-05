@@ -802,25 +802,14 @@ def load_history():
         return []
 
 
-def save_history(
-    history
-):
+def save_history(history):
+    # Обрезаем до 3000 последних записей
+    if len(history) > HISTORY_MAX_RECORDS:
+        history = history[-HISTORY_MAX_RECORDS:]
 
     try:
-
-        with open(
-            HISTORY_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                history,
-                f,
-                indent=2,
-                ensure_ascii=False
-            )
-
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
 
