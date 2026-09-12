@@ -26,15 +26,20 @@ print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
 print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
-BASE_URL = "https://1xlite-6021.pro"
+
+# =====================================================================
+# ⚠️ ЗДЕСЬ ТОЛЬКО ОДНА СТРОКА МЕНЯЕТСЯ — BASE_URL
+# =====================================================================
+BASE_URL = "https://1xlite-6021.pro"  # ← АКТУАЛЬНОЕ ЗЕРКАЛО
+# =====================================================================
 
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
 processed_games = set()
-game_numbers = {}  
-player_cards_history = {}  
-dealer_cards_history = {}  
-game_state_history = {}  
+game_numbers = {}
+player_cards_history = {}
+dealer_cards_history = {}
+game_state_history = {}
 
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K"}
@@ -52,39 +57,40 @@ DETAIL_URL_TEMPLATE = f"{BASE_URL}/service-api/LiveFeed/GetGameZip?id={{game_id}
 
 print("✅ Настройки для Baccarat загружены", flush=True)
 
-def get_game_number_fallback():
+# =====================================================================
+# ФУНКЦИИ
+# =====================================================================
+def get_game_number():
+    """Номер игры от 1 до 720 (каждые 2 минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
     diff_minutes = (now - start).total_seconds() / 60
-    return int(diff_minutes) % 1440 + 1
+    return int(diff_minutes) % 720 + 1
 
 def get_active_games():
     try:
-        print(f"🔍 Запрос к API...", flush=True)
         response = requests.get(LIST_URL, headers=HEADERS, timeout=10)
-        if response.status_code != 200:
-            print(f"⚠️ Статус API: {response.status_code}", flush=True)
-            return []
-        data = response.json()
-        if isinstance(data, list):
-            games = data
-        elif isinstance(data, dict) and "Value" in data:
-            games = data.get("Value", [])
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                games = data
+            elif isinstance(data, dict) and "Value" in data:
+                games = data.get("Value", [])
+            else:
+                return []
+            active_games = []
+            for game in games:
+                game_id = game.get("I")
+                if game_id and str(game_id) not in processed_games:
+                    active_games.append(game)
+            return active_games
         else:
-            print(f"⚠️ Неизвестный формат ответа", flush=True)
-            return []
-        print(f"📊 Найдено игр: {len(games)}", flush=True)
-        active_games = []
-        for game in games:
-            game_id = game.get("I")
-            if game_id and str(game_id) not in processed_games:
-                active_games.append(game)
-        return active_games
+            print(f"⚠️ Статус API: {response.status_code}", flush=True)
     except Exception as e:
         print(f"❌ Ошибка: {e}", flush=True)
-        return []
+    return []
 
 def get_game_data(game_id):
     url = DETAIL_URL_TEMPLATE.format(game_id=game_id)
@@ -98,71 +104,56 @@ def get_game_data(game_id):
         print(f"❌ Ошибка игры {game_id}: {e}", flush=True)
     return None
 
-# ====================================================================
-# ПАРСИНГ КАРТ
-# ====================================================================
-
-def get_cards(value_str):
-    if not value_str:
+def parse_cards(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
         return []
     try:
-        if isinstance(value_str, str):
-            cards = json.loads(value_str)
-        else:
-            cards = value_str
-        if not isinstance(cards, list):
-            return []
-        result = []
-        suit_map = {0: '♠', 1: '♣', 2: '♦', 3: '♥'}
-        rank_map = {1: 'A', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K'}
-        for card in cards:
-            if not isinstance(card, dict):
-                continue
-            cs = card.get('CS', '?')
-            cv = card.get('CV', '?')
-            try:
-                cv_num = int(cv)
-            except:
-                cv_num = cv
-            rank = rank_map.get(cv_num, str(cv_num))
-            suit = suit_map.get(cs, '')
-            if rank and suit:
-                card_str = f"{rank}{suit}"
-                result.append(card_str)
-        return result
+        result = json.loads(value)
+        if isinstance(result, list):
+            return result
     except:
-        return []
+        pass
+    return []
 
 def format_cards(cards):
     if not cards:
         return ""
-    return ''.join(cards)
+    output = []
+    for card in cards:
+        if not isinstance(card, dict):
+            return None
+        cs = card.get("CS", 0)
+        cv = card.get("CV", 0)
+        if not cs or not cv:
+            return None
+        suit = SUITS_NAMES.get(cs, "?")
+        rank = RANKS.get(cv, str(cv))
+        output.append(f"{rank}{suit}")
+    return "".join(output)
 
 def calculate_score(cards):
-    """Подсчёт очков в баккаре: A=1, 2-9=номинал, 10/J/Q/K=0, сумма % 10"""
     if not cards:
         return 0
-    
     score = 0
     for card in cards:
-        if not card:
-            continue
-        rank = card[:-1] if len(card) > 1 else card
-        if rank == 'A':
+        if not isinstance(card, dict):
+            return -1
+        cv = card.get("CV", 0)
+        if cv == 0:
+            return -1
+        if cv == 1:
             score += 1
-        elif rank in ('10', 'J', 'Q', 'K'):
+        elif 2 <= cv <= 9:
+            score += cv
+        elif 10 <= cv <= 13:
             score += 0
-        else:
-            try:
-                score += int(rank)
-            except:
-                pass
     return score % 10
 
-# ====================================================================
-
 def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
-    """Проверка завершения игры в баккаре"""
     if state:
         state_str = str(state).lower().strip()
         finished_states = {
@@ -171,11 +162,9 @@ def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
         }
         if state_str in finished_states:
             return True
-    
     # Ранняя победа (8 или 9)
     if p_score in [8, 9] or d_score in [8, 9]:
         return True
-    
     return False
 
 def get_arrow(state):
@@ -189,18 +178,21 @@ def get_arrow(state):
 def build_message(game_num, game_id, player_cards, dealer_cards, p_score, d_score, state):
     p_hand = format_cards(player_cards)
     d_hand = format_cards(dealer_cards)
-    total = p_score + d_score
     
+    if p_hand is None:
+        return None
+    if dealer_cards and d_hand is None:
+        return None
+    
+    total = p_score + d_score
     finished = is_game_finished(state, player_cards, dealer_cards, p_score, d_score)
     
     if finished:
         tags = []
         if len(player_cards) == 2 and len(dealer_cards) == 2:
             tags.append("#R")
-        
         tag_str = " " + " ".join(tags) if tags else ""
         
-        # Определяем победителя
         if p_score > d_score:
             return f"#N{game_num} ✅{p_score} ({p_hand}) - {d_score} ({d_hand}) #П1 #T{total}{tag_str} (ID: {game_id})"
         elif d_score > p_score:
@@ -213,28 +205,34 @@ def build_message(game_num, game_id, player_cards, dealer_cards, p_score, d_scor
 
 def send_message(text):
     try:
-        r = requests.post(API + "/sendMessage", json={"chat_id": CHAT_ID, "text": text})
-        if r.status_code == 200:
-            return r.json()["result"]["message_id"]
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": text}
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("ok"):
+                return result["result"]["message_id"]
     except Exception as e:
         print(f"❌ Ошибка отправки: {e}", flush=True)
     return None
 
-def edit_message(message_id, text):
+def edit_message(msg_id, text):
     try:
-        r = requests.post(f"{API}/editMessageText", json={"chat_id": CHAT_ID, "message_id": message_id, "text": text})
-        return r.status_code == 200
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+        payload = {"chat_id": CHAT_ID, "message_id": msg_id, "text": text}
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
     except Exception as e:
         print(f"❌ Ошибка редактирования: {e}", flush=True)
         return False
 
+# =====================================================================
+# ОБРАБОТКА ОДНОЙ ИГРЫ
+# =====================================================================
 def process_game(game):
     gid = str(game.get("I"))
     if not gid or gid in processed_games:
         return
-    
-    print("-" * 60, flush=True)
-    print(f"🎮 Обработка игры ID={gid}", flush=True)
     
     data = get_game_data(gid)
     if not data:
@@ -248,18 +246,6 @@ def process_game(game):
     if not isinstance(sc, dict):
         return
     
-    # ===== НОМЕР ИГРЫ ИЗ API =====
-    raw_game_num = value.get("DI") or value.get("TN")
-    if raw_game_num:
-        match = re.search(r'\d+', str(raw_game_num))
-        if match:
-            game_num = int(match.group())
-        else:
-            game_num = get_game_number_fallback()
-    else:
-        game_num = get_game_number_fallback()
-    
-    # ===== STATE =====
     state = sc.get("CPS", "")
     
     player_cards = []
@@ -272,32 +258,32 @@ def process_game(game):
                 continue
             key = item.get("Key")
             if key == "P":
-                player_cards = get_cards(item.get("Value"))
+                player_cards = parse_cards(item.get("Value"))
             elif key == "B":
-                dealer_cards = get_cards(item.get("Value"))
+                dealer_cards = parse_cards(item.get("Value"))
     
-    # Ожидание игры
+    # Ожидание
     if not player_cards and not dealer_cards:
         if gid not in game_numbers:
-            game_numbers[gid] = game_num
+            game_numbers[gid] = get_game_number()
         game_number = game_numbers[gid]
-        
         if gid not in messages:
             msg = f"⏳ Ожидание игры #N{game_number} (ID: {gid})"
             msg_id = send_message(msg)
             if msg_id:
                 messages[gid] = msg_id
-                print(f"📤 Ожидание игры {gid} (№{game_number})", flush=True)
+                print(f"📤 Ожидание {gid} (№{game_number})", flush=True)
         return
     
     if gid not in game_numbers:
-        game_numbers[gid] = game_num
+        game_numbers[gid] = get_game_number()
     game_number = game_numbers[gid]
     
     p_score = calculate_score(player_cards)
     d_score = calculate_score(dealer_cards)
     
-    print(f"📊 {gid}: P={p_score}, B={d_score}, state={state}", flush=True)
+    if p_score < 0 or d_score < 0:
+        return
     
     p1_str = json.dumps(player_cards)
     p2_str = json.dumps(dealer_cards)
@@ -314,6 +300,8 @@ def process_game(game):
     game_state_history[gid] = state
     
     msg = build_message(game_number, gid, player_cards, dealer_cards, p_score, d_score, state)
+    if not msg:
+        return
     
     if gid in messages:
         edit_message(messages[gid], msg)
@@ -331,6 +319,9 @@ def process_game(game):
                 del d[gid]
         print(f"🏁 Завершена {gid}", flush=True)
 
+# =====================================================================
+# ОСНОВНОЙ ЦИКЛ
+# =====================================================================
 def main():
     global processed_games, messages, game_numbers, player_cards_history, dealer_cards_history, game_state_history
     print("🚀 ПАРСЕР БАККАРА ЗАПУЩЕН", flush=True)
@@ -339,9 +330,7 @@ def main():
     while True:
         try:
             games = get_active_games()
-            
             if not games:
-                print("💤 Нет активных игр, ждём 3 сек", flush=True)
                 time.sleep(3)
                 continue
             
