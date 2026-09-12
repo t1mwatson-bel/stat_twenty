@@ -26,7 +26,7 @@ print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
 print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
-BASE_URL = "https://melbet-38497.pro"  # ← из рабочего кода
+BASE_URL = "https://1xlite-6021.pro"
 
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
