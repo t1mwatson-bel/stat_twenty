@@ -3,6 +3,7 @@ import json
 from collections import defaultdict, Counter
 from pathlib import Path
 import sys
+
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 print("🚀 START", flush=True)
@@ -28,12 +29,7 @@ MAX_EXAMPLES = 12
 SUITS = ["♠", "♣", "♦", "♥"]
 HIGH_RANKS = ["J", "Q", "K", "A"]
 
-TARGET_CARDS = [
-    f"{rank}{suit}"
-    for rank in HIGH_RANKS
-    for suit in SUITS
-]
-
+TARGET_CARDS = [f"{r}{s}" for r in HIGH_RANKS for s in SUITS]
 TARGET_SET = set(TARGET_CARDS)
 
 
@@ -87,7 +83,6 @@ def parse_file(path):
                 "player": player_cards,
                 "dealer": dealer_cards,
                 "all_cards": player_cards + dealer_cards,
-                "raw": line,
             })
     return games
 
@@ -97,40 +92,32 @@ def parse_file(path):
 # ============================================================
 
 def ranks(cards):
-    return [c[:-1] for c in cards]  # быстрее чем re.sub
-
+    return [c[:-1] for c in cards]
 
 def suits(cards):
     return [c[-1] for c in cards]
 
-
 def rank_sequence(cards):
     return "-".join(ranks(cards))
-
 
 def suit_sequence(cards):
     return "-".join(suits(cards))
 
-
 def exact_sequence(cards):
     return "-".join(cards)
-
 
 def first_card(cards):
     return cards[0] if cards else "-"
 
 
 # ============================================================
-# ПРИЗНАКИ ОДНОЙ ИГРЫ (считаются 1 раз!)
+# ПРИЗНАКИ ОДНОЙ ИГРЫ
 # ============================================================
 
 def game_features(game):
     result = []
 
-    for side_name, cards in (
-        ("P", game["player"]),
-        ("D", game["dealer"]),
-    ):
+    for side_name, cards in (("P", game["player"]), ("D", game["dealer"])):
         if not cards:
             continue
 
@@ -159,7 +146,6 @@ def game_features(game):
 
         if len(set(ranks(cards))) < len(cards):
             result.append(f"{side_name}:HAS_RANK_REPEAT")
-
         if len(set(suits(cards))) < len(cards):
             result.append(f"{side_name}:HAS_SUIT_REPEAT")
 
@@ -188,26 +174,27 @@ def calculate_baseline(games):
 
 
 # ============================================================
-# СБОР ПАТТЕРНОВ — ОДИН ПРОХОД ПО ВСЕМ КАРТАМ СРАЗУ
+# СБОР ПАТТЕРНОВ — ТОЛЬКО ОДИНОЧНЫЕ
 # ============================================================
 
 def collect_all_patterns(games):
-    """
-    Возвращает:
-        occ[(gap, feature)]              -> сколько раз встретилось
-        hit[((gap, feature), target)]    -> сколько раз выпал target
-    """
     n = len(games)
 
-    # Предсчитаем фичи 1 раз
+    print("   → кэширую фичи...", flush=True)
     for g in games:
         g["features"] = game_features(g)
+    print("   ✅ фичи готовы", flush=True)
 
     occ = Counter()
     hit = Counter()
 
-    # ---- одиночные ----
+    print("   → одиночные паттерны...", flush=True)
+    report_every = max(1, n // 20)
+
     for i in range(n - MAX_GAP):
+        if i % report_every == 0:
+            print(f"      [{i}/{n}]", flush=True)
+
         feats = games[i]["features"]
         for gap in range(1, MAX_GAP + 1):
             j = i + gap
@@ -221,22 +208,26 @@ def collect_all_patterns(games):
                     for t in present:
                         hit[(key, t)] += 1
 
-    # ---- двойные (последовательные две игры) ----
-    for i in range(n - MAX_GAP - 1):
-        f1 = games[i]["features"]
-        f2 = games[i + 1]["features"]
-        for gap in range(2, MAX_GAP + 1):
-            j = i + gap
-            if j >= n:
-                break
-            present = TARGET_SET.intersection(games[j]["all_cards"])
-            for a in f1:
-                for b in f2:
-                    key = (gap, f"G1[{a}]|G2[{b}]")
-                    occ[key] += 1
-                    if present:
-                        for t in present:
-                            hit[(key, t)] += 1
+    print("   ✅ одиночные готовы", flush=True)
+
+    # ============================================================
+    # ДВОЙНЫЕ ПАТТЕРНЫ — ОТКЛЮЧЕНЫ (жрут 1300+ MB)
+    # ============================================================
+    # for i in range(n - MAX_GAP - 1):
+    #     f1 = games[i]["features"]
+    #     f2 = games[i + 1]["features"]
+    #     for gap in range(2, MAX_GAP + 1):
+    #         j = i + gap
+    #         if j >= n:
+    #             break
+    #         present = TARGET_SET.intersection(games[j]["all_cards"])
+    #         for a in f1:
+    #             for b in f2:
+    #                 key = (gap, f"G1[{a}]|G2[{b}]")
+    #                 occ[key] += 1
+    #                 if present:
+    #                     for t in present:
+    #                         hit[(key, t)] += 1
 
     return occ, hit
 
@@ -246,14 +237,9 @@ def collect_all_patterns(games):
 # ============================================================
 
 def collect_examples(games, target, want_keys, max_per_key=MAX_EXAMPLES):
-    """
-    want_keys: set of (gap, feature) для конкретного target.
-    Возвращает {key: [примеры]}.
-    """
     n = len(games)
     examples = defaultdict(list)
 
-    # ---- одиночные ----
     for i in range(n - MAX_GAP):
         feats = games[i]["features"]
         for gap in range(1, MAX_GAP + 1):
@@ -272,27 +258,9 @@ def collect_examples(games, target, want_keys, max_per_key=MAX_EXAMPLES):
                         "gap": gap,
                     })
 
-    # ---- двойные ----
-    for i in range(n - MAX_GAP - 1):
-        f1 = games[i]["features"]
-        f2 = games[i + 1]["features"]
-        for gap in range(2, MAX_GAP + 1):
-            j = i + gap
-            if j >= n:
-                break
-            target_game = games[j]
-            if target not in target_game["all_cards"]:
-                continue
-            for a in f1:
-                for b in f2:
-                    key = (gap, f"G1[{a}]|G2[{b}]")
-                    if key in want_keys and len(examples[key]) < max_per_key:
-                        examples[key].append({
-                            "trigger1": games[i]["game_number"],
-                            "trigger2": games[i + 1]["game_number"],
-                            "target": target_game["game_number"],
-                            "gap": gap,
-                        })
+    # двойные — тоже отключены
+    # for i in range(n - MAX_GAP - 1):
+    #     ...
 
     return examples
 
@@ -331,10 +299,7 @@ def score_for_target(occ, hit, target, baseline_rate):
             "score": score,
         })
 
-    results.sort(
-        key=lambda x: (x["score"], x["hits"], x["rate"]),
-        reverse=True,
-    )
+    results.sort(key=lambda x: (x["score"], x["hits"], x["rate"]), reverse=True)
     return results
 
 
@@ -355,11 +320,7 @@ def print_pattern(number, pattern):
     print(f"   Score: {pattern['score']:.2f}")
 
     for ex in pattern.get("examples", [])[:5]:
-        if "trigger_raw" in ex or "trigger" in ex:
-            print(
-                f"      #{ex.get('trigger')} → "
-                f"#{ex.get('target')} (+{ex.get('gap')})"
-            )
+        print(f"      #{ex.get('trigger')} → #{ex.get('target')} (+{ex.get('gap')})")
 
 
 def save_json(data, filename):
@@ -378,12 +339,15 @@ def main():
     print("=" * 70)
     print()
 
-    path = Path(INPUT_FILE)
+    path = Path(__file__).parent / INPUT_FILE
     if not path.exists():
-        print(f"❌ Файл не найден: {INPUT_FILE}")
+        print(f"❌ Файл не найден: {path}")
+        print("Содержимое папки:")
+        for p in sorted(Path(__file__).parent.iterdir()):
+            print(f"   {'📄' if p.is_file() else '📁'} {p.name}")
         return
 
-    print(f"📂 Файл: {INPUT_FILE}")
+    print(f"📂 Файл: {path}")
 
     games = parse_file(path)
     if not games:
@@ -406,7 +370,7 @@ def main():
     print("=" * 70)
 
     print()
-    print("   → сбор паттернов (один проход по всем картам)...")
+    print("   → сбор паттернов...")
 
     occ, hit = collect_all_patterns(games)
 
@@ -422,7 +386,6 @@ def main():
         results = score_for_target(occ, hit, target, base_rate)
         results = results[:TOP_PATTERNS_PER_CARD]
 
-        # Примеры — только для топ-N
         want_keys = {r["key"] for r in results}
         examples = collect_examples(games, target, want_keys)
 
@@ -465,7 +428,6 @@ def main():
     print("=" * 70)
     print()
     print("💾 Сохранено: pattern_results.json")
-    print("⚠️ Паттерн — это статистический кандидат, а не гарантия.")
     print()
 
 
