@@ -10,23 +10,10 @@ from pathlib import Path
 
 INPUT_FILE = "twentyone_games.txt"
 
-# Сколько игр назад проверять возможный триггер
 MAX_GAP = 20
-
-# Сколько предыдущих игр использовать для составных паттернов
-MAX_WINDOW = 3
-
-# Минимальное количество наблюдений паттерна
 MIN_OCCURRENCES = 5
-
-# Сколько лучших паттернов выводить для каждой точной карты
 TOP_PATTERNS_PER_CARD = 30
-
-# Минимальная разница относительно базовой частоты.
-# 1.0 = такое же соотношение, как обычная частота.
 MIN_LIFT = 1.20
-
-# Максимум строк в текстовом отчёте
 MAX_EXAMPLES = 12
 
 
@@ -35,7 +22,6 @@ MAX_EXAMPLES = 12
 # ============================================================
 
 SUITS = ["♠", "♣", "♦", "♥"]
-
 HIGH_RANKS = ["J", "Q", "K", "A"]
 
 TARGET_CARDS = [
@@ -43,6 +29,8 @@ TARGET_CARDS = [
     for rank in HIGH_RANKS
     for suit in SUITS
 ]
+
+TARGET_SET = set(TARGET_CARDS)
 
 
 # ============================================================
@@ -58,86 +46,31 @@ GAME_RE = re.compile(
     r"\s*\(ID:\s*(\d+)\)"
 )
 
-
-def normalize_card(card):
-    """
-    Приводит карту к виду J♦ / Q♠ / 10♥ и т.д.
-    """
-    card = card.strip()
-
-    card = card.replace("️", "")
-
-    # Возможные пробелы
-    card = card.replace(" ", "")
-
-    return card
+CARD_RE = re.compile(r"(10|[2-9]|[AJQK])([♠♣♦♥])")
 
 
 def extract_cards(hand_text):
-    """
-    Извлекает карты из:
-        24(Q♠9♣Q♦J♣7♥)
-
-    Возвращает:
-        ['Q♠', '9♣', 'Q♦', 'J♣', '7♥']
-    """
-
     if not hand_text:
         return []
-
-    # Убираем всё до первой скобки
     m = re.search(r"\((.*?)\)", hand_text)
-
     if not m:
         return []
-
-    cards_text = m.group(1)
-
-    pattern = re.compile(
-        r"(10|[2-9]|[AJQK])([♠♣♦♥])"
-    )
-
-    cards = []
-
-    for rank, suit in pattern.findall(cards_text):
-        cards.append(f"{rank}{suit}")
-
-    return cards
-
-
-def parse_side(text):
-    """
-    Парсит сторону игрока/дилера.
-    """
-
-    return extract_cards(text)
+    return [f"{r}{s}" for r, s in CARD_RE.findall(m.group(1))]
 
 
 def parse_file(path):
     games = []
-
     with open(path, "r", encoding="utf-8") as f:
         for line_number, line in enumerate(f, 1):
-
             line = line.strip()
-
             if not line:
                 continue
-
             m = GAME_RE.search(line)
-
             if not m:
                 continue
 
-            game_number = int(m.group(1))
-            left = m.group(2)
-            right = m.group(3)
-            table_number = m.group(4)
-            result_marker = m.group(5)
-            game_id = m.group(6)
-
-            player_cards = parse_side(left)
-            dealer_cards = parse_side(right)
+            player_cards = extract_cards(m.group(2))
+            dealer_cards = extract_cards(m.group(3))
 
             if not player_cards and not dealer_cards:
                 continue
@@ -145,16 +78,13 @@ def parse_file(path):
             games.append({
                 "index": len(games),
                 "line": line_number,
-                "game_number": game_number,
-                "game_id": game_id,
+                "game_number": int(m.group(1)),
+                "game_id": m.group(6),
                 "player": player_cards,
                 "dealer": dealer_cards,
                 "all_cards": player_cards + dealer_cards,
-                "table": table_number,
-                "marker": result_marker,
                 "raw": line,
             })
-
     return games
 
 
@@ -163,11 +93,11 @@ def parse_file(path):
 # ============================================================
 
 def ranks(cards):
-    return [re.sub(r"[♠♣♦♥]", "", c) for c in cards]
+    return [c[:-1] for c in cards]  # быстрее чем re.sub
 
 
 def suits(cards):
-    return [re.search(r"[♠♣♦♥]", c).group(0) for c in cards]
+    return [c[-1] for c in cards]
 
 
 def rank_sequence(cards):
@@ -186,157 +116,52 @@ def first_card(cards):
     return cards[0] if cards else "-"
 
 
-def second_card(cards):
-    return cards[1] if len(cards) >= 2 else "-"
-
-
-def third_card(cards):
-    return cards[2] if len(cards) >= 3 else "-"
-
-
-def hand_signature(cards):
-    """
-    Например:
-        J♦ Q♣ K♠
-    """
-
-    return exact_sequence(cards)
-
-
 # ============================================================
-# ПРИЗНАКИ ОДНОЙ ИГРЫ
+# ПРИЗНАКИ ОДНОЙ ИГРЫ (считаются 1 раз!)
 # ============================================================
 
 def game_features(game):
-    """
-    Получаем набор возможных паттернов для одной игры.
-    """
-
     result = []
 
     for side_name, cards in (
         ("P", game["player"]),
         ("D", game["dealer"]),
     ):
-
         if not cards:
             continue
 
-        # ----------------------------------------------------
-        # Сторона
-        # ----------------------------------------------------
-
-        result.append(
-            f"{side_name}:COUNT={len(cards)}"
-        )
-
-        # ----------------------------------------------------
-        # Первая карта
-        # ----------------------------------------------------
-
-        result.append(
-            f"{side_name}:FIRST={first_card(cards)}"
-        )
-
-        result.append(
-            f"{side_name}:FIRST_RANK={ranks(cards)[0]}"
-        )
-
-        result.append(
-            f"{side_name}:FIRST_SUIT={suits(cards)[0]}"
-        )
-
-        # ----------------------------------------------------
-        # Первые 2 карты
-        # ----------------------------------------------------
+        result.append(f"{side_name}:COUNT={len(cards)}")
+        result.append(f"{side_name}:FIRST={first_card(cards)}")
+        result.append(f"{side_name}:FIRST_RANK={ranks(cards)[0]}")
+        result.append(f"{side_name}:FIRST_SUIT={suits(cards)[0]}")
 
         if len(cards) >= 2:
-
-            result.append(
-                f"{side_name}:FIRST2={exact_sequence(cards[:2])}"
-            )
-
-            result.append(
-                f"{side_name}:FIRST2_RANKS={rank_sequence(cards[:2])}"
-            )
-
-            result.append(
-                f"{side_name}:FIRST2_SUITS={suit_sequence(cards[:2])}"
-            )
-
-        # ----------------------------------------------------
-        # Первые 3 карты
-        # ----------------------------------------------------
+            result.append(f"{side_name}:FIRST2={exact_sequence(cards[:2])}")
+            result.append(f"{side_name}:FIRST2_RANKS={rank_sequence(cards[:2])}")
+            result.append(f"{side_name}:FIRST2_SUITS={suit_sequence(cards[:2])}")
 
         if len(cards) >= 3:
+            result.append(f"{side_name}:FIRST3={exact_sequence(cards[:3])}")
+            result.append(f"{side_name}:FIRST3_RANKS={rank_sequence(cards[:3])}")
+            result.append(f"{side_name}:FIRST3_SUITS={suit_sequence(cards[:3])}")
 
-            result.append(
-                f"{side_name}:FIRST3={exact_sequence(cards[:3])}"
-            )
-
-            result.append(
-                f"{side_name}:FIRST3_RANKS={rank_sequence(cards[:3])}"
-            )
-
-            result.append(
-                f"{side_name}:FIRST3_SUITS={suit_sequence(cards[:3])}"
-            )
-
-        # ----------------------------------------------------
-        # Вся рука
-        # ----------------------------------------------------
-
-        result.append(
-            f"{side_name}:RANKS={rank_sequence(cards)}"
-        )
-
-        result.append(
-            f"{side_name}:SUITS={suit_sequence(cards)}"
-        )
-
-        result.append(
-            f"{side_name}:EXACT={exact_sequence(cards)}"
-        )
-
-        # ----------------------------------------------------
-        # Количество отдельных рангов
-        # ----------------------------------------------------
+        result.append(f"{side_name}:RANKS={rank_sequence(cards)}")
+        result.append(f"{side_name}:SUITS={suit_sequence(cards)}")
+        result.append(f"{side_name}:EXACT={exact_sequence(cards)}")
 
         rc = Counter(ranks(cards))
-
         for rank, count in sorted(rc.items()):
-
-            result.append(
-                f"{side_name}:RANKCOUNT:{rank}={count}"
-            )
-
-        # ----------------------------------------------------
-        # Повторы карт / рангов
-        # ----------------------------------------------------
+            result.append(f"{side_name}:RANKCOUNT:{rank}={count}")
 
         if len(set(ranks(cards))) < len(cards):
-
-            result.append(
-                f"{side_name}:HAS_RANK_REPEAT"
-            )
+            result.append(f"{side_name}:HAS_RANK_REPEAT")
 
         if len(set(suits(cards))) < len(cards):
-
-            result.append(
-                f"{side_name}:HAS_SUIT_REPEAT"
-            )
-
-        # ----------------------------------------------------
-        # Наличие высоких карт
-        # ----------------------------------------------------
+            result.append(f"{side_name}:HAS_SUIT_REPEAT")
 
         for rank in HIGH_RANKS:
-
             if rank in ranks(cards):
-
-                result.append(
-                    f"{side_name}:HAS_{rank}"
-                )
+                result.append(f"{side_name}:HAS_{rank}")
 
     return result
 
@@ -345,362 +170,167 @@ def game_features(game):
 # БАЗОВАЯ СТАТИСТИКА
 # ============================================================
 
-def target_presence(game, target):
-    """
-    Точная карта может быть:
-        у игрока
-        ИЛИ у дилера
-    """
-
-    return target in game["all_cards"]
-
-
 def calculate_baseline(games):
     total = len(games)
-
     baseline = {}
-
     for target in TARGET_CARDS:
-
-        hits = sum(
-            1
-            for game in games
-            if target_presence(game, target)
-        )
-
+        hits = sum(1 for g in games if target in g["all_cards"])
         baseline[target] = {
             "hits": hits,
             "total": total,
             "rate": hits / total if total else 0.0,
         }
-
     return baseline
 
 
 # ============================================================
-# СКАНИРОВАНИЕ ОДНОЙ ИГРЫ КАК ТРИГГЕРА
+# СБОР ПАТТЕРНОВ — ОДИН ПРОХОД ПО ВСЕМ КАРТАМ СРАЗУ
 # ============================================================
 
-def collect_single_game_patterns(games, target):
+def collect_all_patterns(games):
     """
-    Проверяет:
-
-        триггерная игра
-              ↓
-           +1 ... +20
-              ↓
-        точная карта
-
-    При этом перебираются все признаки предыдущей игры.
+    Возвращает:
+        occ[(gap, feature)]              -> сколько раз встретилось
+        hit[((gap, feature), target)]    -> сколько раз выпал target
     """
+    n = len(games)
 
-    patterns = defaultdict(lambda: {
-        "occurrences": 0,
-        "hits": 0,
-        "examples": [],
-    })
+    # Предсчитаем фичи 1 раз
+    for g in games:
+        g["features"] = game_features(g)
 
-    for i in range(len(games) - MAX_GAP):
+    occ = Counter()
+    hit = Counter()
 
-        trigger = games[i]
-
-        features = game_features(trigger)
-
+    # ---- одиночные ----
+    for i in range(n - MAX_GAP):
+        feats = games[i]["features"]
         for gap in range(1, MAX_GAP + 1):
-
-            target_index = i + gap
-
-            if target_index >= len(games):
+            j = i + gap
+            if j >= n:
                 break
+            present = TARGET_SET.intersection(games[j]["all_cards"])
+            for f in feats:
+                key = (gap, f)
+                occ[key] += 1
+                if present:
+                    for t in present:
+                        hit[(key, t)] += 1
 
-            target_game = games[target_index]
+    # ---- двойные (последовательные две игры) ----
+    for i in range(n - MAX_GAP - 1):
+        f1 = games[i]["features"]
+        f2 = games[i + 1]["features"]
+        for gap in range(2, MAX_GAP + 1):
+            j = i + gap
+            if j >= n:
+                break
+            present = TARGET_SET.intersection(games[j]["all_cards"])
+            for a in f1:
+                for b in f2:
+                    key = (gap, f"G1[{a}]|G2[{b}]")
+                    occ[key] += 1
+                    if present:
+                        for t in present:
+                            hit[(key, t)] += 1
 
-            hit = target_presence(target_game, target)
+    return occ, hit
 
-            for feature in features:
 
-                key = (
-                    f"GAP={gap}|"
-                    f"{feature}"
-                )
+# ============================================================
+# СБОР ПРИМЕРОВ — ТОЛЬКО ДЛЯ ТОП-N
+# ============================================================
 
-                item = patterns[key]
+def collect_examples(games, target, want_keys, max_per_key=MAX_EXAMPLES):
+    """
+    want_keys: set of (gap, feature) для конкретного target.
+    Возвращает {key: [примеры]}.
+    """
+    n = len(games)
+    examples = defaultdict(list)
 
-                item["occurrences"] += 1
+    # ---- одиночные ----
+    for i in range(n - MAX_GAP):
+        feats = games[i]["features"]
+        for gap in range(1, MAX_GAP + 1):
+            j = i + gap
+            if j >= n:
+                break
+            target_game = games[j]
+            if target not in target_game["all_cards"]:
+                continue
+            for f in feats:
+                key = (gap, f)
+                if key in want_keys and len(examples[key]) < max_per_key:
+                    examples[key].append({
+                        "trigger": games[i]["game_number"],
+                        "target": target_game["game_number"],
+                        "gap": gap,
+                    })
 
-                if hit:
-                    item["hits"] += 1
-
-                    if len(item["examples"]) < MAX_EXAMPLES:
-
-                        item["examples"].append({
-                            "trigger": trigger["game_number"],
+    # ---- двойные ----
+    for i in range(n - MAX_GAP - 1):
+        f1 = games[i]["features"]
+        f2 = games[i + 1]["features"]
+        for gap in range(2, MAX_GAP + 1):
+            j = i + gap
+            if j >= n:
+                break
+            target_game = games[j]
+            if target not in target_game["all_cards"]:
+                continue
+            for a in f1:
+                for b in f2:
+                    key = (gap, f"G1[{a}]|G2[{b}]")
+                    if key in want_keys and len(examples[key]) < max_per_key:
+                        examples[key].append({
+                            "trigger1": games[i]["game_number"],
+                            "trigger2": games[i + 1]["game_number"],
                             "target": target_game["game_number"],
                             "gap": gap,
-                            "trigger_raw": trigger["raw"],
-                            "target_raw": target_game["raw"],
                         })
 
-    return patterns
-
-
-# ============================================================
-# ПАТТЕРНЫ ИЗ ДВУХ ПОСЛЕДНИХ ИГР
-# ============================================================
-
-def collect_two_game_patterns(games, target):
-    """
-    Например:
-
-        игра A
-        игра B
-           ↓
-          +3
-           ↓
-         J♦
-
-    Комбинируем признаки двух последовательных предыдущих игр.
-    """
-
-    patterns = defaultdict(lambda: {
-        "occurrences": 0,
-        "hits": 0,
-        "examples": [],
-    })
-
-    for i in range(len(games) - MAX_GAP - 1):
-
-        g1 = games[i]
-        g2 = games[i + 1]
-
-        f1 = game_features(g1)
-        f2 = game_features(g2)
-
-        # Ограничиваем комбинации, чтобы файл не превращался
-        # в гигантский перебор миллионов комбинаций.
-        for gap in range(2, MAX_GAP + 1):
-
-            target_index = i + gap
-
-            if target_index >= len(games):
-                break
-
-            target_game = games[target_index]
-
-            hit = target_presence(target_game, target)
-
-            for a in f1:
-
-                for b in f2:
-
-                    key = (
-                        f"GAP={gap}|"
-                        f"G1[{a}]|"
-                        f"G2[{b}]"
-                    )
-
-                    item = patterns[key]
-
-                    item["occurrences"] += 1
-
-                    if hit:
-
-                        item["hits"] += 1
-
-                        if len(item["examples"]) < MAX_EXAMPLES:
-
-                            item["examples"].append({
-                                "trigger1": g1["game_number"],
-                                "trigger2": g2["game_number"],
-                                "target": target_game["game_number"],
-                                "gap": gap,
-                                "g1_raw": g1["raw"],
-                                "g2_raw": g2["raw"],
-                                "target_raw": target_game["raw"],
-                            })
-
-    return patterns
-
-
-# ============================================================
-# ПАТТЕРНЫ ИЗ ТРЁХ ПОСЛЕДНИХ ИГР
-# ============================================================
-
-def collect_three_game_patterns(games, target):
-    """
-    Ищем:
-
-        G1
-        G2
-        G3
-        ↓
-        +gap
-        ↓
-        TARGET
-    """
-
-    patterns = defaultdict(lambda: {
-        "occurrences": 0,
-        "hits": 0,
-        "examples": [],
-    })
-
-    for i in range(len(games) - MAX_GAP - 2):
-
-        g1 = games[i]
-        g2 = games[i + 1]
-        g3 = games[i + 2]
-
-        # Вместо полного декартова произведения всех признаков
-        # используем основные признаки.
-        def compact_features(game):
-
-            result = []
-
-            for side_name, cards in (
-                ("P", game["player"]),
-                ("D", game["dealer"]),
-            ):
-
-                if not cards:
-                    continue
-
-                result.append(
-                    f"{side_name}:COUNT={len(cards)}"
-                )
-
-                result.append(
-                    f"{side_name}:FIRST={first_card(cards)}"
-                )
-
-                result.append(
-                    f"{side_name}:FIRST_RANK={ranks(cards)[0]}"
-                )
-
-                if len(cards) >= 2:
-
-                    result.append(
-                        f"{side_name}:FIRST2={exact_sequence(cards[:2])}"
-                    )
-
-                if len(cards) >= 3:
-
-                    result.append(
-                        f"{side_name}:FIRST3_RANKS={rank_sequence(cards[:3])}"
-                    )
-
-            return result
-
-        f1 = compact_features(g1)
-        f2 = compact_features(g2)
-        f3 = compact_features(g3)
-
-        # Чтобы не взорвать количество комбинаций,
-        # соединяем только первые несколько признаков.
-        f1 = f1[:6]
-        f2 = f2[:6]
-        f3 = f3[:6]
-
-        for gap in range(3, MAX_GAP + 1):
-
-            target_index = i + gap
-
-            if target_index >= len(games):
-                break
-
-            target_game = games[target_index]
-
-            hit = target_presence(target_game, target)
-
-            for a in f1:
-
-                for b in f2:
-
-                    for c in f3:
-
-                        key = (
-                            f"GAP={gap}|"
-                            f"G1[{a}]|"
-                            f"G2[{b}]|"
-                            f"G3[{c}]"
-                        )
-
-                        item = patterns[key]
-
-                        item["occurrences"] += 1
-
-                        if hit:
-
-                            item["hits"] += 1
-
-                            if len(item["examples"]) < MAX_EXAMPLES:
-
-                                item["examples"].append({
-                                    "g1": g1["game_number"],
-                                    "g2": g2["game_number"],
-                                    "g3": g3["game_number"],
-                                    "target": target_game["game_number"],
-                                    "gap": gap,
-                                })
-
-    return patterns
+    return examples
 
 
 # ============================================================
 # РАСЧЁТ РЕЗУЛЬТАТОВ
 # ============================================================
 
-def score_patterns(patterns, baseline_rate):
-
+def score_for_target(occ, hit, target, baseline_rate):
     results = []
 
-    for key, item in patterns.items():
-
-        occurrences = item["occurrences"]
-        hits = item["hits"]
-
+    for key, occurrences in occ.items():
         if occurrences < MIN_OCCURRENCES:
             continue
 
-        rate = hits / occurrences if occurrences else 0.0
+        hits = hit.get((key, target), 0)
+        if hits == 0:
+            continue
 
-        if baseline_rate <= 0:
-            lift = 0
-        else:
-            lift = rate / baseline_rate
+        rate = hits / occurrences
+        lift = rate / baseline_rate if baseline_rate > 0 else 0.0
 
         if lift < MIN_LIFT:
             continue
 
-        # Чем больше наблюдений и выше lift,
-        # тем выше итоговый score.
         confidence_factor = min(occurrences / 30.0, 1.0)
-
-        score = (
-            lift
-            * confidence_factor
-            * (hits ** 0.5)
-        )
+        score = lift * confidence_factor * (hits ** 0.5)
 
         results.append({
-            "pattern": key,
+            "pattern": f"GAP={key[0]}|{key[1]}",
+            "key": key,
             "occurrences": occurrences,
             "hits": hits,
             "rate": rate,
             "lift": lift,
             "score": score,
-            "examples": item["examples"],
         })
 
     results.sort(
-        key=lambda x: (
-            x["score"],
-            x["hits"],
-            x["rate"],
-        ),
+        key=lambda x: (x["score"], x["hits"], x["rate"]),
         reverse=True,
     )
-
     return results
 
 
@@ -713,79 +343,24 @@ def percent(value):
 
 
 def print_pattern(number, pattern):
+    print(f"\n{number}. {pattern['pattern']}")
+    print(f"   Случаев: {pattern['occurrences']}")
+    print(f"   Попаданий: {pattern['hits']}")
+    print(f"   Частота: {percent(pattern['rate'])}")
+    print(f"   Lift: {pattern['lift']:.2f}x")
+    print(f"   Score: {pattern['score']:.2f}")
 
-    print(
-        f"\n{number}. {pattern['pattern']}"
-    )
+    for ex in pattern.get("examples", [])[:5]:
+        if "trigger_raw" in ex or "trigger" in ex:
+            print(
+                f"      #{ex.get('trigger')} → "
+                f"#{ex.get('target')} (+{ex.get('gap')})"
+            )
 
-    print(
-        f"   Случаев: {pattern['occurrences']}"
-    )
-
-    print(
-        f"   Попаданий: {pattern['hits']}"
-    )
-
-    print(
-        f"   Частота: {percent(pattern['rate'])}"
-    )
-
-    print(
-        f"   Lift: {pattern['lift']:.2f}x"
-    )
-
-    print(
-        f"   Score: {pattern['score']:.2f}"
-    )
-
-    if pattern["examples"]:
-
-        print("   Примеры:")
-
-        for ex in pattern["examples"][:5]:
-
-            if "trigger_raw" in ex:
-
-                print(
-                    f"      #{ex['trigger']} → "
-                    f"#{ex['target']} "
-                    f"(+{ex['gap']})"
-                )
-
-            elif "trigger1" in ex:
-
-                print(
-                    f"      #{ex['trigger1']} → "
-                    f"#{ex['trigger2']} → "
-                    f"#{ex['target']} "
-                    f"(+{ex['gap']})"
-                )
-
-            else:
-
-                print(
-                    f"      {ex}"
-                )
-
-
-# ============================================================
-# СОХРАНЕНИЕ JSON
-# ============================================================
 
 def save_json(data, filename):
-
-    with open(
-        filename,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            data,
-            f,
-            ensure_ascii=False,
-            indent=2
-        )
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # ============================================================
@@ -793,320 +368,100 @@ def save_json(data, filename):
 # ============================================================
 
 def main():
-
     print()
     print("=" * 70)
-    print("          OLD — UNIVERSAL PATTERN SCANNER")
+    print("          PATTERN SCANNER (OPTIMIZED)")
     print("=" * 70)
     print()
 
     path = Path(INPUT_FILE)
-
     if not path.exists():
-
-        print(
-            f"❌ Файл не найден: {INPUT_FILE}"
-        )
-
-        print(
-            "Положи pattern_scanner.py рядом с "
-            "twentyone_games.txt"
-        )
-
+        print(f"❌ Файл не найден: {INPUT_FILE}")
         return
 
-    print(
-        f"📂 Файл: {INPUT_FILE}"
-    )
+    print(f"📂 Файл: {INPUT_FILE}")
 
     games = parse_file(path)
-
     if not games:
-
-        print(
-            "❌ Не удалось распарсить ни одной игры."
-        )
-
+        print("❌ Не удалось распарсить ни одной игры.")
         return
 
-    print(
-        f"🎮 Игр обработано: {len(games)}"
-    )
+    print(f"🎮 Игр обработано: {len(games)}")
 
     baseline = calculate_baseline(games)
 
     print()
-    print(
-        "🎯 Базовая частота точных карт:"
-    )
-
+    print("🎯 Базовая частота точных карт:")
     for target in TARGET_CARDS:
-
         b = baseline[target]
-
-        print(
-            f"   {target:<3} "
-            f"{b['hits']:>4}/{b['total']} "
-            f"= {percent(b['rate'])}"
-        )
+        print(f"   {target:<3} {b['hits']:>4}/{b['total']} = {percent(b['rate'])}")
 
     print()
     print("=" * 70)
     print("                 СКАНИРОВАНИЕ")
     print("=" * 70)
 
+    print()
+    print("   → сбор паттернов (один проход по всем картам)...")
+
+    occ, hit = collect_all_patterns(games)
+
+    print(f"   ✅ уникальных паттернов: {len(occ)}")
+
     all_results = {}
 
     for target_index, target in enumerate(TARGET_CARDS, 1):
-
         print()
-        print(
-            f"[{target_index}/{len(TARGET_CARDS)}] "
-            f"🔎 Ищу паттерны для {target}"
-        )
+        print(f"[{target_index}/{len(TARGET_CARDS)}] 🔎 {target}")
 
         base_rate = baseline[target]["rate"]
+        results = score_for_target(occ, hit, target, base_rate)
+        results = results[:TOP_PATTERNS_PER_CARD]
 
-        # ----------------------------------------------------
-        # 1. Одна предыдущая игра
-        # ----------------------------------------------------
+        # Примеры — только для топ-N
+        want_keys = {r["key"] for r in results}
+        examples = collect_examples(games, target, want_keys)
 
-        print(
-            "   → одиночные паттерны..."
-        )
-
-        single = collect_single_game_patterns(
-            games,
-            target
-        )
-
-        single_results = score_patterns(
-            single,
-            base_rate
-        )
-
-        # ----------------------------------------------------
-        # 2. Две предыдущие игры
-        # ----------------------------------------------------
-
-        print(
-            "   → двойные последовательности..."
-        )
-
-        double = collect_two_game_patterns(
-            games,
-            target
-        )
-
-        double_results = score_patterns(
-            double,
-            base_rate
-        )
-
-        # ----------------------------------------------------
-        # 3. Три предыдущие игры
-        # ----------------------------------------------------
-
-        print(
-            "   → тройные последовательности..."
-        )
-
-        triple = collect_three_game_patterns(
-            games,
-            target
-        )
-
-        triple_results = score_patterns(
-            triple,
-            base_rate
-        )
-
-        # ----------------------------------------------------
-        # Объединяем
-        # ----------------------------------------------------
-
-        combined = (
-            single_results
-            + double_results
-            + triple_results
-        )
-
-        combined.sort(
-            key=lambda x: (
-                x["score"],
-                x["hits"],
-                x["rate"],
-            ),
-            reverse=True
-        )
-
-        combined = combined[
-            :TOP_PATTERNS_PER_CARD
-        ]
+        for r in results:
+            r["examples"] = examples.get(r["key"], [])
+            r.pop("key", None)
 
         all_results[target] = {
             "baseline": baseline[target],
-            "patterns": combined,
+            "patterns": results,
         }
 
-        print(
-            f"   ✅ найдено кандидатов: "
-            f"{len(combined)}"
-        )
+        print(f"   ✅ кандидатов: {len(results)}")
 
-    # ========================================================
-    # СОХРАНЯЕМ JSON
-    # ========================================================
-
-    save_json(
-        all_results,
-        "pattern_results.json"
-    )
+    save_json(all_results, "pattern_results.json")
 
     print()
     print("=" * 70)
     print("                    РЕЗУЛЬТАТЫ")
     print("=" * 70)
 
-    # ========================================================
-    # ПЕЧАТЬ ЛУЧШИХ КАНДИДАТОВ ПО КАЖДОЙ КАРТЕ
-    # ========================================================
-
     for target in TARGET_CARDS:
-
         print()
         print("─" * 70)
-
         b = baseline[target]
-
-        print(
-            f"🎯 {target}"
-        )
-
-        print(
-            f"База: {b['hits']}/{b['total']} "
-            f"= {percent(b['rate'])}"
-        )
+        print(f"🎯 {target}")
+        print(f"База: {b['hits']}/{b['total']} = {percent(b['rate'])}")
 
         patterns = all_results[target]["patterns"]
-
         if not patterns:
-
-            print(
-                "   Паттернов с достаточной статистикой не найдено."
-            )
-
+            print("   Паттернов с достаточной статистикой не найдено.")
             continue
 
-        for i, pattern in enumerate(
-            patterns[:TOP_PATTERNS_PER_CARD],
-            1
-        ):
-
-            print_pattern(
-                i,
-                pattern
-            )
-
-    # ========================================================
-    # ОБЩИЙ TOP
-    # ========================================================
-
-    print()
-    print("=" * 70)
-    print("                🔥 ОБЩИЙ TOP ПАТТЕРНОВ")
-    print("=" * 70)
-
-    global_patterns = []
-
-    for target in TARGET_CARDS:
-
-        for pattern in all_results[target]["patterns"]:
-
-            item = dict(pattern)
-
-            item["target"] = target
-
-            global_patterns.append(item)
-
-    global_patterns.sort(
-        key=lambda x: (
-            x["score"],
-            x["hits"],
-            x["rate"],
-        ),
-        reverse=True
-    )
-
-    for i, pattern in enumerate(
-        global_patterns[:100],
-        1
-    ):
-
-        print()
-        print(
-            f"{i}. 🎯 {pattern['target']}"
-        )
-
-        print(
-            f"   {pattern['pattern']}"
-        )
-
-        print(
-            f"   {pattern['hits']}/"
-            f"{pattern['occurrences']} "
-            f"= {percent(pattern['rate'])} | "
-            f"Lift {pattern['lift']:.2f}x"
-        )
-
-    # ========================================================
-    # ФИНАЛЬНАЯ СВОДКА
-    # ========================================================
+        for i, pattern in enumerate(patterns, 1):
+            print_pattern(i, pattern)
 
     print()
     print("=" * 70)
     print("                      ГОТОВО")
     print("=" * 70)
-
     print()
-    print(
-        "📊 Обработано игр:",
-        len(games)
-    )
-
-    print(
-        "🎯 Точных карт:",
-        len(TARGET_CARDS)
-    )
-
-    print(
-        "🔎 Проверено расстояний:",
-        MAX_GAP
-    )
-
-    print(
-        "🧩 Глубина последовательности:",
-        MAX_WINDOW
-    )
-
-    print()
-    print(
-        "💾 Полный результат сохранён:"
-    )
-
-    print(
-        "   pattern_results.json"
-    )
-
-    print()
-    print(
-        "⚠️ Важно: найденный паттерн — это статистический"
-    )
-
-    print(
-        "   кандидат, а не гарантия появления карты."
-    )
-
+    print("💾 Сохранено: pattern_results.json")
+    print("⚠️ Паттерн — это статистический кандидат, а не гарантия.")
     print()
 
 
