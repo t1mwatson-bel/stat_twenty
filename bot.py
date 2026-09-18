@@ -6,20 +6,21 @@ import sys
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
+
 print("🚀 START", flush=True)
 
 
 # ============================================================
-# НАСТРОЙКИ
+# НАСТРОЙКИ (ужесточённые)
 # ============================================================
 
 INPUT_FILE = "twentyone_games.txt"
 
-MAX_GAP = 20
-MIN_OCCURRENCES = 5
-TOP_PATTERNS_PER_CARD = 30
-MIN_LIFT = 1.20
-MAX_EXAMPLES = 12
+MAX_GAP = 10          # было 20 — теперь ближе к реальности
+MIN_OCCURRENCES = 30  # было 5 — теперь не меньше 30 случаев
+MIN_LIFT = 1.50       # было 1.2 — теперь нужно на 50% выше нормы
+TOP_PATTERNS_PER_CARD = 15
+MAX_EXAMPLES = 5
 
 
 # ============================================================
@@ -77,9 +78,7 @@ def parse_file(path):
 
             games.append({
                 "index": len(games),
-                "line": line_number,
                 "game_number": int(m.group(1)),
-                "game_id": m.group(6),
                 "player": player_cards,
                 "dealer": dealer_cards,
                 "all_cards": player_cards + dealer_cards,
@@ -88,7 +87,7 @@ def parse_file(path):
 
 
 # ============================================================
-# ПРЕДСТАВЛЕНИЕ РУКИ
+# ПРИЗНАКИ ИГРЫ
 # ============================================================
 
 def ranks(cards):
@@ -106,13 +105,6 @@ def suit_sequence(cards):
 def exact_sequence(cards):
     return "-".join(cards)
 
-def first_card(cards):
-    return cards[0] if cards else "-"
-
-
-# ============================================================
-# ПРИЗНАКИ ОДНОЙ ИГРЫ
-# ============================================================
 
 def game_features(game):
     result = []
@@ -122,7 +114,7 @@ def game_features(game):
             continue
 
         result.append(f"{side_name}:COUNT={len(cards)}")
-        result.append(f"{side_name}:FIRST={first_card(cards)}")
+        result.append(f"{side_name}:FIRST={cards[0]}")
         result.append(f"{side_name}:FIRST_RANK={ranks(cards)[0]}")
         result.append(f"{side_name}:FIRST_SUIT={suits(cards)[0]}")
 
@@ -132,7 +124,6 @@ def game_features(game):
             result.append(f"{side_name}:FIRST2_SUITS={suit_sequence(cards[:2])}")
 
         if len(cards) >= 3:
-            result.append(f"{side_name}:FIRST3={exact_sequence(cards[:3])}")
             result.append(f"{side_name}:FIRST3_RANKS={rank_sequence(cards[:3])}")
             result.append(f"{side_name}:FIRST3_SUITS={suit_sequence(cards[:3])}")
 
@@ -144,11 +135,6 @@ def game_features(game):
         for rank, count in sorted(rc.items()):
             result.append(f"{side_name}:RANKCOUNT:{rank}={count}")
 
-        if len(set(ranks(cards))) < len(cards):
-            result.append(f"{side_name}:HAS_RANK_REPEAT")
-        if len(set(suits(cards))) < len(cards):
-            result.append(f"{side_name}:HAS_SUIT_REPEAT")
-
         for rank in HIGH_RANKS:
             if rank in ranks(cards):
                 result.append(f"{side_name}:HAS_{rank}")
@@ -157,7 +143,7 @@ def game_features(game):
 
 
 # ============================================================
-# БАЗОВАЯ СТАТИСТИКА
+# БАЗА
 # ============================================================
 
 def calculate_baseline(games):
@@ -174,27 +160,18 @@ def calculate_baseline(games):
 
 
 # ============================================================
-# СБОР ПАТТЕРНОВ — ТОЛЬКО ОДИНОЧНЫЕ
+# СБОР ПАТТЕРНОВ (только одиночные)
 # ============================================================
 
-def collect_all_patterns(games):
+def collect_patterns(games):
     n = len(games)
-
-    print("   → кэширую фичи...", flush=True)
     for g in games:
         g["features"] = game_features(g)
-    print("   ✅ фичи готовы", flush=True)
 
     occ = Counter()
     hit = Counter()
 
-    print("   → одиночные паттерны...", flush=True)
-    report_every = max(1, n // 20)
-
     for i in range(n - MAX_GAP):
-        if i % report_every == 0:
-            print(f"      [{i}/{n}]", flush=True)
-
         feats = games[i]["features"]
         for gap in range(1, MAX_GAP + 1):
             j = i + gap
@@ -208,98 +185,90 @@ def collect_all_patterns(games):
                     for t in present:
                         hit[(key, t)] += 1
 
-    print("   ✅ одиночные готовы", flush=True)
-
-    # ============================================================
-    # ДВОЙНЫЕ ПАТТЕРНЫ — ОТКЛЮЧЕНЫ (жрут 1300+ MB)
-    # ============================================================
-    # for i in range(n - MAX_GAP - 1):
-    #     f1 = games[i]["features"]
-    #     f2 = games[i + 1]["features"]
-    #     for gap in range(2, MAX_GAP + 1):
-    #         j = i + gap
-    #         if j >= n:
-    #             break
-    #         present = TARGET_SET.intersection(games[j]["all_cards"])
-    #         for a in f1:
-    #             for b in f2:
-    #                 key = (gap, f"G1[{a}]|G2[{b}]")
-    #                 occ[key] += 1
-    #                 if present:
-    #                     for t in present:
-    #                         hit[(key, t)] += 1
-
     return occ, hit
 
 
 # ============================================================
-# СБОР ПРИМЕРОВ — ТОЛЬКО ДЛЯ ТОП-N
+# ПРОВЕРКА НА ВТОРОЙ ПОЛОВИНЕ (hold-out)
 # ============================================================
 
-def collect_examples(games, target, want_keys, max_per_key=MAX_EXAMPLES):
+def verify_on_holdout(games, target, pattern_key):
+    """
+    Считает, сколько раз паттерн сработал на hold-out части
+    и сколько раз попал target.
+    """
+    gap, feature = pattern_key
     n = len(games)
-    examples = defaultdict(list)
+    occ = 0
+    hits = 0
 
     for i in range(n - MAX_GAP):
         feats = games[i]["features"]
-        for gap in range(1, MAX_GAP + 1):
-            j = i + gap
-            if j >= n:
-                break
-            target_game = games[j]
-            if target not in target_game["all_cards"]:
-                continue
-            for f in feats:
-                key = (gap, f)
-                if key in want_keys and len(examples[key]) < max_per_key:
-                    examples[key].append({
-                        "trigger": games[i]["game_number"],
-                        "target": target_game["game_number"],
-                        "gap": gap,
-                    })
+        if feature not in feats:
+            continue
+        j = i + gap
+        if j >= n:
+            continue
+        occ += 1
+        if target in games[j]["all_cards"]:
+            hits += 1
 
-    # двойные — тоже отключены
-    # for i in range(n - MAX_GAP - 1):
-    #     ...
-
-    return examples
+    return occ, hits
 
 
 # ============================================================
-# РАСЧЁТ РЕЗУЛЬТАТОВ
+# РАСЧЁТ
 # ============================================================
 
-def score_for_target(occ, hit, target, baseline_rate):
+def score_patterns(occ, hit, baseline_rate):
+    results = []
+    for key, occurrences in occ.items():
+        if occurrences < MIN_OCCURRENCES:
+            continue
+        hits = hit.get(key, 0)  # key = (gap, feature)
+        # hit хранит ((gap, feature), target) — обойдём иначе:
+        # здесь передадим hit как вложенный
+    return results
+
+
+def evaluate_patterns(occ, hit, baseline):
+    """
+    Собирает все паттерны по всем target и считает метрики.
+    """
     results = []
 
     for key, occurrences in occ.items():
         if occurrences < MIN_OCCURRENCES:
             continue
 
-        hits = hit.get((key, target), 0)
-        if hits == 0:
-            continue
+        for target in TARGET_CARDS:
+            hits = hit.get((key, target), 0)
+            if hits == 0:
+                continue
 
-        rate = hits / occurrences
-        lift = rate / baseline_rate if baseline_rate > 0 else 0.0
+            base_rate = baseline[target]["rate"]
+            rate = hits / occurrences
+            lift = rate / base_rate if base_rate > 0 else 0
 
-        if lift < MIN_LIFT:
-            continue
+            if lift < MIN_LIFT:
+                continue
 
-        confidence_factor = min(occurrences / 30.0, 1.0)
-        score = lift * confidence_factor * (hits ** 0.5)
+            expected = occurrences * base_rate
+            excess = hits - expected
 
-        results.append({
-            "pattern": f"GAP={key[0]}|{key[1]}",
-            "key": key,
-            "occurrences": occurrences,
-            "hits": hits,
-            "rate": rate,
-            "lift": lift,
-            "score": score,
-        })
+            results.append({
+                "pattern": f"GAP={key[0]}|{key[1]}",
+                "key": key,
+                "target": target,
+                "occurrences": occurrences,
+                "hits": hits,
+                "expected": expected,
+                "excess": excess,
+                "rate": rate,
+                "lift": lift,
+            })
 
-    results.sort(key=lambda x: (x["score"], x["hits"], x["rate"]), reverse=True)
+    results.sort(key=lambda x: x["excess"], reverse=True)
     return results
 
 
@@ -307,20 +276,8 @@ def score_for_target(occ, hit, target, baseline_rate):
 # ВЫВОД
 # ============================================================
 
-def percent(value):
-    return f"{value * 100:.2f}%"
-
-
-def print_pattern(number, pattern):
-    print(f"\n{number}. {pattern['pattern']}")
-    print(f"   Случаев: {pattern['occurrences']}")
-    print(f"   Попаданий: {pattern['hits']}")
-    print(f"   Частота: {percent(pattern['rate'])}")
-    print(f"   Lift: {pattern['lift']:.2f}x")
-    print(f"   Score: {pattern['score']:.2f}")
-
-    for ex in pattern.get("examples", [])[:5]:
-        print(f"      #{ex.get('trigger')} → #{ex.get('target')} (+{ex.get('gap')})")
+def percent(v):
+    return f"{v * 100:.2f}%"
 
 
 def save_json(data, filename):
@@ -335,9 +292,8 @@ def save_json(data, filename):
 def main():
     print()
     print("=" * 70)
-    print("          PATTERN SCANNER (OPTIMIZED)")
+    print("     PATTERN SCANNER — ЧЕСТНАЯ ВЕРСИЯ (с проверкой)")
     print("=" * 70)
-    print()
 
     path = Path(__file__).parent / INPUT_FILE
     if not path.exists():
@@ -347,87 +303,146 @@ def main():
             print(f"   {'📄' if p.is_file() else '📁'} {p.name}")
         return
 
-    print(f"📂 Файл: {path}")
-
     games = parse_file(path)
-    if not games:
-        print("❌ Не удалось распарсить ни одной игры.")
+    if len(games) < 100:
+        print(f"❌ Слишком мало игр: {len(games)}")
         return
 
-    print(f"🎮 Игр обработано: {len(games)}")
+    total = len(games)
+    half = total // 2
 
-    baseline = calculate_baseline(games)
+    train = games[:half]
+    test = games[half:]
 
-    print()
-    print("🎯 Базовая частота точных карт:")
-    for target in TARGET_CARDS:
-        b = baseline[target]
-        print(f"   {target:<3} {b['hits']:>4}/{b['total']} = {percent(b['rate'])}")
+    print(f"🎮 Всего игр: {total}")
+    print(f"📚 Обучающая половина (0..{half}): {len(train)}")
+    print(f"🧪 Проверочная половина ({half}..{total}): {len(test)}")
 
-    print()
-    print("=" * 70)
-    print("                 СКАНИРОВАНИЕ")
-    print("=" * 70)
-
-    print()
-    print("   → сбор паттернов...")
-
-    occ, hit = collect_all_patterns(games)
-
-    print(f"   ✅ уникальных паттернов: {len(occ)}")
-
-    all_results = {}
-
-    for target_index, target in enumerate(TARGET_CARDS, 1):
-        print()
-        print(f"[{target_index}/{len(TARGET_CARDS)}] 🔎 {target}")
-
-        base_rate = baseline[target]["rate"]
-        results = score_for_target(occ, hit, target, base_rate)
-        results = results[:TOP_PATTERNS_PER_CARD]
-
-        want_keys = {r["key"] for r in results}
-        examples = collect_examples(games, target, want_keys)
-
-        for r in results:
-            r["examples"] = examples.get(r["key"], [])
-            r.pop("key", None)
-
-        all_results[target] = {
-            "baseline": baseline[target],
-            "patterns": results,
-        }
-
-        print(f"   ✅ кандидатов: {len(results)}")
-
-    save_json(all_results, "pattern_results.json")
+    # --------------------------------------------------------
+    # 1. Находим паттерны на первой половине
+    # --------------------------------------------------------
 
     print()
     print("=" * 70)
-    print("                    РЕЗУЛЬТАТЫ")
+    print("ШАГ 1. Поиск паттернов на ОБУЧАЮЩЕЙ половине")
     print("=" * 70)
 
-    for target in TARGET_CARDS:
-        print()
-        print("─" * 70)
-        b = baseline[target]
-        print(f"🎯 {target}")
-        print(f"База: {b['hits']}/{b['total']} = {percent(b['rate'])}")
+    baseline_train = calculate_baseline(train)
 
-        patterns = all_results[target]["patterns"]
-        if not patterns:
-            print("   Паттернов с достаточной статистикой не найдено.")
+    print()
+    print("🎯 Базовая частота (на обучающей половине):")
+    for t in TARGET_CARDS:
+        b = baseline_train[t]
+        print(f"   {t:<3} {b['hits']:>4}/{b['total']} = {percent(b['rate'])}")
+
+    print()
+    print("   → считаю паттерны...")
+
+    occ, hit = collect_patterns(train)
+
+    print(f"   ✅ всего пар (паттерн, карта): {len(hit)}")
+
+    patterns = evaluate_patterns(occ, hit, baseline_train)
+
+    print(f"   ✅ прошло фильтры (occ≥{MIN_OCCURRENCES}, lift≥{MIN_LIFT}): {len(patterns)}")
+
+    # --------------------------------------------------------
+    # 2. Проверяем на второй половине
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("ШАГ 2. Проверка на ПРОВЕРОЧНОЙ половине (hold-out)")
+    print("=" * 70)
+
+    baseline_test = calculate_baseline(test)
+
+    survivors = []
+
+    for i, p in enumerate(patterns, 1):
+        if i % 20 == 0:
+            print(f"   ... проверено {i}/{len(patterns)}", flush=True)
+
+        target = p["target"]
+        key = p["key"]
+
+        # считаем фичи для test
+        for g in test:
+            if "features" not in g:
+                g["features"] = game_features(g)
+
+        occ_test, hits_test = verify_on_holdout(test, target, key)
+
+        if occ_test < 10:
             continue
 
-        for i, pattern in enumerate(patterns, 1):
-            print_pattern(i, pattern)
+        base_test = baseline_test[target]["rate"]
+        rate_test = hits_test / occ_test if occ_test else 0
+        lift_test = rate_test / base_test if base_test > 0 else 0
+        expected_test = occ_test * base_test
+        excess_test = hits_test - expected_test
+
+        if lift_test >= 1.20 and excess_test > 0:
+            survivors.append({
+                **p,
+                "holdout_occ": occ_test,
+                "holdout_hits": hits_test,
+                "holdout_rate": rate_test,
+                "holdout_lift": lift_test,
+                "holdout_excess": excess_test,
+            })
+
+    print()
+    print(f"   ✅ Выжило после проверки: {len(survivors)}")
+
+    # --------------------------------------------------------
+    # 3. Сохраняем и показываем
+    # --------------------------------------------------------
+
+    result = {
+        "settings": {
+            "MAX_GAP": MAX_GAP,
+            "MIN_OCCURRENCES": MIN_OCCURRENCES,
+            "MIN_LIFT": MIN_LIFT,
+        },
+        "total_games": total,
+        "train_games": len(train),
+        "test_games": len(test),
+        "patterns_found_on_train": len(patterns),
+        "patterns_survived_holdout": len(survivors),
+        "survivors": survivors,
+    }
+
+    save_json(result, "pattern_results.json")
 
     print()
     print("=" * 70)
-    print("                      ГОТОВО")
+    print("                 РЕЗУЛЬТАТ")
     print("=" * 70)
-    print()
+
+    if not survivors:
+        print()
+        print("   🟡 Ни один паттерн НЕ выжил после проверки.")
+        print("   Это означает: всё, что было найдено раньше — СЛУЧАЙНОСТЬ.")
+        print("   Реальных закономерностей в этих данных нет.")
+    else:
+        print()
+        print(f"   🟢 Выжило паттернов: {len(survivors)}")
+        print()
+        for i, s in enumerate(survivors[:30], 1):
+            print(f"{i}. 🎯 {s['target']}  {s['pattern']}")
+            print(f"   Обучение:  {s['hits']}/{s['occurrences']} = {percent(s['rate'])}  "
+                  f"(ожид. {s['expected']:.0f}, сверх нормы {s['excess']:+.0f})  "
+                  f"lift {s['lift']:.2f}x")
+            print(f"   Проверка:  {s['holdout_hits']}/{s['holdout_occ']} = "
+                  f"{percent(s['holdout_rate'])}  "
+                  f"(сверх нормы {s['holdout_excess']:+.0f})  "
+                  f"lift {s['holdout_lift']:.2f}x")
+            print()
+
+    print("=" * 70)
     print("💾 Сохранено: pattern_results.json")
+    print("=" * 70)
     print()
 
 
