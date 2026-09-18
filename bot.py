@@ -2,6 +2,10 @@ import re
 import json
 from collections import defaultdict, Counter
 from pathlib import Path
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+print("🚀 START", flush=True)
 
 
 # ============================================================
