@@ -1,115 +1,123 @@
-import re
+import asyncio
 import json
-from collections import defaultdict, Counter
+import os
+import re
 from pathlib import Path
-import sys
 
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
-print("🚀 START", flush=True)
-
-
-# ============================================================
-# НАСТРОЙКИ (ужесточённые)
-# ============================================================
-
-INPUT_FILE = "twentyone_games.txt"
-
-MAX_GAP = 10          # было 20 — теперь ближе к реальности
-MIN_OCCURRENCES = 30  # было 5 — теперь не меньше 30 случаев
-MIN_LIFT = 1.50       # было 1.2 — теперь нужно на 50% выше нормы
-TOP_PATTERNS_PER_CARD = 15
-MAX_EXAMPLES = 5
+from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.types import Message
 
 
 # ============================================================
-# КАРТЫ
+# ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (заданы на хостинге)
 # ============================================================
 
-SUITS = ["♠", "♣", "♦", "♥"]
-HIGH_RANKS = ["J", "Q", "K", "A"]
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_STAT = os.getenv("CHANNEL_STAT")
+CHANNEL_PROGNOZ = os.getenv("CHANNEL_PROGNOZ")
 
-TARGET_CARDS = [f"{r}{s}" for r in HIGH_RANKS for s in SUITS]
-TARGET_SET = set(TARGET_CARDS)
+if not BOT_TOKEN or not CHANNEL_STAT or not CHANNEL_PROGNOZ:
+    raise SystemExit("❌ Не заданы BOT_TOKEN / CHANNEL_STAT / CHANNEL_PROGNOZ")
+
+
+def to_chat_id(value):
+    value = value.strip()
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    return value
+
+
+CHANNEL_STAT_ID = to_chat_id(CHANNEL_STAT)
+CHANNEL_PROGNOZ_ID = to_chat_id(CHANNEL_PROGNOZ)
+
+PATTERNS_FILE = Path(__file__).parent / "pattern_results.json"
 
 
 # ============================================================
-# ПАРСИНГ
+# ПАРСИНГ ИГРЫ
 # ============================================================
 
-GAME_RE = re.compile(
-    r"#N(\d+)\.\s*"
-    r"(.*?)\s*-\s*"
-    r"(.*?)\s*"
-    r"#T(\d+)"
-    r"(?:\s*#([A-Z]))?"
-    r"\s*\(ID:\s*(\d+)\)"
-)
-
+GAME_RE = re.compile(r"#N(\d+)\.")
+ID_RE = re.compile(r"\(ID:\s*(\d+)\)")
 CARD_RE = re.compile(r"(10|[2-9]|[AJQK])([♠♣♦♥])")
+HAND_RE = re.compile(r"\(([^)]*)\)")
 
 
-def extract_cards(hand_text):
-    if not hand_text:
-        return []
-    m = re.search(r"\((.*?)\)", hand_text)
+def clean_text(text: str) -> str:
+    """Убирает маркеры ✅ и 🔰."""
+    return text.replace("✅", "").replace("🔰", "")
+
+
+def extract_cards_from_str(s: str):
+    return [f"{r}{su}" for r, su in CARD_RE.findall(s)]
+
+
+def parse_game(text: str):
+    """
+    Возвращает dict:
+      { game_number, game_id, player_cards, dealer_cards, all_cards }
+    или None.
+    Левая скобка — игрок (P), правая — дилер (D).
+    """
+    clean = clean_text(text)
+
+    m = GAME_RE.search(clean)
     if not m:
-        return []
-    return [f"{r}{s}" for r, s in CARD_RE.findall(m.group(1))]
+        return None
+    game_number = int(m.group(1))
 
+    m_id = ID_RE.search(clean)
+    game_id = m_id.group(1) if m_id else ""
 
-def parse_file(path):
-    games = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line_number, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            m = GAME_RE.search(line)
-            if not m:
-                continue
+    hands = HAND_RE.findall(clean)
+    if len(hands) < 2:
+        return None
 
-            player_cards = extract_cards(m.group(2))
-            dealer_cards = extract_cards(m.group(3))
+    player_cards = extract_cards_from_str(hands[0])
+    dealer_cards = extract_cards_from_str(hands[1])
 
-            if not player_cards and not dealer_cards:
-                continue
+    if not player_cards and not dealer_cards:
+        return None
 
-            games.append({
-                "index": len(games),
-                "game_number": int(m.group(1)),
-                "player": player_cards,
-                "dealer": dealer_cards,
-                "all_cards": player_cards + dealer_cards,
-            })
-    return games
+    return {
+        "game_number": game_number,
+        "game_id": game_id,
+        "player_cards": player_cards,
+        "dealer_cards": dealer_cards,
+        "all_cards": player_cards + dealer_cards,
+    }
 
 
 # ============================================================
-# ПРИЗНАКИ ИГРЫ
+# ПРИЗНАКИ ИГРЫ (совпадают со сканером)
 # ============================================================
 
 def ranks(cards):
     return [c[:-1] for c in cards]
 
+
 def suits(cards):
     return [c[-1] for c in cards]
+
 
 def rank_sequence(cards):
     return "-".join(ranks(cards))
 
+
 def suit_sequence(cards):
     return "-".join(suits(cards))
+
 
 def exact_sequence(cards):
     return "-".join(cards)
 
 
-def game_features(game):
+def game_features(game, player_cards, dealer_cards):
     result = []
 
-    for side_name, cards in (("P", game["player"]), ("D", game["dealer"])):
+    for side_name, cards in (("P", player_cards), ("D", dealer_cards)):
         if not cards:
             continue
 
@@ -131,11 +139,13 @@ def game_features(game):
         result.append(f"{side_name}:SUITS={suit_sequence(cards)}")
         result.append(f"{side_name}:EXACT={exact_sequence(cards)}")
 
-        rc = Counter(ranks(cards))
+        rc = {}
+        for r in ranks(cards):
+            rc[r] = rc.get(r, 0) + 1
         for rank, count in sorted(rc.items()):
             result.append(f"{side_name}:RANKCOUNT:{rank}={count}")
 
-        for rank in HIGH_RANKS:
+        for rank in ("J", "Q", "K", "A"):
             if rank in ranks(cards):
                 result.append(f"{side_name}:HAS_{rank}")
 
@@ -143,323 +153,189 @@ def game_features(game):
 
 
 # ============================================================
-# БАЗА
+# ЗАГРУЗКА ПАТТЕРНОВ
 # ============================================================
 
-def calculate_baseline(games):
-    total = len(games)
-    baseline = {}
-    for target in TARGET_CARDS:
-        hits = sum(1 for g in games if target in g["all_cards"])
-        baseline[target] = {
-            "hits": hits,
-            "total": total,
-            "rate": hits / total if total else 0.0,
-        }
-    return baseline
+def load_patterns():
+    if not PATTERNS_FILE.exists():
+        raise SystemExit(f"❌ Не найден {PATTERNS_FILE}")
 
+    with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-# ============================================================
-# СБОР ПАТТЕРНОВ (только одиночные)
-# ============================================================
+    result = []
+    for s in data.get("survivors", []):
+        gap, feature = s["key"]
+        result.append({
+            "gap": int(gap),
+            "feature": feature,
+            "target": s["target"],
+        })
 
-def collect_patterns(games):
-    n = len(games)
-    for g in games:
-        g["features"] = game_features(g)
-
-    occ = Counter()
-    hit = Counter()
-
-    for i in range(n - MAX_GAP):
-        feats = games[i]["features"]
-        for gap in range(1, MAX_GAP + 1):
-            j = i + gap
-            if j >= n:
-                break
-            present = TARGET_SET.intersection(games[j]["all_cards"])
-            for f in feats:
-                key = (gap, f)
-                occ[key] += 1
-                if present:
-                    for t in present:
-                        hit[(key, t)] += 1
-
-    return occ, hit
+    print(f"✅ Загружено паттернов: {len(result)}")
+    return result
 
 
 # ============================================================
-# ПРОВЕРКА НА ВТОРОЙ ПОЛОВИНЕ (hold-out)
+# СОСТОЯНИЕ
 # ============================================================
 
-def verify_on_holdout(games, target, pattern_key):
-    """
-    Считает, сколько раз паттерн сработал на hold-out части
-    и сколько раз попал target.
-    """
-    gap, feature = pattern_key
-    n = len(games)
-    occ = 0
-    hits = 0
+pending = {}
 
-    for i in range(n - MAX_GAP):
-        feats = games[i]["features"]
-        if feature not in feats:
+# Игры, которые уже видели (для проверки на пропуски)
+seen_games = set()
+
+
+# ============================================================
+# ЛОГИКА
+# ============================================================
+
+bot: Bot = None
+patterns = []
+
+
+async def send_prognoz(target_game: int, card: str):
+    text = f"{target_game}: {card}"
+    try:
+        msg = await bot.send_message(CHANNEL_PROGNOZ_ID, text)
+        return msg.message_id
+    except Exception as e:
+        print(f"⚠️ Не смог отправить прогноз: {e}")
+        return None
+
+
+async def edit_prognoz(message_id: int, target_game: int, card: str, ok: bool):
+    mark = "✅" if ok else "❌"
+    text = f"{target_game}: {card} {mark}"
+    try:
+        await bot.edit_message_text(
+            chat_id=CHANNEL_PROGNOZ_ID,
+            message_id=message_id,
+            text=text,
+        )
+    except Exception as e:
+        print(f"⚠️ Не смог отредактировать прогноз: {e}")
+
+
+async def check_pending_for_card(card: str):
+    for key, info in list(pending.items()):
+        if info["hit"] is not None:
             continue
-        j = i + gap
-        if j >= n:
-            continue
-        occ += 1
-        if target in games[j]["all_cards"]:
-            hits += 1
-
-    return occ, hits
-
-
-# ============================================================
-# РАСЧЁТ
-# ============================================================
-
-def score_patterns(occ, hit, baseline_rate):
-    results = []
-    for key, occurrences in occ.items():
-        if occurrences < MIN_OCCURRENCES:
-            continue
-        hits = hit.get(key, 0)  # key = (gap, feature)
-        # hit хранит ((gap, feature), target) — обойдём иначе:
-        # здесь передадим hit как вложенный
-    return results
-
-
-def evaluate_patterns(occ, hit, baseline):
-    """
-    Собирает все паттерны по всем target и считает метрики.
-    """
-    results = []
-
-    for key, occurrences in occ.items():
-        if occurrences < MIN_OCCURRENCES:
+        if info["card"] != card:
             continue
 
-        for target in TARGET_CARDS:
-            hits = hit.get((key, target), 0)
-            if hits == 0:
+        info["hit"] = True
+        await edit_prognoz(info["message_id"], info["target_game"], card, ok=True)
+        print(f"✅ #{info['target_game']} {card} — сбылось")
+        del pending[key]
+
+
+async def check_pending_timeout(current_game_number: int):
+    for key, info in list(pending.items()):
+        if info["hit"] is not None:
+            continue
+        if current_game_number > info["target_game"] + 3:
+            info["hit"] = False
+            await edit_prognoz(
+                info["message_id"], info["target_game"], info["card"], ok=False
+            )
+            print(f"❌ #{info['target_game']} {info['card']} — не сбылось")
+            del pending[key]
+
+
+async def on_new_game(text: str):
+    game = parse_game(text)
+    if not game:
+        print(f"⚠️ Не распарсил: {text[:80]}")
+        return
+
+    gn = game["game_number"]
+
+    # защита от дублей
+    if gn in seen_games:
+        return
+    seen_games.add(gn)
+
+    player_cards = game["player_cards"]
+    dealer_cards = game["dealer_cards"]
+
+    print(f"🎮 #{gn}  P:{player_cards}  D:{dealer_cards}")
+
+    # 1. Сбылись ли прогнозы
+    for card in game["all_cards"]:
+        await check_pending_for_card(card)
+
+    # 2. Таймауты
+    await check_pending_timeout(gn)
+
+    # 3. Новые триггеры
+    feats = set(game_features(game, player_cards, dealer_cards))
+
+    for p in patterns:
+        if p["feature"] in feats:
+            target_game = gn + p["gap"]
+            card = p["target"]
+
+            key = (gn, p["feature"], card)
+            if key in pending:
                 continue
 
-            base_rate = baseline[target]["rate"]
-            rate = hits / occurrences
-            lift = rate / base_rate if base_rate > 0 else 0
-
-            if lift < MIN_LIFT:
+            already = any(
+                v["target_game"] == target_game and v["card"] == card
+                for v in pending.values()
+            )
+            if already:
                 continue
 
-            expected = occurrences * base_rate
-            excess = hits - expected
+            mid = await send_prognoz(target_game, card)
+            if mid is None:
+                continue
 
-            results.append({
-                "pattern": f"GAP={key[0]}|{key[1]}",
-                "key": key,
-                "target": target,
-                "occurrences": occurrences,
-                "hits": hits,
-                "expected": expected,
-                "excess": excess,
-                "rate": rate,
-                "lift": lift,
-            })
-
-    results.sort(key=lambda x: x["excess"], reverse=True)
-    return results
+            pending[key] = {
+                "message_id": mid,
+                "target_game": target_game,
+                "card": card,
+                "hit": None,
+            }
+            print(f"🔮 #{target_game} {card}  (триггер #{gn} {p['feature']})")
 
 
 # ============================================================
-# ВЫВОД
+# HANDLER
 # ============================================================
 
-def percent(v):
-    return f"{v * 100:.2f}%"
+dp = Dispatcher()
 
 
-def save_json(data, filename):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+@dp.channel_post(F.chat.id == CHANNEL_STAT_ID)
+async def handle_stat(message: Message):
+    if not message.text:
+        return
+    await on_new_game(message.text)
 
 
 # ============================================================
 # MAIN
 # ============================================================
 
-def main():
-    print()
-    print("=" * 70)
-    print("     PATTERN SCANNER — ЧЕСТНАЯ ВЕРСИЯ (с проверкой)")
-    print("=" * 70)
+async def main():
+    global bot, patterns
 
-    path = Path(__file__).parent / INPUT_FILE
-    if not path.exists():
-        print(f"❌ Файл не найден: {path}")
-        print("Содержимое папки:")
-        for p in sorted(Path(__file__).parent.iterdir()):
-            print(f"   {'📄' if p.is_file() else '📁'} {p.name}")
-        return
+    patterns = load_patterns()
 
-    games = parse_file(path)
-    if len(games) < 100:
-        print(f"❌ Слишком мало игр: {len(games)}")
-        return
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
 
-    total = len(games)
-    half = total // 2
+    me = await bot.get_me()
+    print(f"🚀 Бот запущен: @{me.username}")
+    print(f"📥 CHANNEL_STAT: {CHANNEL_STAT_ID}")
+    print(f"📤 CHANNEL_PROGNOZ: {CHANNEL_PROGNOZ_ID}")
+    print(f"🧩 Паттернов: {len(patterns)}")
 
-    train = games[:half]
-    test = games[half:]
-
-    print(f"🎮 Всего игр: {total}")
-    print(f"📚 Обучающая половина (0..{half}): {len(train)}")
-    print(f"🧪 Проверочная половина ({half}..{total}): {len(test)}")
-
-    # --------------------------------------------------------
-    # 1. Находим паттерны на первой половине
-    # --------------------------------------------------------
-
-    print()
-    print("=" * 70)
-    print("ШАГ 1. Поиск паттернов на ОБУЧАЮЩЕЙ половине")
-    print("=" * 70)
-
-    baseline_train = calculate_baseline(train)
-
-    print()
-    print("🎯 Базовая частота (на обучающей половине):")
-    for t in TARGET_CARDS:
-        b = baseline_train[t]
-        print(f"   {t:<3} {b['hits']:>4}/{b['total']} = {percent(b['rate'])}")
-
-    print()
-    print("   → считаю паттерны...")
-
-    occ, hit = collect_patterns(train)
-
-    print(f"   ✅ всего пар (паттерн, карта): {len(hit)}")
-
-    patterns = evaluate_patterns(occ, hit, baseline_train)
-
-    print(f"   ✅ прошло фильтры (occ≥{MIN_OCCURRENCES}, lift≥{MIN_LIFT}): {len(patterns)}")
-
-    # --------------------------------------------------------
-    # 2. Проверяем на второй половине
-    # --------------------------------------------------------
-
-    print()
-    print("=" * 70)
-    print("ШАГ 2. Проверка на ПРОВЕРОЧНОЙ половине (hold-out)")
-    print("=" * 70)
-
-    baseline_test = calculate_baseline(test)
-
-    survivors = []
-
-    for i, p in enumerate(patterns, 1):
-        if i % 20 == 0:
-            print(f"   ... проверено {i}/{len(patterns)}", flush=True)
-
-        target = p["target"]
-        key = p["key"]
-
-        # считаем фичи для test
-        for g in test:
-            if "features" not in g:
-                g["features"] = game_features(g)
-
-        occ_test, hits_test = verify_on_holdout(test, target, key)
-
-        if occ_test < 10:
-            continue
-
-        base_test = baseline_test[target]["rate"]
-        rate_test = hits_test / occ_test if occ_test else 0
-        lift_test = rate_test / base_test if base_test > 0 else 0
-        expected_test = occ_test * base_test
-        excess_test = hits_test - expected_test
-
-        # Ужесточённый критерий выживания:
-        #   1. lift на проверке >= 1.30
-        #   2. lift на проверке не упал больше чем на 30% от train
-        #   3. есть положительный excess
-        lift_train = p["lift"]
-        if (
-            lift_test >= 1.30
-            and lift_test >= lift_train * 0.70
-            and excess_test > 0
-        ):
-            survivors.append({
-                **p,
-                "holdout_occ": occ_test,
-                "holdout_hits": hits_test,
-                "holdout_rate": rate_test,
-                "holdout_lift": lift_test,
-                "holdout_excess": excess_test,
-                "lift_retention": lift_test / lift_train if lift_train > 0 else 0,
-            })
-
-    print()
-    print(f"   ✅ Выжило после проверки: {len(survivors)}")
-
-    # --------------------------------------------------------
-    # 3. Сохраняем и показываем
-    # --------------------------------------------------------
-
-    result = {
-        "settings": {
-            "MAX_GAP": MAX_GAP,
-            "MIN_OCCURRENCES": MIN_OCCURRENCES,
-            "MIN_LIFT": MIN_LIFT,
-        },
-        "total_games": total,
-        "train_games": len(train),
-        "test_games": len(test),
-        "patterns_found_on_train": len(patterns),
-        "patterns_survived_holdout": len(survivors),
-        "survivors": survivors,
-    }
-
-    save_json(result, "pattern_results.json")
-
-    print()
-    print("=" * 70)
-    print("                 РЕЗУЛЬТАТ")
-    print("=" * 70)
-
-    if not survivors:
-        print()
-        print("   🟡 Ни один паттерн НЕ выжил после проверки.")
-        print("   Это означает: всё, что было найдено раньше — СЛУЧАЙНОСТЬ.")
-        print("   Реальных закономерностей в этих данных нет.")
-    else:
-        # сортируем по устойчивости lift (насколько эффект сохранился)
-        survivors.sort(
-            key=lambda x: (x["lift_retention"], x["holdout_lift"]),
-            reverse=True,
-        )
-
-        print()
-        print(f"   🟢 Выжило паттернов: {len(survivors)}")
-        print()
-        for i, s in enumerate(survivors[:30], 1):
-            ret = s["lift_retention"] * 100
-            print(f"{i}. 🎯 {s['target']}  {s['pattern']}")
-            print(f"   Обучение:  {s['hits']}/{s['occurrences']} = {percent(s['rate'])}  "
-                  f"lift {s['lift']:.2f}x")
-            print(f"   Проверка:  {s['holdout_hits']}/{s['holdout_occ']} = "
-                  f"{percent(s['holdout_rate'])}  lift {s['holdout_lift']:.2f}x")
-            print(f"   Устойчивость: {ret:.0f}% от обучающей")
-            print()
-
-    print("=" * 70)
-    print("💾 Сохранено: pattern_results.json")
-    print("=" * 70)
-    print()
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
