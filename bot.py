@@ -382,7 +382,16 @@ def main():
         expected_test = occ_test * base_test
         excess_test = hits_test - expected_test
 
-        if lift_test >= 1.20 and excess_test > 0:
+        # Ужесточённый критерий выживания:
+        #   1. lift на проверке >= 1.30
+        #   2. lift на проверке не упал больше чем на 30% от train
+        #   3. есть положительный excess
+        lift_train = p["lift"]
+        if (
+            lift_test >= 1.30
+            and lift_test >= lift_train * 0.70
+            and excess_test > 0
+        ):
             survivors.append({
                 **p,
                 "holdout_occ": occ_test,
@@ -390,6 +399,7 @@ def main():
                 "holdout_rate": rate_test,
                 "holdout_lift": lift_test,
                 "holdout_excess": excess_test,
+                "lift_retention": lift_test / lift_train if lift_train > 0 else 0,
             })
 
     print()
@@ -426,18 +436,23 @@ def main():
         print("   Это означает: всё, что было найдено раньше — СЛУЧАЙНОСТЬ.")
         print("   Реальных закономерностей в этих данных нет.")
     else:
+        # сортируем по устойчивости lift (насколько эффект сохранился)
+        survivors.sort(
+            key=lambda x: (x["lift_retention"], x["holdout_lift"]),
+            reverse=True,
+        )
+
         print()
         print(f"   🟢 Выжило паттернов: {len(survivors)}")
         print()
         for i, s in enumerate(survivors[:30], 1):
+            ret = s["lift_retention"] * 100
             print(f"{i}. 🎯 {s['target']}  {s['pattern']}")
             print(f"   Обучение:  {s['hits']}/{s['occurrences']} = {percent(s['rate'])}  "
-                  f"(ожид. {s['expected']:.0f}, сверх нормы {s['excess']:+.0f})  "
                   f"lift {s['lift']:.2f}x")
             print(f"   Проверка:  {s['holdout_hits']}/{s['holdout_occ']} = "
-                  f"{percent(s['holdout_rate'])}  "
-                  f"(сверх нормы {s['holdout_excess']:+.0f})  "
-                  f"lift {s['holdout_lift']:.2f}x")
+                  f"{percent(s['holdout_rate'])}  lift {s['holdout_lift']:.2f}x")
+            print(f"   Устойчивость: {ret:.0f}% от обучающей")
             print()
 
     print("=" * 70)
