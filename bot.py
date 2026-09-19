@@ -43,16 +43,32 @@ if not PATTERNS_FILE.exists():
 with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
+MIN_LIFT = 1.5          # минимальный lift на проверке
+MIN_RETENTION = 0.85    # эффект не упал больше чем на 15%
+MIN_OCC = 30            # минимум случаев на проверке
+MAX_GAP = 7             # не берём слишком далёкие прогнозы
+
 PATTERNS = []
 for s in _data.get("survivors", []):
     gap, feature = s["key"]
+    gap = int(gap)
+
+    if gap > MAX_GAP:
+        continue
+    if s.get("holdout_lift", 0) < MIN_LIFT:
+        continue
+    if s.get("lift_retention", 0) < MIN_RETENTION:
+        continue
+    if s.get("holdout_occ", 0) < MIN_OCC:
+        continue
+
     PATTERNS.append({
-        "gap": int(gap),
+        "gap": gap,
         "feature": feature,
         "target": s["target"],
     })
 
-print(f"✅ Загружено паттернов: {len(PATTERNS)}", flush=True)
+print(f"✅ Загружено паттернов (после фильтра): {len(PATTERNS)}", flush=True)
 
 
 # =====================================================================
