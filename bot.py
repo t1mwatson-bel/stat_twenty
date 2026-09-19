@@ -4,6 +4,8 @@ import re
 import json
 import time
 from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
 
 import requests
 
@@ -43,6 +45,7 @@ if not PATTERNS_FILE.exists():
 with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
+# ---- ФИЛЬТР ПАТТЕРНОВ ----
 MIN_LIFT = 1.6
 MIN_RETENTION = 0.85
 MIN_OCC = 30
@@ -82,6 +85,8 @@ POLL_INTERVAL = 2.0
 FINALIZE_WAIT_SECONDS = 30
 OFFSET_FILE = "tg_offset.txt"
 
+STATS_INTERVAL = 6 * 60 * 60  # 6 часов
+
 
 # =====================================================================
 # TELEGRAM HTTP
@@ -99,6 +104,7 @@ def tg_send(text):
             json={
                 "chat_id": CHANNEL_PROGNOZ,
                 "text": text,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=10,
@@ -123,6 +129,7 @@ def tg_edit(message_id, text):
                 "chat_id": CHANNEL_PROGNOZ,
                 "message_id": message_id,
                 "text": text,
+                "parse_mode": "HTML",
             },
             timeout=10,
         )
@@ -140,7 +147,9 @@ def tg_get_updates(offset):
                 "offset": offset,
                 "timeout": 3,
                 "limit": 50,
-                "allowed_updates": json.dumps(["channel_post", "edited_channel_post"]),
+                "allowed_updates": json.dumps(
+                    ["channel_post", "edited_channel_post"]
+                ),
             },
             timeout=15,
         )
@@ -288,17 +297,12 @@ def game_features(player_cards, dealer_cards):
 # STATE
 # =====================================================================
 
-# pending_games: {game_number: {"first_seen": ts, "text": str}}
 pending_games = {}
-
-# games_cache: {game_number: parsed_game}
 games_cache = {}
-
-# predictions: list of dict
 predictions = []
-
-# processed triggers: set of (game_number, feature, target)
 processed_triggers = set()
+
+stats_last_sent = time.time()
 
 
 # =====================================================================
@@ -320,7 +324,7 @@ def create_predictions(game):
         if key in processed_triggers:
             continue
 
-        # не спамим одинаковыми прогнозами
+        # один прогноз на одну целевую игру
         already = any(
             pr["target_game"] == target_game
             and pr["status"] == "pending"
@@ -339,10 +343,33 @@ def create_predictions(game):
             "target_game": target_game,
             "card": card,
             "status": "pending",
+            "trigger_game": gn,
+            "feature": p["feature"],
         })
         processed_triggers.add(key)
 
-        print(f"🔮 #{target_game} {card}  (триггер #{gn} {p['feature']})", flush=True)
+        print(
+            f"🔮 #{target_game} {card}  (триггер #{gn} {p['feature']})",
+            flush=True,
+        )
+
+
+def check_pending_on_new_game(game):
+    """Когда пришла новая игра — проверяем pending по этой игре."""
+    for pr in predictions:
+        if pr["status"] != "pending":
+            continue
+        if pr["card"] in game["all_cards"]:
+            if pr["target_game"] <= game["game_number"] <= pr["target_game"] + 3:
+                pr["status"] = "win"
+                tg_edit(pr["message_id"], f"{pr['target_game']}: {pr['card']} ✅")
+                feat = pr.get("feature", "?")
+                trig = pr.get("trigger_game", "?")
+                print(
+                    f"✅ #{pr['target_game']} {pr['card']} — СБЫЛОСЬ "
+                    f"(паттерн: {feat}, триггер: #{trig})",
+                    flush=True,
+                )
 
 
 def check_predictions(current_game_number):
@@ -352,10 +379,10 @@ def check_predictions(current_game_number):
 
         target = pr["target_game"]
         card = pr["card"]
+        feat = pr.get("feature", "?")
+        trig = pr.get("trigger_game", "?")
 
-        # если текущая игра уже за пределами 4-игрового окна — минус
         if current_game_number > target + 3:
-            # прогоняем по всем 4 играм ещё раз (вдруг карта была, но мы пропустили)
             for dogon in range(0, 4):
                 g_num = target + dogon
                 g = games_cache.get(g_num)
@@ -364,26 +391,21 @@ def check_predictions(current_game_number):
                 if card in g["all_cards"]:
                     pr["status"] = "win"
                     tg_edit(pr["message_id"], f"{target}: {card} ✅")
-                    print(f"✅ #{target} {card} — сбылось (догон {dogon})", flush=True)
+                    print(
+                        f"✅ #{target} {card} — СБЫЛОСЬ, догон {dogon} "
+                        f"(паттерн: {feat}, триггер: #{trig})",
+                        flush=True,
+                    )
                     break
             else:
                 pr["status"] = "lose"
                 tg_edit(pr["message_id"], f"{target}: {card} ❌")
-                print(f"❌ #{target} {card} — не сбылось", flush=True)
+                print(
+                    f"❌ #{target} {card} — НЕ СБЫЛОСЬ "
+                    f"(паттерн: {feat}, триггер: #{trig})",
+                    flush=True,
+                )
             continue
-
-
-def check_pending_on_new_game(game):
-    """Когда пришла новая игра — проверяем pending по этой игре."""
-    for pr in predictions:
-        if pr["status"] != "pending":
-            continue
-        if pr["card"] in game["all_cards"]:
-            # проверяем что игра в допустимом окне
-            if pr["target_game"] <= game["game_number"] <= pr["target_game"] + 3:
-                pr["status"] = "win"
-                tg_edit(pr["message_id"], f"{pr['target_game']}: {pr['card']} ✅")
-                print(f"✅ #{pr['target_game']} {pr['card']} — сбылось", flush=True)
 
 
 # =====================================================================
@@ -408,15 +430,13 @@ def finalize_pending_games():
             continue
 
         games_cache[gn] = game
-        print(f"🎮 #{gn}  P:{game['player_cards']}  D:{game['dealer_cards']}", flush=True)
+        print(
+            f"🎮 #{gn}  P:{game['player_cards']}  D:{game['dealer_cards']}",
+            flush=True,
+        )
 
-        # 1. проверяем pending по этой игре
         check_pending_on_new_game(game)
-
-        # 2. таймауты
         check_predictions(gn)
-
-        # 3. новые триггеры
         create_predictions(game)
 
 
@@ -450,17 +470,14 @@ def process_updates(offset):
             continue
         gn = int(m.group(1))
 
-        # только завершённые игры (✅ или 🔰)
         if not re.search(r"[✅🔰]", text):
             continue
 
         if gn in pending_games:
-            # обновляем текст (Telegram может дописать карты)
             pending_games[gn]["text"] = text
             continue
 
         if gn in games_cache:
-            # уже обработана, но текст мог обновиться
             new_game = parse_game(text)
             if new_game:
                 games_cache[gn] = new_game
@@ -470,9 +487,105 @@ def process_updates(offset):
             "first_seen": time.time(),
             "text": text,
         }
-        print(f"👀 Новая игра #N{gn}, жду {FINALIZE_WAIT_SECONDS} сек", flush=True)
+        print(
+            f"👀 Новая игра #N{gn}, жду {FINALIZE_WAIT_SECONDS} сек",
+            flush=True,
+        )
 
     return offset
+
+
+# =====================================================================
+# STATS
+# =====================================================================
+
+def build_stats_message():
+    resolved = [p for p in predictions if p["status"] in ("win", "lose")]
+
+    if not resolved:
+        return None
+
+    total = len(resolved)
+    wins = sum(1 for p in resolved if p["status"] == "win")
+    loses = total - wins
+    rate = wins / total * 100 if total else 0
+
+    by_feature = defaultdict(lambda: {"wins": 0, "loses": 0})
+    for p in resolved:
+        feat = p.get("feature", "?")
+        if p["status"] == "win":
+            by_feature[feat]["wins"] += 1
+        else:
+            by_feature[feat]["loses"] += 1
+
+    feature_stats = []
+    for feat, st in by_feature.items():
+        tot = st["wins"] + st["loses"]
+        if tot < 2:
+            continue
+        feature_stats.append({
+            "feature": feat,
+            "wins": st["wins"],
+            "loses": st["loses"],
+            "total": tot,
+            "rate": st["wins"] / tot * 100,
+        })
+
+    feature_stats.sort(key=lambda x: (x["rate"], x["total"]), reverse=True)
+
+    top = feature_stats[:5]
+    worst = [f for f in feature_stats if f["rate"] < 40][:5]
+
+    pending = sum(1 for p in predictions if p["status"] == "pending")
+
+    now_str = datetime.now().strftime("%d.%m %H:%M")
+
+    lines = []
+    lines.append(f"📊 <b>СТАТИСТИКА ({now_str})</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"Всего прогнозов: {total}")
+    lines.append(f"✅ Сбылось: {wins} ({rate:.1f}%)")
+    lines.append(f"❌ Не сбылось: {loses} ({100 - rate:.1f}%)")
+    lines.append("")
+
+    if top:
+        lines.append("🏆 <b>ТОП-5 ПАТТЕРНОВ:</b>")
+        for i, f in enumerate(top, 1):
+            lines.append(
+                f"{i}. {f['feature']}  {f['wins']}/{f['total']} ({f['rate']:.0f}%)"
+            )
+        lines.append("")
+
+    if worst:
+        lines.append("💀 <b>ХУДШИЕ:</b>")
+        for i, f in enumerate(worst, 1):
+            lines.append(
+                f"{i}. {f['feature']}  {f['wins']}/{f['total']} ({f['rate']:.0f}%)"
+            )
+        lines.append("")
+
+    lines.append(f"⏳ В ожидании: {pending}")
+
+    return "\n".join(lines)
+
+
+def maybe_send_stats():
+    global stats_last_sent
+
+    if time.time() - stats_last_sent < STATS_INTERVAL:
+        return
+
+    msg = build_stats_message()
+    if msg:
+        mid = tg_send(msg)
+        if mid:
+            print("📊 Статистика отправлена", flush=True)
+        else:
+            print("⚠️ Не смог отправить статистику", flush=True)
+    else:
+        print("📊 Статистики нет (нет resolved прогнозов)", flush=True)
+
+    stats_last_sent = time.time()
 
 
 # =====================================================================
@@ -481,20 +594,25 @@ def process_updates(offset):
 
 def main():
     print("=" * 60, flush=True)
-    print("🚀 PATTERN FORECAST BOT (requests)", flush=True)
+    print("🚀 PATTERN FORECAST BOT", flush=True)
     print("=" * 60, flush=True)
     print(f"📥 CHANNEL_STAT: {CHANNEL_STAT}", flush=True)
     print(f"📤 CHANNEL_PROGNOZ: {CHANNEL_PROGNOZ}", flush=True)
     print(f"🧩 Паттернов: {len(PATTERNS)}", flush=True)
+    print(f"📊 Статистика раз в {STATS_INTERVAL // 3600} ч", flush=True)
     print("=" * 60, flush=True)
 
     offset = load_offset()
     print(f"📌 Offset: {offset}", flush=True)
 
+    global stats_last_sent
+    stats_last_sent = time.time()
+
     while True:
         try:
             offset = process_updates(offset)
             finalize_pending_games()
+            maybe_send_stats()
             time.sleep(POLL_INTERVAL)
 
         except KeyboardInterrupt:
