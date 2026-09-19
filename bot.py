@@ -319,7 +319,7 @@ def create_predictions(game):
 
         # не спамим одинаковыми прогнозами
         already = any(
-            pr["target_game"] == target_game and pr["card"] == card
+            pr["target_game"] == target_game
             and pr["status"] == "pending"
             for pr in predictions
         )
