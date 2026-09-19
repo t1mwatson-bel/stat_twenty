@@ -33,10 +33,10 @@ CHANNEL_PROGNOZ = str(CHANNEL_PROGNOZ).strip()
 
 
 # =====================================================================
-# PATTERNS
+# PATTERNS (новый формат: G1[...]|G2[...]|G3[...])
 # =====================================================================
 
-PATTERNS_FILE = Path(__file__).parent / "pattern_results.json"
+PATTERNS_FILE = Path(__file__).parent / "pattern_results_cards.json"
 
 if not PATTERNS_FILE.exists():
     print(f"❌ Не найден {PATTERNS_FILE}", flush=True)
@@ -45,36 +45,56 @@ if not PATTERNS_FILE.exists():
 with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
-# ---- ФИЛЬТР ПАТТЕРНОВ ----
-MIN_LIFT = 1.6
-MIN_RETENTION = 0.85
-MIN_OCC = 30
-MIN_HOLDOUT_HITS = 8
-MAX_GAP = 6
+# ---- ФИЛЬТР ----
+MIN_ACCURACY = 55.0
+MIN_OCCURRENCES = 30
+MIN_LIFT = 1.15
+
+# === НОВОЕ: только старшие ранги ===
+ALLOWED_RANKS = {"J", "Q", "K", "A"}
 
 PATTERNS = []
-for s in _data.get("survivors", []):
-    gap, feature = s["key"]
-    gap = int(gap)
 
-    if gap > MAX_GAP:
-        continue
-    if s.get("holdout_lift", 0) < MIN_LIFT:
-        continue
-    if s.get("lift_retention", 0) < MIN_RETENTION:
-        continue
-    if s.get("holdout_occ", 0) < MIN_OCC:
-        continue
-    if s.get("holdout_hits", 0) < MIN_HOLDOUT_HITS:
+for target_card, items in _data.items():
+    # фильтр по рангу целевой карты
+    card_rank = target_card[:-1]  # "A♥" -> "A"
+    if card_rank not in ALLOWED_RANKS:
         continue
 
-    PATTERNS.append({
-        "gap": gap,
-        "feature": feature,
-        "target": s["target"],
-    })
+    for item in items:
+        if item.get("accuracy", 0) < MIN_ACCURACY:
+            continue
+        if item.get("occurrences", 0) < MIN_OCCURRENCES:
+            continue
+        if item.get("lift", 0) < MIN_LIFT:
+            continue
+
+        raw = item["pattern"]
+        parts = raw.split("|")
+
+        feat_seq = []
+        ok = True
+        for part in parts:
+            m = re.match(r"G\d+\[(.*?)\]$", part.strip())
+            if not m:
+                ok = False
+                break
+            feat_seq.append(m.group(1))
+
+        if not ok or not (1 <= len(feat_seq) <= 3):
+            continue
+
+        PATTERNS.append({
+            "feats": feat_seq,
+            "target": target_card,
+            "accuracy": item.get("accuracy", 0),
+            "occurrences": item.get("occurrences", 0),
+            "lift": item.get("lift", 0),
+            "dogon": item.get("dogon", [0, 0, 0, 0]),
+        })
 
 print(f"✅ Загружено паттернов (после фильтра): {len(PATTERNS)}", flush=True)
+print(f"🎴 Только ранги: {sorted(ALLOWED_RANKS)}", flush=True)
 
 
 # =====================================================================
@@ -84,8 +104,7 @@ print(f"✅ Загружено паттернов (после фильтра): {
 POLL_INTERVAL = 2.0
 FINALIZE_WAIT_SECONDS = 30
 OFFSET_FILE = "tg_offset.txt"
-
-STATS_INTERVAL = 6 * 60 * 60  # 6 часов
+STATS_INTERVAL = 6 * 60 * 60
 
 
 # =====================================================================
@@ -97,7 +116,6 @@ SESSION = requests.Session()
 
 
 def tg_send(text):
-    """Отправляет сообщение в канал прогнозов. Возвращает message_id."""
     try:
         r = SESSION.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -119,7 +137,6 @@ def tg_send(text):
 
 
 def tg_edit(message_id, text):
-    """Редактирует сообщение в канале прогнозов."""
     if not message_id:
         return False
     try:
@@ -203,7 +220,6 @@ def extract_cards(s):
 
 
 def parse_game(text):
-    """Возвращает dict или None."""
     if not text:
         return None
 
@@ -232,7 +248,7 @@ def parse_game(text):
 
 
 # =====================================================================
-# FEATURES (совпадают со сканером)
+# FEATURES — точно как в сканере
 # =====================================================================
 
 def ranks(cards):
@@ -244,21 +260,24 @@ def suits(cards):
 
 
 def rank_seq(cards):
-    return "-".join(ranks(cards))
+    return ",".join(ranks(cards))
 
 
 def suit_seq(cards):
-    return "-".join(suits(cards))
+    return ",".join(suits(cards))
 
 
 def exact_seq(cards):
-    return "-".join(cards)
+    return ",".join(cards)
 
 
-def game_features(player_cards, dealer_cards):
+def game_features(game):
     result = []
 
-    for side_name, cards in (("P", player_cards), ("D", dealer_cards)):
+    for side_name, cards in (
+        ("P", game["player_cards"]),
+        ("D", game["dealer_cards"]),
+    ):
         if not cards:
             continue
 
@@ -273,6 +292,7 @@ def game_features(player_cards, dealer_cards):
             result.append(f"{side_name}:FIRST2_SUITS={suit_seq(cards[:2])}")
 
         if len(cards) >= 3:
+            result.append(f"{side_name}:FIRST3={exact_seq(cards[:3])}")
             result.append(f"{side_name}:FIRST3_RANKS={rank_seq(cards[:3])}")
             result.append(f"{side_name}:FIRST3_SUITS={suit_seq(cards[:3])}")
 
@@ -280,15 +300,15 @@ def game_features(player_cards, dealer_cards):
         result.append(f"{side_name}:SUITS={suit_seq(cards)}")
         result.append(f"{side_name}:EXACT={exact_seq(cards)}")
 
-        rc = {}
-        for r in ranks(cards):
-            rc[r] = rc.get(r, 0) + 1
-        for rank, count in sorted(rc.items()):
-            result.append(f"{side_name}:RANKCOUNT:{rank}={count}")
-
-        for rank in ("J", "Q", "K", "A"):
-            if rank in ranks(cards):
-                result.append(f"{side_name}:HAS_{rank}")
+        rs = set(ranks(cards))
+        if "J" in rs:
+            result.append(f"{side_name}:HAS_J")
+        if "Q" in rs:
+            result.append(f"{side_name}:HAS_Q")
+        if "K" in rs:
+            result.append(f"{side_name}:HAS_K")
+        if "A" in rs:
+            result.append(f"{side_name}:HAS_A")
 
     return result
 
@@ -299,9 +319,9 @@ def game_features(player_cards, dealer_cards):
 
 pending_games = {}
 games_cache = {}
+last_games_queue = []
 predictions = []
 processed_triggers = set()
-
 stats_last_sent = time.time()
 
 
@@ -309,22 +329,50 @@ stats_last_sent = time.time()
 # PREDICTION LOGIC
 # =====================================================================
 
-def create_predictions(game):
-    gn = game["game_number"]
-    feats = set(game_features(game["player_cards"], game["dealer_cards"]))
+def check_patterns_on_three_games(g1, g2, g3):
+    if not (g1 and g2 and g3):
+        return
+
+    n = g1["game_number"]
+    if g2["game_number"] != n + 1 or g3["game_number"] != n + 2:
+        return
+
+    f1 = set(game_features(g1))
+    f2 = set(game_features(g2))
+    f3 = set(game_features(g3))
 
     for p in PATTERNS:
-        if p["feature"] not in feats:
+        feats = p["feats"]
+        needed = len(feats)
+
+        if needed == 1:
+            seq_games = [g3]
+            seq_feats = [f3]
+        elif needed == 2:
+            seq_games = [g2, g3]
+            seq_feats = [f2, f3]
+        else:
+            seq_games = [g1, g2, g3]
+            seq_feats = [f1, f2, f3]
+
+        ok = True
+        for feature, feat_set in zip(feats, seq_feats):
+            if feature not in feat_set:
+                ok = False
+                break
+        if not ok:
             continue
 
-        target_game = gn + p["gap"]
-        card = p["target"]
+        trigger_start = seq_games[0]["game_number"]
+        trigger_end = seq_games[-1]["game_number"]
 
-        key = (gn, p["feature"], card)
+        key = (trigger_start, trigger_end, tuple(feats), p["target"])
         if key in processed_triggers:
             continue
 
-        # один прогноз на одну целевую игру
+        target_game = trigger_end + 1
+        card = p["target"]
+
         already = any(
             pr["target_game"] == target_game
             and pr["status"] == "pending"
@@ -343,69 +391,44 @@ def create_predictions(game):
             "target_game": target_game,
             "card": card,
             "status": "pending",
-            "trigger_game": gn,
-            "feature": p["feature"],
+            "trigger_start": trigger_start,
+            "trigger_end": trigger_end,
+            "pattern": "|".join(f"G{i+1}[{f}]" for i, f in enumerate(feats)),
+            "accuracy": p["accuracy"],
+            "lift": p["lift"],
         })
         processed_triggers.add(key)
 
         print(
-            f"🔮 #{target_game} {card}  (триггер #{gn} {p['feature']})",
+            f"🔮 #{target_game} {card}  "
+            f"(триггер #{trigger_start}..{trigger_end}, "
+            f"accuracy={p['accuracy']:.1f}%, lift={p['lift']:.2f})",
             flush=True,
         )
 
 
 def check_pending_on_new_game(game):
-    """Когда пришла новая игра — проверяем pending по этой игре."""
     for pr in predictions:
         if pr["status"] != "pending":
             continue
         if pr["card"] in game["all_cards"]:
-            if pr["target_game"] <= game["game_number"] <= pr["target_game"] + 3:
+            target = pr["target_game"]
+            if target <= game["game_number"] <= target + 3:
                 pr["status"] = "win"
-                tg_edit(pr["message_id"], f"{pr['target_game']}: {pr['card']} ✅")
-                feat = pr.get("feature", "?")
-                trig = pr.get("trigger_game", "?")
-                print(
-                    f"✅ #{pr['target_game']} {pr['card']} — СБЫЛОСЬ "
-                    f"(паттерн: {feat}, триггер: #{trig})",
-                    flush=True,
-                )
+                tg_edit(pr["message_id"], f"{target}: {pr['card']} ✅")
+                print(f"✅ #{target} {pr['card']} — СБЫЛОСЬ", flush=True)
 
 
-def check_predictions(current_game_number):
+def check_predictions_timeouts(current_game_number):
     for pr in predictions:
         if pr["status"] != "pending":
             continue
 
         target = pr["target_game"]
-        card = pr["card"]
-        feat = pr.get("feature", "?")
-        trig = pr.get("trigger_game", "?")
-
         if current_game_number > target + 3:
-            for dogon in range(0, 4):
-                g_num = target + dogon
-                g = games_cache.get(g_num)
-                if not g:
-                    continue
-                if card in g["all_cards"]:
-                    pr["status"] = "win"
-                    tg_edit(pr["message_id"], f"{target}: {card} ✅")
-                    print(
-                        f"✅ #{target} {card} — СБЫЛОСЬ, догон {dogon} "
-                        f"(паттерн: {feat}, триггер: #{trig})",
-                        flush=True,
-                    )
-                    break
-            else:
-                pr["status"] = "lose"
-                tg_edit(pr["message_id"], f"{target}: {card} ❌")
-                print(
-                    f"❌ #{target} {card} — НЕ СБЫЛОСЬ "
-                    f"(паттерн: {feat}, триггер: #{trig})",
-                    flush=True,
-                )
-            continue
+            pr["status"] = "lose"
+            tg_edit(pr["message_id"], f"{target}: {pr['card']} ❌")
+            print(f"❌ #{target} {pr['card']} — НЕ СБЫЛОСЬ", flush=True)
 
 
 # =====================================================================
@@ -418,6 +441,7 @@ def finalize_pending_games():
         gn for gn, info in pending_games.items()
         if now - info["first_seen"] >= FINALIZE_WAIT_SECONDS
     ]
+    ready.sort()
 
     for gn in ready:
         info = pending_games.pop(gn, None)
@@ -436,8 +460,18 @@ def finalize_pending_games():
         )
 
         check_pending_on_new_game(game)
-        check_predictions(gn)
-        create_predictions(game)
+        check_predictions_timeouts(gn)
+
+        last_games_queue.append(game)
+        if len(last_games_queue) > 3:
+            last_games_queue.pop(0)
+
+        if len(last_games_queue) == 3:
+            check_patterns_on_three_games(
+                last_games_queue[0],
+                last_games_queue[1],
+                last_games_queue[2],
+            )
 
 
 # =====================================================================
@@ -501,7 +535,6 @@ def process_updates(offset):
 
 def build_stats_message():
     resolved = [p for p in predictions if p["status"] in ("win", "lose")]
-
     if not resolved:
         return None
 
@@ -510,32 +543,31 @@ def build_stats_message():
     loses = total - wins
     rate = wins / total * 100 if total else 0
 
-    by_feature = defaultdict(lambda: {"wins": 0, "loses": 0})
+    by_pattern = defaultdict(lambda: {"wins": 0, "loses": 0})
     for p in resolved:
-        feat = p.get("feature", "?")
+        pat = p.get("pattern", "?")
         if p["status"] == "win":
-            by_feature[feat]["wins"] += 1
+            by_pattern[pat]["wins"] += 1
         else:
-            by_feature[feat]["loses"] += 1
+            by_pattern[pat]["loses"] += 1
 
-    feature_stats = []
-    for feat, st in by_feature.items():
+    pat_stats = []
+    for pat, st in by_pattern.items():
         tot = st["wins"] + st["loses"]
         if tot < 2:
             continue
-        feature_stats.append({
-            "feature": feat,
+        pat_stats.append({
+            "pattern": pat,
             "wins": st["wins"],
             "loses": st["loses"],
             "total": tot,
             "rate": st["wins"] / tot * 100,
         })
 
-    feature_stats.sort(key=lambda x: (x["rate"], x["total"]), reverse=True)
+    pat_stats.sort(key=lambda x: (x["rate"], x["total"]), reverse=True)
 
-    top = feature_stats[:5]
-    worst = [f for f in feature_stats if f["rate"] < 40][:5]
-
+    top = pat_stats[:5]
+    worst = [f for f in pat_stats if f["rate"] < 40][:5]
     pending = sum(1 for p in predictions if p["status"] == "pending")
 
     now_str = datetime.now().strftime("%d.%m %H:%M")
@@ -552,7 +584,8 @@ def build_stats_message():
         lines.append("🏆 <b>ТОП-5 ПАТТЕРНОВ:</b>")
         for i, f in enumerate(top, 1):
             lines.append(
-                f"{i}. {f['feature']}  {f['wins']}/{f['total']} ({f['rate']:.0f}%)"
+                f"{i}. {f['pattern'][:60]}  "
+                f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
             )
         lines.append("")
 
@@ -560,12 +593,12 @@ def build_stats_message():
         lines.append("💀 <b>ХУДШИЕ:</b>")
         for i, f in enumerate(worst, 1):
             lines.append(
-                f"{i}. {f['feature']}  {f['wins']}/{f['total']} ({f['rate']:.0f}%)"
+                f"{i}. {f['pattern'][:60]}  "
+                f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
             )
         lines.append("")
 
     lines.append(f"⏳ В ожидании: {pending}")
-
     return "\n".join(lines)
 
 
@@ -580,8 +613,6 @@ def maybe_send_stats():
         mid = tg_send(msg)
         if mid:
             print("📊 Статистика отправлена", flush=True)
-        else:
-            print("⚠️ Не смог отправить статистику", flush=True)
     else:
         print("📊 Статистики нет (нет resolved прогнозов)", flush=True)
 
@@ -594,12 +625,12 @@ def maybe_send_stats():
 
 def main():
     print("=" * 60, flush=True)
-    print("🚀 PATTERN FORECAST BOT", flush=True)
+    print("🚀 PATTERN FORECAST BOT (cards, J-Q-K-A only)", flush=True)
     print("=" * 60, flush=True)
     print(f"📥 CHANNEL_STAT: {CHANNEL_STAT}", flush=True)
     print(f"📤 CHANNEL_PROGNOZ: {CHANNEL_PROGNOZ}", flush=True)
     print(f"🧩 Паттернов: {len(PATTERNS)}", flush=True)
-    print(f"📊 Статистика раз в {STATS_INTERVAL // 3600} ч", flush=True)
+    print(f"🎴 Только ранги: J, Q, K, A", flush=True)
     print("=" * 60, flush=True)
 
     offset = load_offset()
