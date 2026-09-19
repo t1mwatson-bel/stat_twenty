@@ -46,9 +46,9 @@ with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
 # ---- ФИЛЬТР ----
-MIN_ACCURACY = 55.0
-MIN_OCCURRENCES = 30
-MIN_LIFT = 1.15
+MIN_ACCURACY = 70.0    # точность >= 70%
+MIN_OCCURRENCES = 50   # минимум 50 случаев
+MIN_LIFT = 1.40        # lift >= 1.40 (в 1.4 раза чаще базы)
 
 # === НОВОЕ: только старшие ранги ===
 ALLOWED_RANKS = {"J", "Q", "K", "A"}
