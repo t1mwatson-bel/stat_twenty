@@ -1,0 +1,749 @@
+{
+  "settings": {
+    "MAX_GAP": 10,
+    "MIN_OCCURRENCES": 30,
+    "MIN_LIFT": 1.5
+  },
+  "total_games": 1890,
+  "train_games": 945,
+  "test_games": 945,
+  "patterns_found_on_train": 725,
+  "patterns_survived_holdout": 150,
+  "survivors": [
+    {
+      "pattern": "GAP=1|D:FIRST_RANK=Q",
+      "key": [
+        1,
+        "D:FIRST_RANK=Q"
+      ],
+      "target": "K♦",
+      "occurrences": 118,
+      "hits": 33,
+      "expected": 20.103703703703705,
+      "excess": 12.896296296296295,
+      "rate": 0.2796610169491525,
+      "lift": 1.6414885777450257,
+      "holdout_occ": 104,
+      "holdout_hits": 24,
+      "holdout_rate": 0.23076923076923078,
+      "holdout_lift": 1.3979289940828403,
+      "holdout_excess": 6.831746031746032,
+      "lift_retention": 0.851622736238121
+    },
+    {
+      "pattern": "GAP=2|P:FIRST_RANK=J",
+      "key": [
+        2,
+        "P:FIRST_RANK=J"
+      ],
+      "target": "A♦",
+      "occurrences": 108,
+      "hits": 29,
+      "expected": 17.82857142857143,
+      "excess": 11.17142857142857,
+      "rate": 0.26851851851851855,
+      "lift": 1.6266025641025643,
+      "holdout_occ": 84,
+      "holdout_hits": 18,
+      "holdout_rate": 0.21428571428571427,
+      "holdout_lift": 1.426056338028169,
+      "holdout_excess": 5.377777777777778,
+      "lift_retention": 0.8767085270242141
+    },
+    {
+      "pattern": "GAP=6|P:FIRST2_SUITS=♣-♦",
+      "key": [
+        6,
+        "P:FIRST2_SUITS=♣-♦"
+      ],
+      "target": "Q♣",
+      "occurrences": 109,
+      "hits": 28,
+      "expected": 18.57037037037037,
+      "excess": 9.42962962962963,
+      "rate": 0.25688073394495414,
+      "lift": 1.5077782209812527,
+      "holdout_occ": 135,
+      "holdout_hits": 30,
+      "holdout_rate": 0.2222222222222222,
+      "holdout_lift": 1.3548387096774193,
+      "holdout_excess": 7.857142857142858,
+      "lift_retention": 0.8985663082437274
+    },
+    {
+      "pattern": "GAP=6|D:SUITS=♣-♥",
+      "key": [
+        6,
+        "D:SUITS=♣-♥"
+      ],
+      "target": "Q♦",
+      "occurrences": 58,
+      "hits": 18,
+      "expected": 9.083597883597884,
+      "excess": 8.916402116402116,
+      "rate": 0.3103448275862069,
+      "lift": 1.9815936626281454,
+      "holdout_occ": 77,
+      "holdout_hits": 17,
+      "holdout_rate": 0.22077922077922077,
+      "holdout_lift": 1.4097051597051595,
+      "holdout_excess": 4.94074074074074,
+      "lift_retention": 0.7113997113997113
+    },
+    {
+      "pattern": "GAP=1|D:SUITS=♣-♦",
+      "key": [
+        1,
+        "D:SUITS=♣-♦"
+      ],
+      "target": "J♥",
+      "occurrences": 80,
+      "hits": 23,
+      "expected": 14.222222222222223,
+      "excess": 8.777777777777777,
+      "rate": 0.2875,
+      "lift": 1.6171874999999998,
+      "holdout_occ": 74,
+      "holdout_hits": 17,
+      "holdout_rate": 0.22972972972972974,
+      "holdout_lift": 1.457010701977145,
+      "holdout_excess": 5.3322751322751305,
+      "lift_retention": 0.9009534775510849
+    },
+    {
+      "pattern": "GAP=5|P:RANKCOUNT:J=2",
+      "key": [
+        5,
+        "P:RANKCOUNT:J=2"
+      ],
+      "target": "A♦",
+      "occurrences": 51,
+      "hits": 17,
+      "expected": 8.41904761904762,
+      "excess": 8.58095238095238,
+      "rate": 0.3333333333333333,
+      "lift": 2.019230769230769,
+      "holdout_occ": 40,
+      "holdout_hits": 10,
+      "holdout_rate": 0.25,
+      "holdout_lift": 1.6637323943661972,
+      "holdout_excess": 3.989417989417989,
+      "lift_retention": 0.823943661971831
+    },
+    {
+      "pattern": "GAP=8|P:FIRST=7♠",
+      "key": [
+        8,
+        "P:FIRST=7♠"
+      ],
+      "target": "J♣",
+      "occurrences": 45,
+      "hits": 16,
+      "expected": 7.428571428571429,
+      "excess": 8.571428571428571,
+      "rate": 0.35555555555555557,
+      "lift": 2.153846153846154,
+      "holdout_occ": 67,
+      "holdout_hits": 15,
+      "holdout_rate": 0.22388059701492538,
+      "holdout_lift": 1.5111940298507465,
+      "holdout_excess": 5.074074074074074,
+      "lift_retention": 0.7016257995735607
+    },
+    {
+      "pattern": "GAP=5|D:FIRST_RANK=9",
+      "key": [
+        5,
+        "D:FIRST_RANK=9"
+      ],
+      "target": "A♦",
+      "occurrences": 96,
+      "hits": 24,
+      "expected": 15.847619047619048,
+      "excess": 8.152380952380952,
+      "rate": 0.25,
+      "lift": 1.5144230769230769,
+      "holdout_occ": 107,
+      "holdout_hits": 22,
+      "holdout_rate": 0.205607476635514,
+      "holdout_lift": 1.3683032776095827,
+      "holdout_excess": 5.921693121693121,
+      "lift_retention": 0.9035145452152166
+    },
+    {
+      "pattern": "GAP=1|P:FIRST=9♠",
+      "key": [
+        1,
+        "P:FIRST=9♠"
+      ],
+      "target": "J♣",
+      "occurrences": 55,
+      "hits": 17,
+      "expected": 9.079365079365079,
+      "excess": 7.920634920634921,
+      "rate": 0.3090909090909091,
+      "lift": 1.8723776223776223,
+      "holdout_occ": 51,
+      "holdout_hits": 10,
+      "holdout_rate": 0.19607843137254902,
+      "holdout_lift": 1.3235294117647058,
+      "holdout_excess": 2.4444444444444446,
+      "lift_retention": 0.7068709836875927
+    },
+    {
+      "pattern": "GAP=10|D:FIRST_RANK=9",
+      "key": [
+        10,
+        "D:FIRST_RANK=9"
+      ],
+      "target": "K♣",
+      "occurrences": 96,
+      "hits": 23,
+      "expected": 15.238095238095237,
+      "excess": 7.761904761904763,
+      "rate": 0.23958333333333334,
+      "lift": 1.5093750000000001,
+      "holdout_occ": 107,
+      "holdout_hits": 22,
+      "holdout_rate": 0.205607476635514,
+      "holdout_lift": 1.3040205732923538,
+      "holdout_excess": 5.129100529100526,
+      "lift_retention": 0.8639473777506277
+    },
+    {
+      "pattern": "GAP=1|D:FIRST=6♠",
+      "key": [
+        1,
+        "D:FIRST=6♠"
+      ],
+      "target": "A♠",
+      "occurrences": 56,
+      "hits": 16,
+      "expected": 8.296296296296296,
+      "excess": 7.703703703703704,
+      "rate": 0.2857142857142857,
+      "lift": 1.9285714285714286,
+      "holdout_occ": 55,
+      "holdout_hits": 12,
+      "holdout_rate": 0.21818181818181817,
+      "holdout_lift": 1.4833224329627208,
+      "holdout_excess": 3.9100529100529116,
+      "lift_retention": 0.7691301504251145
+    },
+    {
+      "pattern": "GAP=2|D:FIRST_RANK=10",
+      "key": [
+        2,
+        "D:FIRST_RANK=10"
+      ],
+      "target": "J♠",
+      "occurrences": 82,
+      "hits": 21,
+      "expected": 13.44973544973545,
+      "excess": 7.550264550264551,
+      "rate": 0.25609756097560976,
+      "lift": 1.5613690007867822,
+      "holdout_occ": 88,
+      "holdout_hits": 19,
+      "holdout_rate": 0.2159090909090909,
+      "holdout_lift": 1.3974937733499377,
+      "holdout_excess": 5.404232804232805,
+      "lift_retention": 0.8950438830575816
+    },
+    {
+      "pattern": "GAP=2|D:FIRST_RANK=A",
+      "key": [
+        2,
+        "D:FIRST_RANK=A"
+      ],
+      "target": "J♣",
+      "occurrences": 76,
+      "hits": 20,
+      "expected": 12.546031746031746,
+      "excess": 7.453968253968254,
+      "rate": 0.2631578947368421,
+      "lift": 1.5941295546558705,
+      "holdout_occ": 71,
+      "holdout_hits": 18,
+      "holdout_rate": 0.2535211267605634,
+      "holdout_lift": 1.711267605633803,
+      "holdout_excess": 7.481481481481483,
+      "lift_retention": 1.0734808853118714
+    },
+    {
+      "pattern": "GAP=1|D:FIRST=Q♠",
+      "key": [
+        1,
+        "D:FIRST=Q♠"
+      ],
+      "target": "K♦",
+      "occurrences": 57,
+      "hits": 17,
+      "expected": 9.71111111111111,
+      "excess": 7.28888888888889,
+      "rate": 0.2982456140350877,
+      "lift": 1.7505720823798627,
+      "holdout_occ": 46,
+      "holdout_hits": 12,
+      "holdout_rate": 0.2608695652173913,
+      "holdout_lift": 1.580267558528428,
+      "holdout_excess": 4.406349206349207,
+      "lift_retention": 0.9027149321266967
+    },
+    {
+      "pattern": "GAP=9|P:FIRST2_SUITS=♠-♠",
+      "key": [
+        9,
+        "P:FIRST2_SUITS=♠-♠"
+      ],
+      "target": "J♦",
+      "occurrences": 58,
+      "hits": 16,
+      "expected": 8.715343915343915,
+      "excess": 7.284656084656085,
+      "rate": 0.27586206896551724,
+      "lift": 1.835842642059252,
+      "holdout_occ": 62,
+      "holdout_hits": 15,
+      "holdout_rate": 0.24193548387096775,
+      "holdout_lift": 1.3690361213057756,
+      "holdout_excess": 4.043386243386243,
+      "lift_retention": 0.7457262893567704
+    },
+    {
+      "pattern": "GAP=10|P:FIRST_RANK=K",
+      "key": [
+        10,
+        "P:FIRST_RANK=K"
+      ],
+      "target": "K♠",
+      "occurrences": 82,
+      "hits": 20,
+      "expected": 13.015873015873016,
+      "excess": 6.984126984126984,
+      "rate": 0.24390243902439024,
+      "lift": 1.5365853658536586,
+      "holdout_occ": 96,
+      "holdout_hits": 24,
+      "holdout_rate": 0.25,
+      "holdout_lift": 1.40625,
+      "holdout_excess": 6.933333333333334,
+      "lift_retention": 0.9151785714285714
+    },
+    {
+      "pattern": "GAP=2|P:RANKCOUNT:K=2",
+      "key": [
+        2,
+        "P:RANKCOUNT:K=2"
+      ],
+      "target": "Q♠",
+      "occurrences": 35,
+      "hits": 13,
+      "expected": 6.148148148148148,
+      "excess": 6.851851851851852,
+      "rate": 0.37142857142857144,
+      "lift": 2.1144578313253013,
+      "holdout_occ": 35,
+      "holdout_hits": 9,
+      "holdout_rate": 0.2571428571428571,
+      "holdout_lift": 1.5477707006369426,
+      "holdout_excess": 3.185185185185185,
+      "lift_retention": 0.7319941205291522
+    },
+    {
+      "pattern": "GAP=8|P:FIRST2_SUITS=♠-♠",
+      "key": [
+        8,
+        "P:FIRST2_SUITS=♠-♠"
+      ],
+      "target": "J♥",
+      "occurrences": 58,
+      "hits": 17,
+      "expected": 10.311111111111112,
+      "excess": 6.688888888888888,
+      "rate": 0.29310344827586204,
+      "lift": 1.648706896551724,
+      "holdout_occ": 62,
+      "holdout_hits": 13,
+      "holdout_rate": 0.20967741935483872,
+      "holdout_lift": 1.3298332972504872,
+      "holdout_excess": 3.224338624338623,
+      "lift_retention": 0.8065916992473544
+    },
+    {
+      "pattern": "GAP=2|D:FIRST2_SUITS=♠-♠",
+      "key": [
+        2,
+        "D:FIRST2_SUITS=♠-♠"
+      ],
+      "target": "J♥",
+      "occurrences": 53,
+      "hits": 16,
+      "expected": 9.422222222222222,
+      "excess": 6.5777777777777775,
+      "rate": 0.3018867924528302,
+      "lift": 1.6981132075471697,
+      "holdout_occ": 56,
+      "holdout_hits": 13,
+      "holdout_rate": 0.23214285714285715,
+      "holdout_lift": 1.4723154362416107,
+      "holdout_excess": 4.170370370370369,
+      "lift_retention": 0.8670302013422819
+    },
+    {
+      "pattern": "GAP=5|P:FIRST_SUIT=♥",
+      "key": [
+        5,
+        "P:FIRST_SUIT=♥"
+      ],
+      "target": "A♥",
+      "occurrences": 61,
+      "hits": 15,
+      "expected": 8.714285714285714,
+      "excess": 6.2857142857142865,
+      "rate": 0.2459016393442623,
+      "lift": 1.7213114754098362,
+      "holdout_occ": 52,
+      "holdout_hits": 10,
+      "holdout_rate": 0.19230769230769232,
+      "holdout_lift": 1.477485928705441,
+      "holdout_excess": 3.231746031746031,
+      "lift_retention": 0.8583489681050657
+    },
+    {
+      "pattern": "GAP=5|P:FIRST2_SUITS=♥-♥",
+      "key": [
+        5,
+        "P:FIRST2_SUITS=♥-♥"
+      ],
+      "target": "A♥",
+      "occurrences": 61,
+      "hits": 15,
+      "expected": 8.714285714285714,
+      "excess": 6.2857142857142865,
+      "rate": 0.2459016393442623,
+      "lift": 1.7213114754098362,
+      "holdout_occ": 52,
+      "holdout_hits": 10,
+      "holdout_rate": 0.19230769230769232,
+      "holdout_lift": 1.477485928705441,
+      "holdout_excess": 3.231746031746031,
+      "lift_retention": 0.8583489681050657
+    },
+    {
+      "pattern": "GAP=2|P:FIRST=9♠",
+      "key": [
+        2,
+        "P:FIRST=9♠"
+      ],
+      "target": "K♥",
+      "occurrences": 55,
+      "hits": 16,
+      "expected": 9.71957671957672,
+      "excess": 6.28042328042328,
+      "rate": 0.2909090909090909,
+      "lift": 1.6461622210125204,
+      "holdout_occ": 51,
+      "holdout_hits": 11,
+      "holdout_rate": 0.21568627450980393,
+      "holdout_lift": 1.435376967688484,
+      "holdout_excess": 3.336507936507936,
+      "lift_retention": 0.8719535349351009
+    },
+    {
+      "pattern": "GAP=6|D:FIRST=8♠",
+      "key": [
+        6,
+        "D:FIRST=8♠"
+      ],
+      "target": "K♠",
+      "occurrences": 49,
+      "hits": 14,
+      "expected": 7.777777777777778,
+      "excess": 6.222222222222222,
+      "rate": 0.2857142857142857,
+      "lift": 1.8,
+      "holdout_occ": 45,
+      "holdout_hits": 12,
+      "holdout_rate": 0.26666666666666666,
+      "holdout_lift": 1.5,
+      "holdout_excess": 4.0,
+      "lift_retention": 0.8333333333333333
+    },
+    {
+      "pattern": "GAP=7|P:FIRST_SUIT=♥",
+      "key": [
+        7,
+        "P:FIRST_SUIT=♥"
+      ],
+      "target": "J♥",
+      "occurrences": 61,
+      "hits": 17,
+      "expected": 10.844444444444445,
+      "excess": 6.155555555555555,
+      "rate": 0.2786885245901639,
+      "lift": 1.567622950819672,
+      "holdout_occ": 52,
+      "holdout_hits": 12,
+      "holdout_rate": 0.23076923076923078,
+      "holdout_lift": 1.4636035105833762,
+      "holdout_excess": 3.8010582010582006,
+      "lift_retention": 0.9336451152479578
+    },
+    {
+      "pattern": "GAP=7|P:FIRST2_SUITS=♥-♥",
+      "key": [
+        7,
+        "P:FIRST2_SUITS=♥-♥"
+      ],
+      "target": "J♥",
+      "occurrences": 61,
+      "hits": 17,
+      "expected": 10.844444444444445,
+      "excess": 6.155555555555555,
+      "rate": 0.2786885245901639,
+      "lift": 1.567622950819672,
+      "holdout_occ": 52,
+      "holdout_hits": 12,
+      "holdout_rate": 0.23076923076923078,
+      "holdout_lift": 1.4636035105833762,
+      "holdout_excess": 3.8010582010582006,
+      "lift_retention": 0.9336451152479578
+    },
+    {
+      "pattern": "GAP=4|D:FIRST=6♣",
+      "key": [
+        4,
+        "D:FIRST=6♣"
+      ],
+      "target": "A♦",
+      "occurrences": 36,
+      "hits": 12,
+      "expected": 5.942857142857143,
+      "excess": 6.057142857142857,
+      "rate": 0.3333333333333333,
+      "lift": 2.019230769230769,
+      "holdout_occ": 40,
+      "holdout_hits": 10,
+      "holdout_rate": 0.25,
+      "holdout_lift": 1.6637323943661972,
+      "holdout_excess": 3.989417989417989,
+      "lift_retention": 0.823943661971831
+    },
+    {
+      "pattern": "GAP=4|P:FIRST3_SUITS=♦-♥-♣",
+      "key": [
+        4,
+        "P:FIRST3_SUITS=♦-♥-♣"
+      ],
+      "target": "Q♦",
+      "occurrences": 32,
+      "hits": 11,
+      "expected": 5.011640211640212,
+      "excess": 5.988359788359788,
+      "rate": 0.34375,
+      "lift": 2.1948902027027026,
+      "holdout_occ": 27,
+      "holdout_hits": 7,
+      "holdout_rate": 0.25925925925925924,
+      "holdout_lift": 1.6554054054054053,
+      "holdout_excess": 2.7714285714285714,
+      "lift_retention": 0.7542087542087542
+    },
+    {
+      "pattern": "GAP=9|P:FIRST2_SUITS=♠-♠",
+      "key": [
+        9,
+        "P:FIRST2_SUITS=♠-♠"
+      ],
+      "target": "A♣",
+      "occurrences": 58,
+      "hits": 15,
+      "expected": 9.022222222222222,
+      "excess": 5.977777777777778,
+      "rate": 0.25862068965517243,
+      "lift": 1.66256157635468,
+      "holdout_occ": 62,
+      "holdout_hits": 13,
+      "holdout_rate": 0.20967741935483872,
+      "holdout_lift": 1.347926267281106,
+      "holdout_excess": 3.355555555555556,
+      "lift_retention": 0.810752688172043
+    },
+    {
+      "pattern": "GAP=3|P:FIRST=8♠",
+      "key": [
+        3,
+        "P:FIRST=8♠"
+      ],
+      "target": "K♣",
+      "occurrences": 57,
+      "hits": 15,
+      "expected": 9.047619047619047,
+      "excess": 5.9523809523809526,
+      "rate": 0.2631578947368421,
+      "lift": 1.6578947368421053,
+      "holdout_occ": 62,
+      "holdout_hits": 13,
+      "holdout_rate": 0.20967741935483872,
+      "holdout_lift": 1.3298332972504872,
+      "holdout_excess": 3.224338624338623,
+      "lift_retention": 0.8021216713574367
+    },
+    {
+      "pattern": "GAP=4|P:FIRST=9♠",
+      "key": [
+        4,
+        "P:FIRST=9♠"
+      ],
+      "target": "J♣",
+      "occurrences": 55,
+      "hits": 15,
+      "expected": 9.079365079365079,
+      "excess": 5.920634920634921,
+      "rate": 0.2727272727272727,
+      "lift": 1.652097902097902,
+      "holdout_occ": 51,
+      "holdout_hits": 11,
+      "holdout_rate": 0.21568627450980393,
+      "holdout_lift": 1.4558823529411766,
+      "holdout_excess": 3.4444444444444446,
+      "lift_retention": 0.881232492997199
+    },
+    {
+      "pattern": "GAP=8|P:FIRST2_SUITS=♠-♠",
+      "key": [
+        8,
+        "P:FIRST2_SUITS=♠-♠"
+      ],
+      "target": "K♠",
+      "occurrences": 58,
+      "hits": 15,
+      "expected": 9.206349206349206,
+      "excess": 5.793650793650794,
+      "rate": 0.25862068965517243,
+      "lift": 1.6293103448275863,
+      "holdout_occ": 62,
+      "holdout_hits": 16,
+      "holdout_rate": 0.25806451612903225,
+      "holdout_lift": 1.4516129032258063,
+      "holdout_excess": 4.977777777777778,
+      "lift_retention": 0.8909370199692779
+    },
+    {
+      "pattern": "GAP=8|D:SUITS=♠-♥",
+      "key": [
+        8,
+        "D:SUITS=♠-♥"
+      ],
+      "target": "A♠",
+      "occurrences": 69,
+      "hits": 16,
+      "expected": 10.222222222222221,
+      "excess": 5.777777777777779,
+      "rate": 0.2318840579710145,
+      "lift": 1.565217391304348,
+      "holdout_occ": 76,
+      "holdout_hits": 18,
+      "holdout_rate": 0.23684210526315788,
+      "holdout_lift": 1.6101855357819008,
+      "holdout_excess": 6.821164021164023,
+      "lift_retention": 1.028729647860659
+    },
+    {
+      "pattern": "GAP=4|D:FIRST2_SUITS=♣-♣",
+      "key": [
+        4,
+        "D:FIRST2_SUITS=♣-♣"
+      ],
+      "target": "A♦",
+      "occurrences": 56,
+      "hits": 15,
+      "expected": 9.244444444444444,
+      "excess": 5.755555555555556,
+      "rate": 0.26785714285714285,
+      "lift": 1.6225961538461537,
+      "holdout_occ": 55,
+      "holdout_hits": 12,
+      "holdout_rate": 0.21818181818181817,
+      "holdout_lift": 1.4519846350832266,
+      "holdout_excess": 3.735449735449736,
+      "lift_retention": 0.8948527528809219
+    },
+    {
+      "pattern": "GAP=7|D:FIRST=9♠",
+      "key": [
+        7,
+        "D:FIRST=9♠"
+      ],
+      "target": "K♦",
+      "occurrences": 43,
+      "hits": 13,
+      "expected": 7.325925925925926,
+      "excess": 5.674074074074074,
+      "rate": 0.3023255813953488,
+      "lift": 1.7745197168857432,
+      "holdout_occ": 42,
+      "holdout_hits": 10,
+      "holdout_rate": 0.23809523809523808,
+      "holdout_lift": 1.4423076923076923,
+      "holdout_excess": 3.0666666666666664,
+      "lift_retention": 0.8127876397107167
+    },
+    {
+      "pattern": "GAP=5|D:FIRST_SUIT=♥",
+      "key": [
+        5,
+        "D:FIRST_SUIT=♥"
+      ],
+      "target": "Q♣",
+      "occurrences": 49,
+      "hits": 14,
+      "expected": 8.348148148148148,
+      "excess": 5.651851851851852,
+      "rate": 0.2857142857142857,
+      "lift": 1.6770186335403725,
+      "holdout_occ": 44,
+      "holdout_hits": 10,
+      "holdout_rate": 0.22727272727272727,
+      "holdout_lift": 1.3856304985337244,
+      "holdout_excess": 2.7830687830687832,
+      "lift_retention": 0.8262463343108506
+    },
+    {
+      "pattern": "GAP=5|D:FIRST2_SUITS=♥-♥",
+      "key": [
+        5,
+        "D:FIRST2_SUITS=♥-♥"
+      ],
+      "target": "Q♣",
+      "occurrences": 49,
+      "hits": 14,
+      "expected": 8.348148148148148,
+      "excess": 5.651851851851852,
+      "rate": 0.2857142857142857,
+      "lift": 1.6770186335403725,
+      "holdout_occ": 44,
+      "holdout_hits": 10,
+      "holdout_rate": 0.22727272727272727,
+      "holdout_lift": 1.3856304985337244,
+      "holdout_excess": 2.7830687830687832,
+      "lift_retention": 0.8262463343108506
+    },
+    {
+      "pattern": "GAP=4|P:FIRST=8♣",
+      "key": [
+        4,
+        "P:FIRST=8♣"
+      ],
+      "target": "J♥",
+      "occurrences": 47,
+      "hits": 14,
+      "expected": 8.355555555555556,
+      "excess": 5.644444444444444,
+      "rate": 0.2978723404255319,
+      "lift": 1.675531914893617,
+      "holdout_occ": 36,
+      "holdout_hits": 8,
+      "holdout_rate": 0.2222222222222222,
+      "holdout_lift"
