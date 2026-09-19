@@ -43,11 +43,11 @@ if not PATTERNS_FILE.exists():
 with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
-MIN_LIFT = 1.8
-MIN_RETENTION = 0.90
-MIN_OCC = 50
-MIN_HOLDOUT_HITS = 15
-MAX_GAP = 5
+MIN_LIFT = 1.6
+MIN_RETENTION = 0.85
+MIN_OCC = 30
+MIN_HOLDOUT_HITS = 8
+MAX_GAP = 6
 
 PATTERNS = []
 for s in _data.get("survivors", []):
@@ -71,7 +71,7 @@ for s in _data.get("survivors", []):
         "target": s["target"],
     })
 
-print(f"✅ Загружено паттернов (после жёсткого фильтра): {len(PATTERNS)}", flush=True)
+print(f"✅ Загружено паттернов (после фильтра): {len(PATTERNS)}", flush=True)
 
 
 # =====================================================================
