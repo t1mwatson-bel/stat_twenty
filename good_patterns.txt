@@ -1,0 +1,6 @@
+# Белый список — только эти паттерны используем
+G1[P:FIRST_SUIT=♣]|G2[P:COUNT=3]|G3[D:FIRST_SUIT=♠]
+G1[P:HAS_J]|G2[P:FIRST_SUIT=♠]|G3[P:COUNT=2]
+G1[P:FIRST_SUIT=♦]|G2[D:HAS_A]|G3[D:COUNT=2]
+G1[P:FIRST_SUIT=♣]|G2[P:HAS_A]|G3[P:HAS_A]
+G1[D:HAS_K]|G2[D:HAS_Q]|G3[D:FIRST_SUIT=♠]
