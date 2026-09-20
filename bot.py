@@ -37,6 +37,7 @@ CHANNEL_PROGNOZ = str(CHANNEL_PROGNOZ).strip()
 # =====================================================================
 
 PATTERNS_FILE = Path(__file__).parent / "pattern_results_cards.json"
+GOOD_PATTERNS_FILE = Path(__file__).parent / "good_patterns.txt"
 
 if not PATTERNS_FILE.exists():
     print(f"❌ Не найден {PATTERNS_FILE}", flush=True)
@@ -45,36 +46,40 @@ if not PATTERNS_FILE.exists():
 with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
     _data = json.load(f)
 
-# ---- ФИЛЬТР ----
-MIN_ACCURACY = 55.0
-MIN_OCCURRENCES = 30
-MIN_LIFT = 1.15
 
-ALLOWED_RANKS = {"J", "Q", "K", "A"}
+# === GOOD LIST (белый список) ===
+GOOD_SET = set()
+if GOOD_PATTERNS_FILE.exists():
+    try:
+        for line in GOOD_PATTERNS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                GOOD_SET.add(line)
+        print(f"✅ Загружено вручную в белый список: {len(GOOD_SET)}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Ошибка чтения {GOOD_PATTERNS_FILE}: {e}", flush=True)
 
-# === AUTO-BAN плохих паттернов ===
-AUTO_BAN_MIN_TRIES = 5      # минимум 5 прогнозов
-AUTO_BAN_MAX_RATE = 45.0    # если точность ниже 45% — бан
-BAD_PATTERNS_FILE = Path(__file__).parent / "bad_patterns.txt"
+if not GOOD_SET:
+    print("⚠️ good_patterns.txt пуст или не найден — беру все паттерны из JSON", flush=True)
+
 
 PATTERNS = []
 
 for target_card, items in _data.items():
-    card_rank = target_card[:-1]
-    if card_rank not in ALLOWED_RANKS:
-        continue
-
     for item in items:
-        if item.get("accuracy", 0) < MIN_ACCURACY:
-            continue
-        if item.get("occurrences", 0) < MIN_OCCURRENCES:
-            continue
-        if item.get("lift", 0) < MIN_LIFT:
-            continue
-
         raw = item["pattern"]
-        parts = raw.split("|")
 
+        # если есть белый список — берём только из него
+        if GOOD_SET and raw not in GOOD_SET:
+            continue
+
+        # фильтр по точности и т.д. — мягкий
+        if item.get("accuracy", 0) < 50.0:
+            continue
+        if item.get("occurrences", 0) < 5:
+            continue
+
+        parts = raw.split("|")
         feat_seq = []
         ok = True
         for part in parts:
@@ -88,34 +93,17 @@ for target_card, items in _data.items():
             continue
 
         PATTERNS.append({
-            "pattern": raw,                     # ← строка как в JSON
+            "pattern": raw,
             "feats": feat_seq,
             "target": target_card,
             "accuracy": item.get("accuracy", 0),
             "occurrences": item.get("occurrences", 0),
             "lift": item.get("lift", 0),
-            "dogon": item.get("dogon", [0, 0, 0, 0]),
         })
 
-
-# === MANUAL BAN LIST (bad_patterns.txt) ===
-MANUAL_BAN = set()
-if BAD_PATTERNS_FILE.exists():
-    try:
-        for line in BAD_PATTERNS_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                MANUAL_BAN.add(line)
-        print(f"🚫 Загружено вручную забаненных: {len(MANUAL_BAN)}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Ошибка чтения {BAD_PATTERNS_FILE}: {e}", flush=True)
-
-# фильтруем PATTERNS по manual ban
-PATTERNS = [p for p in PATTERNS if p["pattern"] not in MANUAL_BAN]
-
-print(f"✅ Загружено паттернов (после фильтра): {len(PATTERNS)}", flush=True)
-print(f"🎴 Только ранги: {sorted(ALLOWED_RANKS)}", flush=True)
-print(f"🚫 Авто-бан: >= {AUTO_BAN_MIN_TRIES} попыток и точность < {AUTO_BAN_MAX_RATE}%", flush=True)
+print(f"✅ Загружено паттернов в работу: {len(PATTERNS)}", flush=True)
+if GOOD_SET:
+    print(f"🎴 Режим: ТОЛЬКО БЕЛЫЙ СПИСОК", flush=True)
 
 
 # =====================================================================
@@ -129,14 +117,26 @@ STATS_INTERVAL = 6 * 60 * 60
 
 
 # =====================================================================
-# TELEGRAM HTTP
+# TELEGRAM HTTP (с throttle)
 # =====================================================================
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 SESSION = requests.Session()
 
+_last_send_time = [0.0]
+MIN_SEND_INTERVAL = 1.1
+
+
+def _throttle():
+    now = time.time()
+    wait = _last_send_time[0] + MIN_SEND_INTERVAL - now
+    if wait > 0:
+        time.sleep(wait)
+    _last_send_time[0] = time.time()
+
 
 def tg_send(text):
+    _throttle()
     try:
         r = SESSION.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -151,6 +151,13 @@ def tg_send(text):
         data = r.json()
         if data.get("ok"):
             return data["result"]["message_id"]
+
+        if data.get("error_code") == 429:
+            retry = data.get("parameters", {}).get("retry_after", 30)
+            print(f"⏳ 429: жду {retry} сек...", flush=True)
+            time.sleep(retry + 1)
+            return tg_send(text)
+
         print(f"❌ sendMessage: {data}", flush=True)
     except Exception as e:
         print(f"❌ sendMessage error: {e}", flush=True)
@@ -160,6 +167,7 @@ def tg_send(text):
 def tg_edit(message_id, text):
     if not message_id:
         return False
+    _throttle()
     try:
         r = SESSION.post(
             f"{TELEGRAM_API}/editMessageText",
@@ -171,7 +179,18 @@ def tg_edit(message_id, text):
             },
             timeout=10,
         )
-        return bool(r.json().get("ok"))
+        data = r.json()
+
+        if data.get("ok"):
+            return True
+
+        if data.get("error_code") == 429:
+            retry = data.get("parameters", {}).get("retry_after", 30)
+            print(f"⏳ 429 (edit): жду {retry} сек...", flush=True)
+            time.sleep(retry + 1)
+            return tg_edit(message_id, text)
+
+        return False
     except Exception as e:
         print(f"⚠️ editMessageText error: {e}", flush=True)
     return False
@@ -345,10 +364,6 @@ predictions = []
 processed_triggers = set()
 stats_last_sent = time.time()
 
-# авто-статистика по паттернам
-pattern_stats = defaultdict(lambda: {"wins": 0, "loses": 0})
-AUTO_BANNED = set()
-
 
 # =====================================================================
 # PREDICTION LOGIC
@@ -397,28 +412,7 @@ def check_patterns_on_three_games(g1, g2, g3):
 
         target_game = trigger_end + 1
         card = p["target"]
-        pattern_str = p["pattern"]
 
-        # === AUTO-BAN ===
-        if pattern_str in AUTO_BANNED:
-            processed_triggers.add(key)
-            continue
-
-        st = pattern_stats[pattern_str]
-        total_st = st["wins"] + st["loses"]
-        if total_st >= AUTO_BAN_MIN_TRIES:
-            rate_st = st["wins"] / total_st * 100
-            if rate_st < AUTO_BAN_MAX_RATE:
-                AUTO_BANNED.add(pattern_str)
-                print(
-                    f"🚫 AUTO-BAN {pattern_str[:60]} — "
-                    f"{st['wins']}/{total_st} ({rate_st:.0f}%)",
-                    flush=True,
-                )
-                processed_triggers.add(key)
-                continue
-
-        # один прогноз на одну целевую игру
         already = any(
             pr["target_game"] == target_game
             and pr["status"] == "pending"
@@ -439,16 +433,15 @@ def check_patterns_on_three_games(g1, g2, g3):
             "status": "pending",
             "trigger_start": trigger_start,
             "trigger_end": trigger_end,
-            "pattern": pattern_str,
+            "pattern": p["pattern"],
             "accuracy": p["accuracy"],
-            "lift": p["lift"],
         })
         processed_triggers.add(key)
 
         print(
             f"🔮 #{target_game} {card}  "
             f"(триггер #{trigger_start}..{trigger_end}, "
-            f"accuracy={p['accuracy']:.1f}%, lift={p['lift']:.2f})",
+            f"accuracy={p['accuracy']:.1f}%)",
             flush=True,
         )
 
@@ -464,10 +457,6 @@ def check_pending_on_new_game(game):
                 tg_edit(pr["message_id"], f"{target}: {pr['card']} ✅")
                 print(f"✅ #{target} {pr['card']} — СБЫЛОСЬ", flush=True)
 
-                pat = pr.get("pattern")
-                if pat:
-                    pattern_stats[pat]["wins"] += 1
-
 
 def check_predictions_timeouts(current_game_number):
     for pr in predictions:
@@ -479,10 +468,6 @@ def check_predictions_timeouts(current_game_number):
             pr["status"] = "lose"
             tg_edit(pr["message_id"], f"{target}: {pr['card']} ❌")
             print(f"❌ #{target} {pr['card']} — НЕ СБЫЛОСЬ", flush=True)
-
-            pat = pr.get("pattern")
-            if pat:
-                pattern_stats[pat]["loses"] += 1
 
 
 # =====================================================================
@@ -621,7 +606,7 @@ def build_stats_message():
     pat_stats.sort(key=lambda x: (x["rate"], x["total"]), reverse=True)
 
     top = pat_stats[:5]
-    worst = [f for f in pat_stats if f["rate"] < 45 and f["total"] >= 5][:5]
+    worst = [f for f in pat_stats if f["rate"] < 45][:5]
     pending = sum(1 for p in predictions if p["status"] == "pending")
 
     now_str = datetime.now().strftime("%d.%m %H:%M")
@@ -632,23 +617,22 @@ def build_stats_message():
     lines.append(f"Всего прогнозов: {total}")
     lines.append(f"✅ Сбылось: {wins} ({rate:.1f}%)")
     lines.append(f"❌ Не сбылось: {loses} ({100 - rate:.1f}%)")
-    lines.append(f"🚫 Авто-баннуто паттернов: {len(AUTO_BANNED)}")
     lines.append("")
 
     if top:
-        lines.append("🏆 <b>ТОП-5 ПАТТЕРНОВ:</b>")
+        lines.append("🏆 <b>ТОП-5:</b>")
         for i, f in enumerate(top, 1):
             lines.append(
-                f"{i}. {f['pattern'][:60]}  "
+                f"{i}. {f['pattern'][:55]}  "
                 f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
             )
         lines.append("")
 
     if worst:
-        lines.append("💀 <b>ХУДШИЕ (авто-бан при 5+):</b>")
+        lines.append("💀 <b>ХУДШИЕ:</b>")
         for i, f in enumerate(worst, 1):
             lines.append(
-                f"{i}. {f['pattern'][:60]}  "
+                f"{i}. {f['pattern'][:55]}  "
                 f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
             )
         lines.append("")
@@ -669,7 +653,7 @@ def maybe_send_stats():
         if mid:
             print("📊 Статистика отправлена", flush=True)
     else:
-        print("📊 Статистики нет (нет resolved прогнозов)", flush=True)
+        print("📊 Статистики нет", flush=True)
 
     stats_last_sent = time.time()
 
@@ -680,13 +664,12 @@ def maybe_send_stats():
 
 def main():
     print("=" * 60, flush=True)
-    print("🚀 PATTERN FORECAST BOT (auto-ban + manual ban)", flush=True)
+    print("🚀 PATTERN FORECAST BOT (whitelist mode)", flush=True)
     print("=" * 60, flush=True)
     print(f"📥 CHANNEL_STAT: {CHANNEL_STAT}", flush=True)
     print(f"📤 CHANNEL_PROGNOZ: {CHANNEL_PROGNOZ}", flush=True)
-    print(f"🧩 Паттернов: {len(PATTERNS)}", flush=True)
-    print(f"🎴 Только ранги: J, Q, K, A", flush=True)
-    print(f"🚫 Ручной бан: {len(MANUAL_BAN)} паттернов", flush=True)
+    print(f"🧩 Паттернов в работе: {len(PATTERNS)}", flush=True)
+    print(f"📋 Режим: {'БЕЛЫЙ СПИСОК' if GOOD_SET else 'ВСЕ ИЗ JSON'}", flush=True)
     print("=" * 60, flush=True)
 
     offset = load_offset()
