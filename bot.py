@@ -65,7 +65,14 @@ if not GOOD_SET:
 
 PATTERNS = []
 
+ALLOWED_RANKS = {"J", "Q", "K", "A"}
+
 for target_card, items in _data.items():
+    # фильтр по рангу целевой карты
+    card_rank = target_card[:-1]
+    if card_rank not in ALLOWED_RANKS:
+        continue
+
     for item in items:
         raw = item["pattern"]
 
