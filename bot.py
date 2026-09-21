@@ -1,704 +1,762 @@
 import os
 import sys
-import re
+import requests
 import json
 import time
-from pathlib import Path
-from datetime import datetime
-from collections import defaultdict
-
-import requests
-
+from datetime import datetime, timedelta
+from collections import deque
+import pytz
 
 # =====================================================================
-# ENV
+# НАСТРОЙКИ
 # =====================================================================
+BOT_TOKEN = os.getenv('BOT_TOKEN') or os.getenv('BOT_TOKEN_PROGNOZ')
+CHAT_ID = os.getenv('CHAT_ID_HOCKEY') or os.getenv('CHAT_ID_FOOTBALL') or os.getenv('CHAT_ID')
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_STAT = os.getenv("CHANNEL_STAT")
-CHANNEL_PROGNOZ = os.getenv("CHANNEL_PROGNOZ")
-
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN не задан", flush=True)
-    sys.exit(1)
-if not CHANNEL_STAT:
-    print("❌ CHANNEL_STAT не задан", flush=True)
-    sys.exit(1)
-if not CHANNEL_PROGNOZ:
-    print("❌ CHANNEL_PROGNOZ не задан", flush=True)
+if not BOT_TOKEN or not CHAT_ID:
+    print("❌ BOT_TOKEN или CHAT_ID не заданы", flush=True)
     sys.exit(1)
 
-CHANNEL_STAT = str(CHANNEL_STAT).strip()
-CHANNEL_PROGNOZ = str(CHANNEL_PROGNOZ).strip()
+print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
+print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+BASE_URL = "https://1xlite-7720.pro"
+API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # =====================================================================
-# PATTERNS
+# ЛИГИ (топ хоккей)
 # =====================================================================
+LEAGUE_IDS = {
+    3355:    "🏒 КХЛ",
+    101763:  "🏒 ВХЛ",
+    104781:  "🏒 МХЛ",
+    34833:   "🇸🇪 Чемпионат Швеции. Аллсвенскан",
+    1706943: "🇧🇾 Чемпионат Беларуси. Экстралига",
+    2007383: "🇨🇿 Чехия. Университетская лига",
+}
 
-PATTERNS_FILE = Path(__file__).parent / "pattern_results_cards.json"
-GOOD_PATTERNS_FILE = Path(__file__).parent / "good_patterns.txt"
+# =====================================================================
+# ПОРОГИ СТРАТЕГИЙ (хоккей)
+# =====================================================================
+S1_ATT_DIFF      = 40    # атаки
+S1_MIN_ODD       = 1.4
 
-if not PATTERNS_FILE.exists():
-    print(f"❌ Не найден {PATTERNS_FILE}", flush=True)
-    sys.exit(1)
+S2_POSSESSION    = 25    # разница владения %
+S2_MIN_ODD       = 1.4
 
-with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
-    _data = json.load(f)
+S3_PENALTY_DIFF  = 4     # разница штрафов
+S3_MIN_ODD       = 1.4
 
+S4_COMBO_ATT     = 35    # комбо: атаки
+S4_COMBO_POSS    = 20    # комбо: владение
+S4_MIN_ODD       = 1.4
 
-# === GOOD LIST (белый список) ===
-GOOD_SET = set()
-if GOOD_PATTERNS_FILE.exists():
+# Дроп 1X2 (live)
+DROP_PCT      = -10.0
+DROP_WINDOW   = 180
+DROP_ANTISPAM = 900
+
+# Прематч-дроп
+PREMATCH_INTERVAL    = 300      # раз в 5 минут
+PREMATCH_ANTISPAM    = 1800     # 30 минут
+PREMATCH_DROP_PCT    = -10.0
+PREMATCH_DROP_WINDOW = 180
+
+# Общие
+MAX_MINUTE        = 55          # для хоккея 55 мин = конец 3-го периода
+UPDATE_INTERVAL   = 60
+ANTISPAM_SEC      = 900
+GOAL_COOLDOWN_SEC = 300
+
+SLEEP_HOUR_START = 1
+SLEEP_HOUR_END   = 12
+
+# =====================================================================
+# ЗАГОЛОВКИ (те же, что в футболе)
+# =====================================================================
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 YaBrowser/26.8.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Content-Type": "application/json",
+    "Referer": f"{BASE_URL}/ru/live/ice-hockey",
+    "Origin": BASE_URL,
+    "is-srv": "false",
+    "priority": "u=1, i",
+    "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "YaBrowser";v="26.8", "Yowser";v="2.5"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "x-app-n": "__BETTING_APP__",
+    "x-hd": "owR7kNTG7qqNQtxninDXQBLer79M6KT0KQD9+7BfJAwOaJJtL5t8vWkY96ZhOCZmO2AbNvlPzNkx5DAfv0rEuhm4FMhuvnj044szUW5eKpGx9bWd0Hcb7s1oWJFhdS8DylBXbdgyWBSD6HxMcGW6yaXvCLQ3MCmMcHRLCT3JDCclW8NAkY7GPko8FJICathgP7k1x0GGTcHCtYEc0sxZUhmZsbYWBpBTDXPPavqWgwf3utt40Uyuwq5JnCgxwaUGAz7/umvF9fsDXiB42g==",
+    "x-requested-with": "XMLHttpRequest",
+    "x-svc-source": "__BETTING_APP__",
+    "Cookie": "platform_type=desktop; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; fatman_uuid=49ad8be1-0777-45e9-8d1f-5f5c3eb16b79; che_g=1459a921-4f77-4465-bfda-d092eb1f1f74; sh.session.id=35558d78-509c-488c-9ff5-f1b3511f8c73; _ga=GA1.1.1492770073.1789849171; _gcl_au=1.1.126561714.1789849171; auid=ua+l62qxaoiWeF0kAxuSAg==; SESSION=5000cc91cc6a5330be04376abc6a9813; window_width=1101; _ga_7JGWL9SV66=GS2.1.s1790012066$o2$g1$t1790013997$j48$l0$h535646863",
+}
+
+print("✅ Настройки загружены", flush=True)
+
+# =====================================================================
+# СОСТОЯНИЕ
+# =====================================================================
+sent_signals = {}
+last_scores = {}
+odds_history = {}
+sent_drops = {}
+p_game_cache = {}
+
+# Прематч-состояние
+prematch_odds_history = {}
+sent_prematch_drops   = {}
+prematch_updated_at   = 0
+
+# =====================================================================
+# ВРЕМЯ
+# =====================================================================
+def is_active_time():
+    h = datetime.now(MOSCOW_TZ).hour
+    return not (SLEEP_HOUR_START <= h < SLEEP_HOUR_END)
+
+# =====================================================================
+# API LIVE
+# =====================================================================
+def get_live_games():
+    url = f"{BASE_URL}/service-api/main-live-feed/v3/games1x2"
+    params = {"cfView": 3, "count": 40, "fcountry": 1,
+              "gr": 2336, "grMode": 4, "lng": "ru", "ref": 1,
+              "selectedMs": "2.2"}
     try:
-        for line in GOOD_PATTERNS_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                GOOD_SET.add(line)
-        print(f"✅ Загружено вручную в белый список: {len(GOOD_SET)}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Ошибка чтения {GOOD_PATTERNS_FILE}: {e}", flush=True)
-
-if not GOOD_SET:
-    print("⚠️ good_patterns.txt пуст или не найден — беру все паттерны из JSON", flush=True)
-
-
-PATTERNS = []
-
-ALLOWED_RANKS = {"J", "Q", "K", "A"}
-
-for target_card, items in _data.items():
-    # фильтр по рангу целевой карты
-    card_rank = target_card[:-1]
-    if card_rank not in ALLOWED_RANKS:
-        continue
-
-    for item in items:
-        raw = item["pattern"]
-
-        # если есть белый список — берём только из него
-        if GOOD_SET and raw not in GOOD_SET:
-            continue
-
-        # фильтр по точности и т.д. — мягкий
-        if item.get("accuracy", 0) < 50.0:
-            continue
-        if item.get("occurrences", 0) < 5:
-            continue
-
-        parts = raw.split("|")
-        feat_seq = []
-        ok = True
-        for part in parts:
-            m = re.match(r"G\d+\[(.*?)\]$", part.strip())
-            if not m:
-                ok = False
-                break
-            feat_seq.append(m.group(1))
-
-        if not ok or not (1 <= len(feat_seq) <= 3):
-            continue
-
-        PATTERNS.append({
-            "pattern": raw,
-            "feats": feat_seq,
-            "target": target_card,
-            "accuracy": item.get("accuracy", 0),
-            "occurrences": item.get("occurrences", 0),
-            "lift": item.get("lift", 0),
-        })
-
-print(f"✅ Загружено паттернов в работу: {len(PATTERNS)}", flush=True)
-if GOOD_SET:
-    print(f"🎴 Режим: ТОЛЬКО БЕЛЫЙ СПИСОК", flush=True)
-
-
-# =====================================================================
-# CONFIG
-# =====================================================================
-
-POLL_INTERVAL = 2.0
-FINALIZE_WAIT_SECONDS = 30
-OFFSET_FILE = "tg_offset.txt"
-STATS_INTERVAL = 6 * 60 * 60
-
-
-# =====================================================================
-# TELEGRAM HTTP (с throttle)
-# =====================================================================
-
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-SESSION = requests.Session()
-
-_last_send_time = [0.0]
-MIN_SEND_INTERVAL = 1.1
-
-
-def _throttle():
-    now = time.time()
-    wait = _last_send_time[0] + MIN_SEND_INTERVAL - now
-    if wait > 0:
-        time.sleep(wait)
-    _last_send_time[0] = time.time()
-
-
-def tg_send(text):
-    _throttle()
-    try:
-        r = SESSION.post(
-            f"{TELEGRAM_API}/sendMessage",
-            json={
-                "chat_id": CHANNEL_PROGNOZ,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=10,
-        )
-        data = r.json()
-        if data.get("ok"):
-            return data["result"]["message_id"]
-
-        if data.get("error_code") == 429:
-            retry = data.get("parameters", {}).get("retry_after", 30)
-            print(f"⏳ 429: жду {retry} сек...", flush=True)
-            time.sleep(retry + 1)
-            return tg_send(text)
-
-        print(f"❌ sendMessage: {data}", flush=True)
-    except Exception as e:
-        print(f"❌ sendMessage error: {e}", flush=True)
-    return None
-
-
-def tg_edit(message_id, text):
-    if not message_id:
-        return False
-    _throttle()
-    try:
-        r = SESSION.post(
-            f"{TELEGRAM_API}/editMessageText",
-            json={
-                "chat_id": CHANNEL_PROGNOZ,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": "HTML",
-            },
-            timeout=10,
-        )
-        data = r.json()
-
-        if data.get("ok"):
-            return True
-
-        if data.get("error_code") == 429:
-            retry = data.get("parameters", {}).get("retry_after", 30)
-            print(f"⏳ 429 (edit): жду {retry} сек...", flush=True)
-            time.sleep(retry + 1)
-            return tg_edit(message_id, text)
-
-        return False
-    except Exception as e:
-        print(f"⚠️ editMessageText error: {e}", flush=True)
-    return False
-
-
-def tg_get_updates(offset):
-    try:
-        r = SESSION.get(
-            f"{TELEGRAM_API}/getUpdates",
-            params={
-                "offset": offset,
-                "timeout": 3,
-                "limit": 50,
-                "allowed_updates": json.dumps(
-                    ["channel_post", "edited_channel_post"]
-                ),
-            },
-            timeout=15,
-        )
-        data = r.json()
-        if not data.get("ok"):
-            print(f"❌ getUpdates: {data}", flush=True)
+        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        if r.status_code != 200:
             return []
-        return data.get("result", [])
+        data = r.json()
+        if not isinstance(data, list):
+            return []
+        return [g for g in data if isinstance(g, dict) and (g.get("sport") or {}).get("id") == 2]
     except Exception as e:
-        print(f"⚠️ getUpdates error: {e}", flush=True)
+        print(f"   ❌ Live: {e}", flush=True)
         return []
 
-
 # =====================================================================
-# OFFSET
+# API ПРЕМАТЧ
 # =====================================================================
-
-def load_offset():
-    try:
-        if os.path.exists(OFFSET_FILE):
-            with open(OFFSET_FILE, "r") as f:
-                return int(f.read().strip())
-    except Exception:
-        pass
-    return 0
-
-
-def save_offset(offset):
-    try:
-        with open(OFFSET_FILE, "w") as f:
-            f.write(str(offset))
-    except Exception as e:
-        print(f"⚠️ save offset: {e}", flush=True)
-
-
-# =====================================================================
-# PARSING
-# =====================================================================
-
-CARD_RE = re.compile(r"(10|[2-9]|[AJQK])([♠♣♦♥])")
-HAND_RE = re.compile(r"\(([^)]*)\)")
-NUMBER_RE = re.compile(r"#N(\d+)")
-
-
-def clean_text(t):
-    return t.replace("✅", "").replace("🔰", "")
-
-
-def extract_cards(s):
-    return [f"{r}{su}" for r, su in CARD_RE.findall(s)]
-
-
-def parse_game(text):
-    if not text:
-        return None
-
-    m = NUMBER_RE.search(text)
-    if not m:
-        return None
-    game_number = int(m.group(1))
-
-    clean = clean_text(text)
-    hands = HAND_RE.findall(clean)
-    if len(hands) < 2:
-        return None
-
-    player_cards = extract_cards(hands[0])
-    dealer_cards = extract_cards(hands[1])
-
-    if not player_cards and not dealer_cards:
-        return None
-
-    return {
-        "game_number": game_number,
-        "player_cards": player_cards,
-        "dealer_cards": dealer_cards,
-        "all_cards": player_cards + dealer_cards,
+def get_prematch_games():
+    url = f"{BASE_URL}/service-api/main-line-feed/v3/games1x2"
+    params = {
+        "cfView": 3, "count": 40, "fcountry": 1,
+        "gr": 2336, "grMode": 4, "lng": "ru", "ref": 1,
+        "selectedMs": "2.2",
     }
-
-
-# =====================================================================
-# FEATURES
-# =====================================================================
-
-def ranks(cards):
-    return [c[:-1] for c in cards]
-
-
-def suits(cards):
-    return [c[-1] for c in cards]
-
-
-def rank_seq(cards):
-    return ",".join(ranks(cards))
-
-
-def suit_seq(cards):
-    return ",".join(suits(cards))
-
-
-def exact_seq(cards):
-    return ",".join(cards)
-
-
-def game_features(game):
-    result = []
-
-    for side_name, cards in (
-        ("P", game["player_cards"]),
-        ("D", game["dealer_cards"]),
-    ):
-        if not cards:
-            continue
-
-        result.append(f"{side_name}:COUNT={len(cards)}")
-        result.append(f"{side_name}:FIRST={cards[0]}")
-        result.append(f"{side_name}:FIRST_RANK={ranks(cards)[0]}")
-        result.append(f"{side_name}:FIRST_SUIT={suits(cards)[0]}")
-
-        if len(cards) >= 2:
-            result.append(f"{side_name}:FIRST2={exact_seq(cards[:2])}")
-            result.append(f"{side_name}:FIRST2_RANKS={rank_seq(cards[:2])}")
-            result.append(f"{side_name}:FIRST2_SUITS={suit_seq(cards[:2])}")
-
-        if len(cards) >= 3:
-            result.append(f"{side_name}:FIRST3={exact_seq(cards[:3])}")
-            result.append(f"{side_name}:FIRST3_RANKS={rank_seq(cards[:3])}")
-            result.append(f"{side_name}:FIRST3_SUITS={suit_seq(cards[:3])}")
-
-        result.append(f"{side_name}:RANKS={rank_seq(cards)}")
-        result.append(f"{side_name}:SUITS={suit_seq(cards)}")
-        result.append(f"{side_name}:EXACT={exact_seq(cards)}")
-
-        rs = set(ranks(cards))
-        if "J" in rs:
-            result.append(f"{side_name}:HAS_J")
-        if "Q" in rs:
-            result.append(f"{side_name}:HAS_Q")
-        if "K" in rs:
-            result.append(f"{side_name}:HAS_K")
-        if "A" in rs:
-            result.append(f"{side_name}:HAS_A")
-
-    return result
-
+    try:
+        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        if not isinstance(data, list):
+            return []
+        return [g for g in data if isinstance(g, dict) and (g.get("sport") or {}).get("id") == 2]
+    except Exception as e:
+        print(f"   ❌ Prematch: {e}", flush=True)
+        return []
 
 # =====================================================================
-# STATE
+# ПАРСИНГ СТАТИСТИКИ
 # =====================================================================
+def parse_stats(game):
+    stats = {}
+    tablo = ((game.get("scores") or {}).get("tabloStats")) or {}
+    for key, items in tablo.items():
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and item.get("name"):
+                    stats[item["name"]] = item
+    return stats
 
-pending_games = {}
-games_cache = {}
-last_games_queue = []
-predictions = []
-processed_triggers = set()
-stats_last_sent = time.time()
-
-
-# =====================================================================
-# PREDICTION LOGIC
-# =====================================================================
-
-def check_patterns_on_three_games(g1, g2, g3):
-    if not (g1 and g2 and g3):
-        return
-
-    n = g1["game_number"]
-    if g2["game_number"] != n + 1 or g3["game_number"] != n + 2:
-        return
-
-    f1 = set(game_features(g1))
-    f2 = set(game_features(g2))
-    f3 = set(game_features(g3))
-
-    for p in PATTERNS:
-        feats = p["feats"]
-        needed = len(feats)
-
-        if needed == 1:
-            seq_games = [g3]
-            seq_feats = [f3]
-        elif needed == 2:
-            seq_games = [g2, g3]
-            seq_feats = [f2, f3]
-        else:
-            seq_games = [g1, g2, g3]
-            seq_feats = [f1, f2, f3]
-
-        ok = True
-        for feature, feat_set in zip(feats, seq_feats):
-            if feature not in feat_set:
-                ok = False
-                break
-        if not ok:
-            continue
-
-        trigger_start = seq_games[0]["game_number"]
-        trigger_end = seq_games[-1]["game_number"]
-
-        key = (trigger_start, trigger_end, tuple(feats), p["target"])
-        if key in processed_triggers:
-            continue
-
-        target_game = trigger_end + 1
-        card = p["target"]
-
-        already = any(
-            pr["target_game"] == target_game
-            and pr["status"] == "pending"
-            for pr in predictions
-        )
-        if already:
-            processed_triggers.add(key)
-            continue
-
-        mid = tg_send(f"{target_game}: {card}")
-        if not mid:
-            continue
-
-        predictions.append({
-            "message_id": mid,
-            "target_game": target_game,
-            "card": card,
-            "status": "pending",
-            "trigger_start": trigger_start,
-            "trigger_end": trigger_end,
-            "pattern": p["pattern"],
-            "accuracy": p["accuracy"],
-        })
-        processed_triggers.add(key)
-
-        print(
-            f"🔮 #{target_game} {card}  "
-            f"(триггер #{trigger_start}..{trigger_end}, "
-            f"accuracy={p['accuracy']:.1f}%)",
-            flush=True,
-        )
-
-
-def check_pending_on_new_game(game):
-    for pr in predictions:
-        if pr["status"] != "pending":
-            continue
-        if pr["card"] in game["all_cards"]:
-            target = pr["target_game"]
-            if target <= game["game_number"] <= target + 3:
-                pr["status"] = "win"
-                tg_edit(pr["message_id"], f"{target}: {pr['card']} ✅")
-                print(f"✅ #{target} {pr['card']} — СБЫЛОСЬ", flush=True)
-
-
-def check_predictions_timeouts(current_game_number):
-    for pr in predictions:
-        if pr["status"] != "pending":
-            continue
-
-        target = pr["target_game"]
-        if current_game_number > target + 3:
-            pr["status"] = "lose"
-            tg_edit(pr["message_id"], f"{target}: {pr['card']} ❌")
-            print(f"❌ #{target} {pr['card']} — НЕ СБЫЛОСЬ", flush=True)
-
+def sv(stats, name, side="s1"):
+    d = stats.get(name, {})
+    try:
+        return float(d.get(side, 0) or 0)
+    except (ValueError, TypeError):
+        return 0.0
 
 # =====================================================================
-# FINALIZE
+# ПАРСИНГ КЭФОВ 1X2
 # =====================================================================
-
-def finalize_pending_games():
-    now = time.time()
-    ready = [
-        gn for gn, info in pending_games.items()
-        if now - info["first_seen"] >= FINALIZE_WAIT_SECONDS
-    ]
-    ready.sort()
-
-    for gn in ready:
-        info = pending_games.pop(gn, None)
-        if not info:
+def get_1x2_odds(game):
+    """П1/Х/П2. Работает и для live, и для прематча."""
+    odds = {}
+    for grp in (game.get("eventGroups") or []):
+        if grp.get("groupId") != 1:
             continue
+        for e in (grp.get("events") or []):
+            if not isinstance(e, list) or not e:
+                continue
+            item = e[0]
+            if not isinstance(item, dict):
+                continue
+            t = item.get("T")
+            c = item.get("C")
+            if t is None:
+                t = item.get("type")
+            if c is None:
+                c = item.get("cf")
+            if t == 1:   odds["П1"] = c
+            elif t == 2: odds["X"] = c
+            elif t == 3: odds["П2"] = c
+        break
+    return odds
 
-        game = parse_game(info["text"])
-        if not game:
-            print(f"⚠️ #N{gn}: не удалось распарсить", flush=True)
+def get_odd_total(game, total_goals):
+    """Кэф на ТБ (total+0.5) — для value-фильтра."""
+    target = total_goals + 0.5
+    for grp in (game.get("centralBlockEventGroups") or []):
+        if grp.get("groupId") != 17:
             continue
-
-        games_cache[gn] = game
-        print(
-            f"🎮 #{gn}  P:{game['player_cards']}  D:{game['dealer_cards']}",
-            flush=True,
-        )
-
-        check_pending_on_new_game(game)
-        check_predictions_timeouts(gn)
-
-        last_games_queue.append(game)
-        if len(last_games_queue) > 3:
-            last_games_queue.pop(0)
-
-        if len(last_games_queue) == 3:
-            check_patterns_on_three_games(
-                last_games_queue[0],
-                last_games_queue[1],
-                last_games_queue[2],
-            )
-
-
-# =====================================================================
-# UPDATES
-# =====================================================================
-
-def process_updates(offset):
-    updates = tg_get_updates(offset)
-
-    for u in updates:
-        uid = u.get("update_id")
-        if uid is not None:
-            offset = uid + 1
-            save_offset(offset)
-
-        post = u.get("channel_post") or u.get("edited_channel_post")
-        if not post:
+        events = grp.get("events") or []
+        if len(events) < 2:
             continue
-
-        chat_id = str(post.get("chat", {}).get("id", ""))
-        if chat_id != CHANNEL_STAT:
-            continue
-
-        text = post.get("text", "")
-        if not text:
-            continue
-
-        m = NUMBER_RE.search(text)
-        if not m:
-            continue
-        gn = int(m.group(1))
-
-        if not re.search(r"[✅🔰]", text):
-            continue
-
-        if gn in pending_games:
-            pending_games[gn]["text"] = text
-            continue
-
-        if gn in games_cache:
-            new_game = parse_game(text)
-            if new_game:
-                games_cache[gn] = new_game
-            continue
-
-        pending_games[gn] = {
-            "first_seen": time.time(),
-            "text": text,
-        }
-        print(
-            f"👀 Новая игра #N{gn}, жду {FINALIZE_WAIT_SECONDS} сек",
-            flush=True,
-        )
-
-    return offset
-
+        tb_list = events[0] if isinstance(events[0], list) else []
+        for item in tb_list:
+            if (isinstance(item, dict) and item.get("parameter") == target
+                    and item.get("type") == 9):
+                return item.get("cf")
+    return None
 
 # =====================================================================
-# STATS
+# ДРОП 1X2 (LIVE)
 # =====================================================================
+def save_odds(gid, now_ts, odds):
+    if gid not in odds_history:
+        odds_history[gid] = deque(maxlen=30)
+    odds_history[gid].append({"ts": now_ts, "odds": odds})
 
-def build_stats_message():
-    resolved = [p for p in predictions if p["status"] in ("win", "lose")]
-    if not resolved:
+def check_drops(gid, now_ts):
+    if gid not in odds_history or len(odds_history[gid]) < 2:
         return None
-
-    total = len(resolved)
-    wins = sum(1 for p in resolved if p["status"] == "win")
-    loses = total - wins
-    rate = wins / total * 100 if total else 0
-
-    by_pattern = defaultdict(lambda: {"wins": 0, "loses": 0})
-    for p in resolved:
-        pat = p.get("pattern", "?")
-        if p["status"] == "win":
-            by_pattern[pat]["wins"] += 1
-        else:
-            by_pattern[pat]["loses"] += 1
-
-    pat_stats = []
-    for pat, st in by_pattern.items():
-        tot = st["wins"] + st["loses"]
-        if tot < 2:
+    cur = odds_history[gid][-1]["odds"]
+    prev = None
+    for h in reversed(list(odds_history[gid])[:-1]):
+        if now_ts - h["ts"] >= DROP_WINDOW:
+            prev = h
+            break
+    if prev is None:
+        return None
+    prev_odds = prev["odds"]
+    res = []
+    for key in ("П1", "X", "П2"):
+        c = cur.get(key)
+        p = prev_odds.get(key)
+        if not c or not p:
             continue
-        pat_stats.append({
-            "pattern": pat,
-            "wins": st["wins"],
-            "loses": st["loses"],
-            "total": tot,
-            "rate": st["wins"] / tot * 100,
-        })
+        try:
+            change = (float(c) - float(p)) / float(p) * 100
+        except (ValueError, TypeError, ZeroDivisionError):
+            continue
+        if change <= DROP_PCT:
+            res.append({
+                "market": key, "from": p, "to": c,
+                "change_pct": round(change, 1),
+                "window": now_ts - prev["ts"],
+            })
+    if not res:
+        return None
+    res.sort(key=lambda x: x["change_pct"])
+    return res
 
-    pat_stats.sort(key=lambda x: (x["rate"], x["total"]), reverse=True)
+def drop_to_bet(market, p):
+    if market == "П1":
+        return ("ИТ1 Б 0.5 (хозяева забьют)", "Дроп П1 → хозяева побеждают → забьют")
+    if market == "П2":
+        return ("ИТ2 Б 0.5 (гости забьют)", "Дроп П2 → гости побеждают → забьют")
+    if market == "X":
+        return ("Обе забьют (ОЗ)", "Дроп X → ждут ничью → часто обе забивают")
+    return (market, "—")
 
-    top = pat_stats[:5]
-    worst = [f for f in pat_stats if f["rate"] < 45][:5]
-    pending = sum(1 for p in predictions if p["status"] == "pending")
-
-    now_str = datetime.now().strftime("%d.%m %H:%M")
-
-    lines = []
-    lines.append(f"📊 <b>СТАТИСТИКА ({now_str})</b>")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"Всего прогнозов: {total}")
-    lines.append(f"✅ Сбылось: {wins} ({rate:.1f}%)")
-    lines.append(f"❌ Не сбылось: {loses} ({100 - rate:.1f}%)")
+def format_drop_signal(p, drops):
+    lines = [
+        "📉 <b>ДРОП 1X2 (ХОККЕЙ)</b>",
+        p["league"],
+        f"🏒 <b>{p['match']}</b>",
+        f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}",
+        "",
+    ]
+    for d in drops[:3]:
+        lines.append(f"🔻 <b>{d['market']}</b>: {d['from']} → {d['to']} "
+                     f"({d['change_pct']}% за {d['window']}с)")
+    best = drops[0]
+    bet, reason = drop_to_bet(best["market"], p)
     lines.append("")
-
-    if top:
-        lines.append("🏆 <b>ТОП-5:</b>")
-        for i, f in enumerate(top, 1):
-            lines.append(
-                f"{i}. {f['pattern'][:55]}  "
-                f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
-            )
-        lines.append("")
-
-    if worst:
-        lines.append("💀 <b>ХУДШИЕ:</b>")
-        for i, f in enumerate(worst, 1):
-            lines.append(
-                f"{i}. {f['pattern'][:55]}  "
-                f"{f['wins']}/{f['total']} ({f['rate']:.0f}%)"
-            )
-        lines.append("")
-
-    lines.append(f"⏳ В ожидании: {pending}")
+    lines.append(f"💡 <b>Ставка: {bet}</b>")
+    lines.append(f"<i>{reason}</i>")
+    lines.append(f"📌 Кэф 1X2 сейчас: {best['to']}")
     return "\n".join(lines)
 
+# =====================================================================
+# TELEGRAM
+# =====================================================================
+def send_telegram(text):
+    try:
+        r = requests.post(API + "/sendMessage",
+                          json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
+        if r.status_code == 200:
+            return r.json()["result"]["message_id"]
+    except Exception as e:
+        print(f"❌ TG send: {e}", flush=True)
+    return None
 
-def maybe_send_stats():
-    global stats_last_sent
+def edit_telegram(message_id, text):
+    try:
+        r = requests.post(API + "/editMessageText",
+                          json={"chat_id": CHAT_ID, "message_id": message_id,
+                                "text": text, "parse_mode": "HTML"})
+        return r.status_code == 200
+    except Exception as e:
+        print(f"❌ TG edit: {e}", flush=True)
+        return False
 
-    if time.time() - stats_last_sent < STATS_INTERVAL:
+# =====================================================================
+# БАЗОВЫЙ ПАРСИНГ LIVE-МАТЧА
+# =====================================================================
+def parse_game(game):
+    if not isinstance(game, dict):
+        return None
+    if (game.get("sport") or {}).get("id") != 2:
+        return None
+    liga_id = (game.get("liga") or {}).get("id")
+    if liga_id not in LEAGUE_IDS:
+        return None
+
+    scores = game.get("scores") or {}
+    # Пропускаем перерывы
+    if scores.get("isBreak"):
+        return None
+    # Пропускаем матчи до начала
+    if scores.get("timer", {}).get("timeDirection") == -1:
+        return None
+
+    time_sec = (scores.get("timer") or {}).get("timeSec", 0)
+    minute = time_sec // 60
+    score = scores.get("fullScore", "0-0")
+    try:
+        s1, s2 = map(int, score.split("-"))
+    except ValueError:
+        s1, s2 = 0, 0
+
+    current_period = scores.get("currentPeriod", 1)
+    period_str = f"{current_period}-й период, {minute}'"
+
+    stats = parse_stats(game)
+    att1 = int(sv(stats, "Атаки", "s1"))
+    att2 = int(sv(stats, "Атаки", "s2"))
+    pen1 = int(sv(stats, "Штрафы", "s1"))
+    pen2 = int(sv(stats, "Штрафы", "s2"))
+    poss1 = int(sv(stats, "Владение %", "s1"))
+    poss2 = int(sv(stats, "Владение %", "s2"))
+    maj1 = int(sv(stats, "Голы в большинстве", "s1"))
+    maj2 = int(sv(stats, "Голы в большинстве", "s2"))
+
+    o1 = (game.get("opponent1") or {}).get("fullName", "?")
+    o2 = (game.get("opponent2") or {}).get("fullName", "?")
+
+    return {
+        "game_id": game.get("id"),
+        "liga_id": liga_id,
+        "league": LEAGUE_IDS.get(liga_id, ""),
+        "team1": o1, "team2": o2,
+        "match": f"{o1} — {o2}",
+        "minute": minute, "score": score,
+        "s1": s1, "s2": s2,
+        "period": current_period,
+        "period_str": period_str,
+        "att1": att1, "att2": att2,
+        "pen1": pen1, "pen2": pen2,
+        "poss1": poss1, "poss2": poss2,
+        "maj1": maj1, "maj2": maj2,
+    }
+
+# =====================================================================
+# ОБЩИЕ ФИЛЬТРЫ
+# =====================================================================
+def common_ok(p, gid, now_ts):
+    if p["minute"] > MAX_MINUTE:
+        return False
+    prev = last_scores.get(gid, {})
+    if prev.get("score") and prev["score"] != p["score"]:
+        last_scores[gid] = {"score": p["score"], "changed_at": now_ts}
+        return False
+    if prev.get("changed_at"):
+        if now_ts - prev["changed_at"] < GOAL_COOLDOWN_SEC:
+            return False
+    return True
+
+# =====================================================================
+# СТРАТЕГИИ ХОККЕЯ
+# =====================================================================
+def strategy_attacks(p):
+    att_diff = abs(p["att1"] - p["att2"])
+    if att_diff < S1_ATT_DIFF:
+        return None
+    side = "home" if p["att1"] > p["att2"] else "away"
+    dominant = p["team1"] if side == "home" else p["team2"]
+    return {"strategy": "Атаки", "emoji": "⚔️", "dominant": dominant,
+            "key": f"атаки {att_diff}", "min_odd": S1_MIN_ODD,
+            "side": side}
+
+def strategy_possession(p):
+    poss_diff = abs(p["poss1"] - p["poss2"])
+    if poss_diff < S2_POSSESSION:
+        return None
+    side = "home" if p["poss1"] > p["poss2"] else "away"
+    dominant = p["team1"] if side == "home" else p["team2"]
+    return {"strategy": "Владение", "emoji": "🎯", "dominant": dominant,
+            "key": f"владение {poss_diff}%", "min_odd": S2_MIN_ODD,
+            "side": side}
+
+def strategy_penalties(p):
+    pen_diff = abs(p["pen1"] - p["pen2"])
+    if pen_diff < S3_PENALTY_DIFF:
+        return None
+    side = "home" if p["pen1"] > p["pen2"] else "away"
+    other = p["team1"] if side == "away" else p["team2"]
+    return {"strategy": "Штрафы", "emoji": "🚨", "dominant": other,
+            "key": f"штрафы {pen_diff}", "min_odd": S3_MIN_ODD,
+            "side": "away" if side == "home" else "home"}
+
+def strategy_combo(p):
+    att_diff = abs(p["att1"] - p["att2"])
+    poss_diff = abs(p["poss1"] - p["poss2"])
+    if att_diff < S4_COMBO_ATT or poss_diff < S4_COMBO_POSS:
+        return None
+    side = "home" if (p["att1"] > p["att2"] and p["poss1"] > p["poss2"]) else "away"
+    dominant = p["team1"] if side == "home" else p["team2"]
+    return {"strategy": "Комбо (атаки+владение)", "emoji": "💡", "dominant": dominant,
+            "key": f"атаки {att_diff}, владение {poss_diff}%",
+            "min_odd": S4_MIN_ODD, "side": side}
+
+# =====================================================================
+# ФОРМАТ СИГНАЛА СТРАТЕГИЙ
+# =====================================================================
+def format_signal(p, strategy, odd):
+    side = strategy["side"]
+    at_dom = p["att1"] if side == "home" else p["att2"]
+    at_opp = p["att2"] if side == "home" else p["att1"]
+    po_dom = p["poss1"] if side == "home" else p["poss2"]
+    po_opp = p["poss2"] if side == "home" else p["poss1"]
+    pe_dom = p["pen1"] if side == "home" else p["pen2"]
+    pe_opp = p["pen2"] if side == "home" else p["pen1"]
+
+    total = p["s1"] + p["s2"]
+    tb1 = total + 0.5
+    tb2 = total + 1.5
+    odd_str = f"💰 Кэф ТБ {tb1}: <b>{odd}</b>" if odd else "💰 Кэф: —"
+
+    return (
+        f"{strategy['emoji']} <b>СИГНАЛ: {strategy['strategy']}</b>\n"
+        f"{p['league']}\n"
+        f"🏒 <b>{p['match']}</b>\n"
+        f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}\n"
+        f"⚔️ Атаки: {at_dom} — {at_opp}\n"
+        f"🎯 Владение: {po_dom}% — {po_opp}%\n"
+        f"🚨 Штрафы: {pe_dom} — {pe_opp}\n"
+        f"👉 Давит: <b>{strategy['dominant']}</b>\n"
+        f"🔑 {strategy['key']}\n"
+        f"{odd_str}\n"
+        f"💡 <b>Ожидается гол — ТБ {tb1} / ТБ {tb2}</b>"
+    )
+
+def format_signal_multi(p, strategies, odd):
+    total = p["s1"] + p["s2"]
+    tb1 = total + 0.5
+    tb2 = total + 1.5
+    odd_str = f"💰 Кэф ТБ {tb1}: <b>{odd}</b>" if odd else "💰 Кэф: —"
+    strat_str = " • ".join(strategies)
+
+    return (
+        f"🎯 <b>СИГНАЛЫ: {strat_str}</b>\n"
+        f"{p['league']}\n"
+        f"🏒 <b>{p['match']}</b>\n"
+        f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}\n"
+        f"⚔️ Атаки: {p['att1']} — {p['att2']}\n"
+        f"🎯 Владение: {p['poss1']}% — {p['poss2']}%\n"
+        f"🚨 Штрафы: {p['pen1']} — {p['pen2']}\n"
+        f"{odd_str}\n"
+        f"💡 <b>Ожидается гол — ТБ {tb1} / ТБ {tb2}</b>"
+    )
+
+def try_send_signal(p, strategy, now_ts):
+    gid = p["game_id"]
+    key = str(gid)
+
+    odd = get_odd_total(p_game_cache.get(gid, {}), p["s1"] + p["s2"])
+
+    if odd is not None and odd < strategy["min_odd"]:
+        return False
+
+    existing = sent_signals.get(key)
+
+    if not existing:
+        text = format_signal(p, strategy, odd)
+        msg_id = send_telegram(text)
+        if not msg_id:
+            return False
+        sent_signals[key] = {
+            "ts": now_ts,
+            "message_id": msg_id,
+            "base_text": text,
+            "strategies": [f"{strategy['emoji']} {strategy['strategy']}"],
+        }
+        print(f"    📤 {p['match']} | {strategy['emoji']} {strategy['strategy']} | кэф {odd}", flush=True)
+        time.sleep(1)
+        return True
+
+    full_name = f"{strategy['emoji']} {strategy['strategy']}"
+    if full_name in existing["strategies"]:
+        return False
+
+    if (now_ts - existing["ts"]) > ANTISPAM_SEC:
+        del sent_signals[key]
+        return try_send_signal(p, strategy, now_ts)
+
+    existing["strategies"].append(full_name)
+    existing["ts"] = now_ts
+    new_text = format_signal_multi(p, existing["strategies"], odd)
+    edit_telegram(existing["message_id"], new_text)
+    existing["base_text"] = new_text
+    print(f"    ✏️ {p['match']} | + {full_name}", flush=True)
+    time.sleep(1)
+    return True
+
+# =====================================================================
+# ПРЕМАТЧ-ДРОП
+# =====================================================================
+def parse_prematch_game(game):
+    if not isinstance(game, dict):
+        return None
+    if (game.get("sport") or {}).get("id") != 2:
+        return None
+    liga_id = (game.get("liga") or {}).get("id")
+    if liga_id not in LEAGUE_IDS:
+        return None
+
+    o1 = (game.get("opponent1") or {}).get("fullName", "?")
+    o2 = (game.get("opponent2") or {}).get("fullName", "?")
+
+    start_ts = game.get("startTs")
+    start_str = "?"
+    if start_ts:
+        try:
+            start_dt = datetime.fromtimestamp(int(start_ts), MOSCOW_TZ)
+            start_str = start_dt.strftime("%d.%m %H:%M МСК")
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "game_id": game.get("id"),
+        "liga_id": liga_id,
+        "league": LEAGUE_IDS.get(liga_id, ""),
+        "team1": o1, "team2": o2,
+        "match": f"{o1} — {o2}",
+        "start_ts": start_ts,
+        "start_str": start_str,
+    }
+
+def save_prematch_odds(gid, now_ts, odds):
+    if gid not in prematch_odds_history:
+        prematch_odds_history[gid] = deque(maxlen=30)
+    prematch_odds_history[gid].append({"ts": now_ts, "odds": odds})
+
+def check_prematch_drops(gid, now_ts):
+    if gid not in prematch_odds_history or len(prematch_odds_history[gid]) < 2:
+        return None
+    cur = prematch_odds_history[gid][-1]["odds"]
+    prev = None
+    for h in reversed(list(prematch_odds_history[gid])[:-1]):
+        if now_ts - h["ts"] >= PREMATCH_DROP_WINDOW:
+            prev = h
+            break
+    if prev is None:
+        return None
+    prev_odds = prev["odds"]
+    res = []
+    for key in ("П1", "X", "П2"):
+        c = cur.get(key)
+        p = prev_odds.get(key)
+        if not c or not p:
+            continue
+        try:
+            change = (float(c) - float(p)) / float(p) * 100
+        except (ValueError, TypeError, ZeroDivisionError):
+            continue
+        if change <= PREMATCH_DROP_PCT:
+            res.append({
+                "market": key, "from": p, "to": c,
+                "change_pct": round(change, 1),
+                "window": now_ts - prev["ts"],
+            })
+    if not res:
+        return None
+    res.sort(key=lambda x: x["change_pct"])
+    return res
+
+def format_prematch_signal(p, drops):
+    lines = [
+        "🕐 <b>ДРОП ПРЕМАТЧ (ХОККЕЙ)</b>",
+        p["league"],
+        f"🏒 <b>{p['match']}</b>",
+        f"🕐 Старт: <b>{p['start_str']}</b>",
+        "",
+    ]
+    for d in drops[:3]:
+        lines.append(f"🔻 <b>{d['market']}</b>: {d['from']} → {d['to']} "
+                     f"({d['change_pct']}% за {d['window']}с)")
+    best = drops[0]
+    bet, reason = drop_to_bet(best["market"], p)
+    lines.append("")
+    lines.append(f"💡 <b>Ставка: {bet}</b>")
+    lines.append(f"<i>{reason}</i>")
+    lines.append(f"📌 Кэф 1X2 сейчас: {best['to']}")
+    return "\n".join(lines)
+
+def monitor_prematch():
+    global prematch_updated_at, sent_prematch_drops
+    now = int(time.time())
+    if now - prematch_updated_at < PREMATCH_INTERVAL:
+        return
+    prematch_updated_at = now
+
+    print(f"🕐 Прематч: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}", flush=True)
+    games = get_prematch_games()
+    if not games:
+        print("   ⚠️ Прематч пуст", flush=True)
         return
 
-    msg = build_stats_message()
-    if msg:
-        mid = tg_send(msg)
-        if mid:
-            print("📊 Статистика отправлена", flush=True)
-    else:
-        print("📊 Статистики нет", flush=True)
+    total = 0
+    total_drops = 0
+    for game in games:
+        p = parse_prematch_game(game)
+        if not p:
+            continue
+        gid = p["game_id"]
+        odds_1x2 = get_1x2_odds(game)
+        if not odds_1x2:
+            continue
+        save_prematch_odds(gid, now, odds_1x2)
+        total += 1
+        drops = check_prematch_drops(gid, now)
+        if not drops:
+            continue
+        prev = sent_prematch_drops.get(gid)
+        if prev and (now - prev) < PREMATCH_ANTISPAM:
+            continue
+        text = format_prematch_signal(p, drops)
+        if send_telegram(text):
+            sent_prematch_drops[gid] = now
+            total_drops += 1
+            print(f"    🕐 {p['match']} | {drops[0]['market']} {drops[0]['change_pct']}%", flush=True)
+            time.sleep(1)
 
-    stats_last_sent = time.time()
+    print(f"✅ Прематч: {total} матчей, {total_drops} дропов", flush=True)
+    sent_prematch_drops = {k: v for k, v in sent_prematch_drops.items() if now - v < 7200}
 
+# =====================================================================
+# ОСНОВНОЙ ЦИКЛ LIVE
+# =====================================================================
+def monitor():
+    global sent_signals, sent_drops, p_game_cache
+    print(f"🔄 {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}", flush=True)
+    games = get_live_games()
+    if not games:
+        print("   0 матчей", flush=True)
+        return
+
+    now_ts = int(time.time())
+    p_game_cache = {g.get("id"): g for g in games if isinstance(g, dict)}
+
+    total_our = 0
+    total_signals = 0
+    total_drops = 0
+
+    by_league = {}
+    for game in games:
+        lid = (game.get("liga") or {}).get("id")
+        if lid in LEAGUE_IDS:
+            by_league[lid] = by_league.get(lid, 0) + 1
+    for lid, cnt in by_league.items():
+        print(f"  🏒 {LEAGUE_IDS[lid]}: {cnt}", flush=True)
+
+    for game in games:
+        p = parse_game(game)
+        if not p:
+            continue
+        gid = p["game_id"]
+
+        # ДРОП 1X2
+        odds_1x2 = get_1x2_odds(game)
+        if odds_1x2:
+            save_odds(gid, now_ts, odds_1x2)
+            drops = check_drops(gid, now_ts)
+            if drops:
+                prev_drop = sent_drops.get(gid)
+                if not (prev_drop and (now_ts - prev_drop) < DROP_ANTISPAM):
+                    drop_text = format_drop_signal(p, drops)
+                    if send_telegram(drop_text):
+                        sent_drops[gid] = now_ts
+                        total_drops += 1
+                        print(f"    📉 ДРОП {p['match']} | {drops[0]['market']} {drops[0]['change_pct']}%", flush=True)
+                        time.sleep(1)
+
+        # СТРАТЕГИИ
+        if not common_ok(p, gid, now_ts):
+            continue
+        total_our += 1
+        for strategy_func in (strategy_attacks, strategy_possession,
+                              strategy_penalties, strategy_combo):
+            strat = strategy_func(p)
+            if not strat:
+                continue
+            if try_send_signal(p, strat, now_ts):
+                total_signals += 1
+                break
+
+    print(f"✅ {total_our} наших, {total_signals} сигналов, "
+          f"{total_drops} дропов", flush=True)
+    sent_signals = {k: v for k, v in sent_signals.items() if now_ts - v["ts"] < 3600}
+    sent_drops = {k: v for k, v in sent_drops.items() if now_ts - v < 3600}
 
 # =====================================================================
 # MAIN
 # =====================================================================
-
 def main():
+    print("🚀 ХОККЕЙ-БОТ ЗАПУЩЕН", flush=True)
+    print(f"📋 Лиг: {len(LEAGUE_IDS)}", flush=True)
+    print(f"🎯 Стратегии: Атаки, Владение, Штрафы, Комбо", flush=True)
+    print(f"📉 Дроп 1X2 (live): {DROP_PCT}% за {DROP_WINDOW}с", flush=True)
+    print(f"🕐 Дроп 1X2 (прематч): {PREMATCH_DROP_PCT}% за {PREMATCH_DROP_WINDOW}с", flush=True)
     print("=" * 60, flush=True)
-    print("🚀 PATTERN FORECAST BOT (whitelist mode)", flush=True)
-    print("=" * 60, flush=True)
-    print(f"📥 CHANNEL_STAT: {CHANNEL_STAT}", flush=True)
-    print(f"📤 CHANNEL_PROGNOZ: {CHANNEL_PROGNOZ}", flush=True)
-    print(f"🧩 Паттернов в работе: {len(PATTERNS)}", flush=True)
-    print(f"📋 Режим: {'БЕЛЫЙ СПИСОК' if GOOD_SET else 'ВСЕ ИЗ JSON'}", flush=True)
-    print("=" * 60, flush=True)
-
-    offset = load_offset()
-    print(f"📌 Offset: {offset}", flush=True)
-
-    global stats_last_sent
-    stats_last_sent = time.time()
 
     while True:
         try:
-            offset = process_updates(offset)
-            finalize_pending_games()
-            maybe_send_stats()
-            time.sleep(POLL_INTERVAL)
+            now_str = datetime.now(MOSCOW_TZ).strftime('%H:%M')
+            if not is_active_time():
+                print(f"😴 Ночь ({now_str})", flush=True)
+                time.sleep(600)
+                continue
+
+            monitor_prematch()   # работает всегда
+            monitor()            # live
+            time.sleep(UPDATE_INTERVAL)
 
         except KeyboardInterrupt:
-            print("🛑 Остановлен", flush=True)
+            print("⏹️", flush=True)
             break
         except Exception as e:
-            print(f"❌ Ошибка: {e}", flush=True)
-            time.sleep(3)
-
+            print(f"❌ {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            time.sleep(30)
 
 if __name__ == "__main__":
     main()
