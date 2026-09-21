@@ -39,17 +39,17 @@ LEAGUE_IDS = {
 # =====================================================================
 # ПОРОГИ СТРАТЕГИЙ (хоккей)
 # =====================================================================
-S1_ATT_DIFF      = 40    # атаки
+S1_ATT_DIFF      = 40
 S1_MIN_ODD       = 1.4
 
-S2_POSSESSION    = 25    # разница владения %
+S2_POSSESSION    = 25
 S2_MIN_ODD       = 1.4
 
-S3_PENALTY_DIFF  = 4     # разница штрафов
+S3_PENALTY_DIFF  = 4
 S3_MIN_ODD       = 1.4
 
-S4_COMBO_ATT     = 35    # комбо: атаки
-S4_COMBO_POSS    = 20    # комбо: владение
+S4_COMBO_ATT     = 35
+S4_COMBO_POSS    = 20
 S4_MIN_ODD       = 1.4
 
 # Дроп 1X2 (live)
@@ -58,13 +58,13 @@ DROP_WINDOW   = 180
 DROP_ANTISPAM = 900
 
 # Прематч-дроп
-PREMATCH_INTERVAL    = 300      # раз в 5 минут
-PREMATCH_ANTISPAM    = 1800     # 30 минут
+PREMATCH_INTERVAL    = 300
+PREMATCH_ANTISPAM    = 1800
 PREMATCH_DROP_PCT    = -10.0
 PREMATCH_DROP_WINDOW = 180
 
 # Общие
-MAX_MINUTE        = 55          # для хоккея 55 мин = конец 3-го периода
+MAX_MINUTE        = 55
 UPDATE_INTERVAL   = 60
 ANTISPAM_SEC      = 900
 GOAL_COOLDOWN_SEC = 300
@@ -73,7 +73,7 @@ SLEEP_HOUR_START = 1
 SLEEP_HOUR_END   = 12
 
 # =====================================================================
-# ЗАГОЛОВКИ (те же, что в футболе)
+# ЗАГОЛОВКИ
 # =====================================================================
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 YaBrowser/26.8.0.0 Safari/537.36",
@@ -108,7 +108,6 @@ odds_history = {}
 sent_drops = {}
 p_game_cache = {}
 
-# Прематч-состояние
 prematch_odds_history = {}
 sent_prematch_drops   = {}
 prematch_updated_at   = 0
@@ -121,7 +120,7 @@ def is_active_time():
     return not (SLEEP_HOUR_START <= h < SLEEP_HOUR_END)
 
 # =====================================================================
-# API LIVE
+# API
 # =====================================================================
 def get_live_games():
     url = f"{BASE_URL}/service-api/main-live-feed/v3/games1x2"
@@ -140,9 +139,6 @@ def get_live_games():
         print(f"   ❌ Live: {e}", flush=True)
         return []
 
-# =====================================================================
-# API ПРЕМАТЧ
-# =====================================================================
 def get_prematch_games():
     url = f"{BASE_URL}/service-api/main-line-feed/v3/games1x2"
     params = {
@@ -163,7 +159,7 @@ def get_prematch_games():
         return []
 
 # =====================================================================
-# ПАРСИНГ СТАТИСТИКИ
+# ПАРСИНГ
 # =====================================================================
 def parse_stats(game):
     stats = {}
@@ -182,11 +178,7 @@ def sv(stats, name, side="s1"):
     except (ValueError, TypeError):
         return 0.0
 
-# =====================================================================
-# ПАРСИНГ КЭФОВ 1X2
-# =====================================================================
 def get_1x2_odds(game):
-    """П1/Х/П2. Работает и для live, и для прематча."""
     odds = {}
     for grp in (game.get("eventGroups") or []):
         if grp.get("groupId") != 1:
@@ -210,7 +202,6 @@ def get_1x2_odds(game):
     return odds
 
 def get_odd_total(game, total_goals):
-    """Кэф на ТБ (total+0.5) — для value-фильтра."""
     target = total_goals + 0.5
     for grp in (game.get("centralBlockEventGroups") or []):
         if grp.get("groupId") != 17:
@@ -226,7 +217,7 @@ def get_odd_total(game, total_goals):
     return None
 
 # =====================================================================
-# ДРОП 1X2 (LIVE)
+# ДРОП 1X2
 # =====================================================================
 def save_odds(gid, now_ts, odds):
     if gid not in odds_history:
@@ -267,12 +258,13 @@ def check_drops(gid, now_ts):
     return res
 
 def drop_to_bet(market, p):
+    """П1/П2 → ИТБ 0.5. X → ничья."""
     if market == "П1":
         return ("ИТ1 Б 0.5 (хозяева забьют)", "Дроп П1 → хозяева побеждают → забьют")
     if market == "П2":
         return ("ИТ2 Б 0.5 (гости забьют)", "Дроп П2 → гости побеждают → забьют")
     if market == "X":
-        return ("Обе забьют (ОЗ)", "Дроп X → ждут ничью → часто обе забивают")
+        return ("Ничья в основное время", "Дроп X → ждут ничью")
     return (market, "—")
 
 def format_drop_signal(p, drops):
@@ -318,7 +310,7 @@ def edit_telegram(message_id, text):
         return False
 
 # =====================================================================
-# БАЗОВЫЙ ПАРСИНГ LIVE-МАТЧА
+# ПАРСИНГ LIVE-МАТЧА
 # =====================================================================
 def parse_game(game):
     if not isinstance(game, dict):
@@ -330,10 +322,8 @@ def parse_game(game):
         return None
 
     scores = game.get("scores") or {}
-    # Пропускаем перерывы
     if scores.get("isBreak"):
         return None
-    # Пропускаем матчи до начала
     if scores.get("timer", {}).get("timeDirection") == -1:
         return None
 
@@ -378,7 +368,7 @@ def parse_game(game):
     }
 
 # =====================================================================
-# ОБЩИЕ ФИЛЬТРЫ
+# ФИЛЬТРЫ
 # =====================================================================
 def common_ok(p, gid, now_ts):
     if p["minute"] > MAX_MINUTE:
@@ -419,27 +409,35 @@ def strategy_penalties(p):
     pen_diff = abs(p["pen1"] - p["pen2"])
     if pen_diff < S3_PENALTY_DIFF:
         return None
-    side = "home" if p["pen1"] > p["pen2"] else "away"
-    other = p["team1"] if side == "away" else p["team2"]
-    return {"strategy": "Штрафы", "emoji": "🚨", "dominant": other,
+    # Больше штрафов у одной → ставим на другую
+    side = "away" if p["pen1"] > p["pen2"] else "home"
+    dominant = p["team2"] if side == "home" else p["team1"]
+    return {"strategy": "Штрафы", "emoji": "🚨", "dominant": dominant,
             "key": f"штрафы {pen_diff}", "min_odd": S3_MIN_ODD,
-            "side": "away" if side == "home" else "home"}
+            "side": side}
 
 def strategy_combo(p):
     att_diff = abs(p["att1"] - p["att2"])
     poss_diff = abs(p["poss1"] - p["poss2"])
     if att_diff < S4_COMBO_ATT or poss_diff < S4_COMBO_POSS:
         return None
-    side = "home" if (p["att1"] > p["att2"] and p["poss1"] > p["poss2"]) else "away"
-    dominant = p["team1"] if side == "home" else p["team2"]
+    if p["att1"] > p["att2"] and p["poss1"] > p["poss2"]:
+        side = "home"
+        dominant = p["team1"]
+    elif p["att2"] > p["att1"] and p["poss2"] > p["poss1"]:
+        side = "away"
+        dominant = p["team2"]
+    else:
+        return None
     return {"strategy": "Комбо (атаки+владение)", "emoji": "💡", "dominant": dominant,
             "key": f"атаки {att_diff}, владение {poss_diff}%",
             "min_odd": S4_MIN_ODD, "side": side}
 
 # =====================================================================
-# ФОРМАТ СИГНАЛА СТРАТЕГИЙ
+# ФОРМАТЫ
 # =====================================================================
 def format_signal(p, strategy, odd):
+    """Первый сигнал по матчу."""
     side = strategy["side"]
     at_dom = p["att1"] if side == "home" else p["att2"]
     at_opp = p["att2"] if side == "home" else p["att1"]
@@ -458,9 +456,9 @@ def format_signal(p, strategy, odd):
         f"{p['league']}\n"
         f"🏒 <b>{p['match']}</b>\n"
         f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}\n"
-        f"⚔️ Атаки: {at_dom} — {at_opp}\n"
-        f"🎯 Владение: {po_dom}% — {po_opp}%\n"
-        f"🚨 Штрафы: {pe_dom} — {pe_opp}\n"
+        f"⚔️ Атаки: {p['att1']} — {p['att2']}\n"
+        f"🎯 Владение: {p['poss1']}% — {p['poss2']}%\n"
+        f"🚨 Штрафы: {p['pen1']} — {p['pen2']}\n"
         f"👉 Давит: <b>{strategy['dominant']}</b>\n"
         f"🔑 {strategy['key']}\n"
         f"{odd_str}\n"
@@ -468,24 +466,37 @@ def format_signal(p, strategy, odd):
     )
 
 def format_signal_multi(p, strategies, odd):
+    """Редактирование — добавляем блок «Подтвердилось»."""
     total = p["s1"] + p["s2"]
     tb1 = total + 0.5
     tb2 = total + 1.5
     odd_str = f"💰 Кэф ТБ {tb1}: <b>{odd}</b>" if odd else "💰 Кэф: —"
-    strat_str = " • ".join(strategies)
 
-    return (
-        f"🎯 <b>СИГНАЛЫ: {strat_str}</b>\n"
-        f"{p['league']}\n"
-        f"🏒 <b>{p['match']}</b>\n"
-        f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}\n"
-        f"⚔️ Атаки: {p['att1']} — {p['att2']}\n"
-        f"🎯 Владение: {p['poss1']}% — {p['poss2']}%\n"
-        f"🚨 Штрафы: {p['pen1']} — {p['pen2']}\n"
-        f"{odd_str}\n"
-        f"💡 <b>Ожидается гол — ТБ {tb1} / ТБ {tb2}</b>"
-    )
+    lines = [
+        f"🎯 <b>СИГНАЛ ХОККЕЙ</b>",
+        f"{p['league']}",
+        f"🏒 <b>{p['match']}</b>",
+        f"📊 Счёт: <b>{p['score']}</b> | ⏱ {p['period_str']}",
+        f"⚔️ Атаки: {p['att1']} — {p['att2']}",
+        f"🎯 Владение: {p['poss1']}% — {p['poss2']}%",
+        f"🚨 Штрафы: {p['pen1']} — {p['pen2']}",
+    ]
 
+    if len(strategies) > 1:
+        lines.append("")
+        lines.append("✅ <b>Подтвердилось:</b>")
+        for s in strategies:
+            lines.append(f"   • {s}")
+
+    lines.append("")
+    lines.append(f"{odd_str}")
+    lines.append(f"💡 <b>Ожидается гол — ТБ {tb1} / ТБ {tb2}</b>")
+
+    return "\n".join(lines)
+
+# =====================================================================
+# ОТПРАВКА СИГНАЛА
+# =====================================================================
 def try_send_signal(p, strategy, now_ts):
     gid = p["game_id"]
     key = str(gid)
@@ -497,6 +508,7 @@ def try_send_signal(p, strategy, now_ts):
 
     existing = sent_signals.get(key)
 
+    # ===== ПЕРВЫЙ СИГНАЛ =====
     if not existing:
         text = format_signal(p, strategy, odd)
         msg_id = send_telegram(text)
@@ -512,7 +524,9 @@ def try_send_signal(p, strategy, now_ts):
         time.sleep(1)
         return True
 
+    # ===== МАТЧ УЖЕ В СИГНАЛАХ =====
     full_name = f"{strategy['emoji']} {strategy['strategy']}"
+
     if full_name in existing["strategies"]:
         return False
 
@@ -520,8 +534,10 @@ def try_send_signal(p, strategy, now_ts):
         del sent_signals[key]
         return try_send_signal(p, strategy, now_ts)
 
+    # ===== РЕДАКТИРУЕМ СООБЩЕНИЕ =====
     existing["strategies"].append(full_name)
     existing["ts"] = now_ts
+
     new_text = format_signal_multi(p, existing["strategies"], odd)
     edit_telegram(existing["message_id"], new_text)
     existing["base_text"] = new_text
@@ -745,8 +761,8 @@ def main():
                 time.sleep(600)
                 continue
 
-            monitor_prematch()   # работает всегда
-            monitor()            # live
+            monitor_prematch()
+            monitor()
             time.sleep(UPDATE_INTERVAL)
 
         except KeyboardInterrupt:
