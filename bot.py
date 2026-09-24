@@ -73,6 +73,13 @@ SLEEP_HOUR_START = 1
 SLEEP_HOUR_END   = 12
 
 # =====================================================================
+# НОВОЕ: настройки «после 1-го периода 0:0»
+# =====================================================================
+P1_ZERO_ZERO_TOTALS = [2.5, 3.5]     # какие тоталы проверяем в линии
+P1_RESULT_CHECK_DELAY = 3 * 60 * 60  # через сколько секунд проверять результат (3ч)
+# =====================================================================
+
+# =====================================================================
 # ЗАГОЛОВКИ
 # =====================================================================
 HEADERS = {
@@ -111,6 +118,10 @@ p_game_cache = {}
 prematch_odds_history = {}
 sent_prematch_drops   = {}
 prematch_updated_at   = 0
+
+# ← НОВОЕ: состояние прогнозов «после 1-го периода 0:0»
+p1_zero_zero_sent = {}   # game_id -> {message_id, total, base_text, sent_ts, checked}
+# =====================================================================
 
 # =====================================================================
 # ВРЕМЯ
@@ -157,6 +168,18 @@ def get_prematch_games():
     except Exception as e:
         print(f"   ❌ Prematch: {e}", flush=True)
         return []
+
+# ← НОВОЕ: получить конкретный матч по id (для проверки результата)
+def get_game_by_id(game_id):
+    """Пробуем найти матч в live, потом в прематче (историю)."""
+    for g in get_live_games():
+        if g.get("id") == game_id:
+            return g
+    for g in get_prematch_games():
+        if g.get("id") == game_id:
+            return g
+    return None
+# =====================================================================
 
 # =====================================================================
 # ПАРСИНГ
@@ -216,6 +239,12 @@ def get_odd_total(game, total_goals):
                 return item.get("cf")
     return None
 
+# ← НОВОЕ: получить чистый тотал (без +0.5), т.е. ищем ТБ 2.5 / ТБ 3.5
+def get_total_odds_raw(game, total_goals):
+    """Возвращает кэф ТБ для конкретного тотала (2.5, 3.5 и т.п.)."""
+    return get_odd_total(game, total_goals)
+# =====================================================================
+
 # =====================================================================
 # ДРОП 1X2
 # =====================================================================
@@ -258,7 +287,6 @@ def check_drops(gid, now_ts):
     return res
 
 def drop_to_bet(market, p):
-    """П1/П2 → ИТБ 0.5. X → ничья."""
     if market == "П1":
         return ("ИТ1 Б 0.5 (хозяева забьют)", "Дроп П1 → хозяева побеждают → забьют")
     if market == "П2":
@@ -338,6 +366,15 @@ def parse_game(game):
     current_period = scores.get("currentPeriod", 1)
     period_str = f"{current_period}-й период, {minute}'"
 
+    # ← НОВОЕ: определяем, закончился ли 1-й период
+    period_ended = False
+    try:
+        # если currentPeriod >= 2, значит 1-й уже закончился
+        if current_period is not None and int(current_period) >= 2:
+            period_ended = True
+    except (ValueError, TypeError):
+        pass
+
     stats = parse_stats(game)
     att1 = int(sv(stats, "Атаки", "s1"))
     att2 = int(sv(stats, "Атаки", "s2"))
@@ -361,6 +398,7 @@ def parse_game(game):
         "s1": s1, "s2": s2,
         "period": current_period,
         "period_str": period_str,
+        "period_ended": period_ended,   # ← НОВОЕ
         "att1": att1, "att2": att2,
         "pen1": pen1, "pen2": pen2,
         "poss1": poss1, "poss2": poss2,
@@ -409,7 +447,6 @@ def strategy_penalties(p):
     pen_diff = abs(p["pen1"] - p["pen2"])
     if pen_diff < S3_PENALTY_DIFF:
         return None
-    # Больше штрафов у одной → ставим на другую
     side = "away" if p["pen1"] > p["pen2"] else "home"
     dominant = p["team2"] if side == "home" else p["team1"]
     return {"strategy": "Штрафы", "emoji": "🚨", "dominant": dominant,
@@ -437,7 +474,6 @@ def strategy_combo(p):
 # ФОРМАТЫ
 # =====================================================================
 def format_signal(p, strategy, odd):
-    """Первый сигнал по матчу."""
     side = strategy["side"]
     at_dom = p["att1"] if side == "home" else p["att2"]
     at_opp = p["att2"] if side == "home" else p["att1"]
@@ -466,7 +502,6 @@ def format_signal(p, strategy, odd):
     )
 
 def format_signal_multi(p, strategies, odd):
-    """Редактирование — добавляем блок «Подтвердилось»."""
     total = p["s1"] + p["s2"]
     tb1 = total + 0.5
     tb2 = total + 1.5
@@ -494,8 +529,39 @@ def format_signal_multi(p, strategies, odd):
 
     return "\n".join(lines)
 
+# ← НОВОЕ: формат сообщения для прогноза «после 1-го периода 0:0»
+def format_p1_zero_zero_signal(p, total_line, odd):
+    return (
+        f"🥅 <b>ПРОГНОЗ НА МАТЧ (после 1-го периода 0:0)</b>\n"
+        f"{p['league']}\n"
+        f"🏒 <b>{p['match']}</b>\n"
+        f"📊 1-й период: <b>0:0</b> | ⏱ {p['period_str']}\n"
+        f"⚔️ Атаки: {p['att1']} — {p['att2']}\n"
+        f"🎯 Владение: {p['poss1']}% — {p['poss2']}%\n"
+        f"🚨 Штрафы: {p['pen1']} — {p['pen2']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <b>Ставка на матч: ТБ {total_line} </b>\n"
+        f"💰 Кэф: <b>{odd}</b>\n"
+        f"⏳ Проверка результата после матча…"
+    )
+
+def format_p1_zero_zero_result(p, total_line, final_score, won):
+    emoji = "✅" if won else "❌"
+    res = "ЗАШЛА" if won else "НЕ ЗАШЛА"
+    return (
+        f"{emoji} <b>РЕЗУЛЬТАТ: {res}</b>\n"
+        f"{p['league']}\n"
+        f"🏒 <b>{p['match']}</b>\n"
+        f"📊 1-й период: <b>0:0</b>\n"
+        f"🏁 Итоговый счёт: <b>{final_score}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💡 Ставка была: <b>ТБ {total_line}</b>\n"
+        f"📈 Итог: {emoji} <b>{res}</b>"
+    )
 # =====================================================================
-# ОТПРАВКА СИГНАЛА
+
+# =====================================================================
+# ОТПРАВКА СИГНАЛА (стратегии)
 # =====================================================================
 def try_send_signal(p, strategy, now_ts):
     gid = p["game_id"]
@@ -508,7 +574,6 @@ def try_send_signal(p, strategy, now_ts):
 
     existing = sent_signals.get(key)
 
-    # ===== ПЕРВЫЙ СИГНАЛ =====
     if not existing:
         text = format_signal(p, strategy, odd)
         msg_id = send_telegram(text)
@@ -524,7 +589,6 @@ def try_send_signal(p, strategy, now_ts):
         time.sleep(1)
         return True
 
-    # ===== МАТЧ УЖЕ В СИГНАЛАХ =====
     full_name = f"{strategy['emoji']} {strategy['strategy']}"
 
     if full_name in existing["strategies"]:
@@ -534,7 +598,6 @@ def try_send_signal(p, strategy, now_ts):
         del sent_signals[key]
         return try_send_signal(p, strategy, now_ts)
 
-    # ===== РЕДАКТИРУЕМ СООБЩЕНИЕ =====
     existing["strategies"].append(full_name)
     existing["ts"] = now_ts
 
@@ -544,6 +607,136 @@ def try_send_signal(p, strategy, now_ts):
     print(f"    ✏️ {p['match']} | + {full_name}", flush=True)
     time.sleep(1)
     return True
+
+# =====================================================================
+# НОВОЕ: ЛОГИКА ПРОГНОЗА ПОСЛЕ 1-ГО ПЕРИОДА 0:0
+# =====================================================================
+def try_p1_zero_zero_signal(p, game, now_ts):
+    """
+    Если 1-й период закончился 0:0 → даём прогноз на весь матч ТБ 2.5 / ТБ 3.5.
+    Проверяем, есть ли в линии соответствующие тоталы.
+    """
+    gid = p["game_id"]
+    if gid in p1_zero_zero_sent:
+        return False  # уже отправляли по этому матчу
+
+    # Условие: 1-й период закончился, счёт 0:0 (именно после 1-го периода)
+    if not p.get("period_ended"):
+        return False
+    if p["s1"] != 0 or p["s2"] != 0:
+        return False
+    # Период должен быть >= 2 (значит 1-й закончился) и счёт 0:0
+    # (если уже 2-й период, а счёт всё ещё 0:0 — ок; но если во 2-м уже забили — не подходит)
+    if p["period"] is None or int(p["period"]) < 2:
+        return False
+
+    # Ищем доступные тоталы в линии
+    chosen_total = None
+    chosen_odd = None
+    for t in P1_ZERO_ZERO_TOTALS:
+        odd = get_total_odds_raw(game, t)
+        if odd is not None:
+            chosen_total = t
+            chosen_odd = odd
+            break
+
+    if chosen_total is None:
+        # нет в линии ни 2.5, ни 3.5 — пропускаем
+        return False
+
+    text = format_p1_zero_zero_signal(p, chosen_total, chosen_odd)
+    msg_id = send_telegram(text)
+    if not msg_id:
+        return False
+
+    p1_zero_zero_sent[gid] = {
+        "message_id": msg_id,
+        "total_line": chosen_total,
+        "base_text": text,
+        "sent_ts": now_ts,
+        "checked": False,
+    }
+    print(f"    🥅 P1 0:0 → {p['match']} | ТБ {chosen_total} @ {chosen_odd}", flush=True)
+    time.sleep(1)
+    return True
+
+
+def check_p1_zero_zero_results():
+    """
+    Проверка результатов прогнозов «после 1-го периода 0:0».
+    Проходим по всем отправленным, у которых ещё не проверено и прошло время.
+    """
+    now_ts = int(time.time())
+    to_delete = []
+
+    for gid, info in list(p1_zero_zero_sent.items()):
+        if info.get("checked"):
+            continue
+        if now_ts - info["sent_ts"] < P1_RESULT_CHECK_DELAY:
+            continue
+
+        # Ищем матч
+        game = get_game_by_id(gid)
+        if not game:
+            # матч уже не в линии — оставляем на следующий круг
+            continue
+
+        scores = game.get("scores") or {}
+        full_score = scores.get("fullScore", "")
+        if not full_score or "-" not in full_score:
+            continue
+
+        try:
+            fs1, fs2 = map(int, full_score.split("-"))
+        except ValueError:
+            continue
+
+        # Проверяем, закончился ли матч
+        # Признак: есть period == 3 и время идёт к концу, либо статус finished
+        is_finished = False
+        cur_period = scores.get("currentPeriod")
+        try:
+            if cur_period is not None and int(cur_period) >= 3:
+                # если 3-й период и время близко к 60 мин или isFinished
+                timer = scores.get("timer") or {}
+                time_sec = timer.get("timeSec", 0) or 0
+                if time_sec >= 20 * 60:  # 20 минут в 3-м периоде = конец
+                    is_finished = True
+        except (ValueError, TypeError):
+            pass
+
+        # Дополнительный признак: статус
+        status = (scores.get("status") or "").lower()
+        if status in ("finished", "ended", "final"):
+            is_finished = True
+
+        if not is_finished:
+            # матч ещё идёт — не проверяем
+            # но если прошло слишком много времени (например 5 часов), всё равно проверим
+            if now_ts - info["sent_ts"] < 5 * 60 * 60:
+                continue
+
+        total_goals = fs1 + fs2
+        total_line = info["total_line"]
+        won = total_goals > total_line
+
+        final_score = f"{fs1}-{fs2}"
+        new_text = format_p1_zero_zero_result(
+            {"league": LEAGUE_IDS.get((game.get("liga") or {}).get("id"), ""),
+             "match": f"{(game.get('opponent1') or {}).get('fullName','?')} — "
+                      f"{(game.get('opponent2') or {}).get('fullName','?')}"},
+            total_line, final_score, won
+        )
+
+        edit_telegram(info["message_id"], new_text)
+        info["checked"] = True
+        print(f"    🏁 P1 0:0 результат: {final_score} | ТБ {total_line} → "
+              f"{'✅' if won else '❌'}", flush=True)
+        to_delete.append(gid)
+
+    for gid in to_delete:
+        p1_zero_zero_sent.pop(gid, None)
+# =====================================================================
 
 # =====================================================================
 # ПРЕМАТЧ-ДРОП
@@ -694,6 +887,7 @@ def monitor():
     total_our = 0
     total_signals = 0
     total_drops = 0
+    total_p1 = 0
 
     by_league = {}
     for game in games:
@@ -708,6 +902,10 @@ def monitor():
         if not p:
             continue
         gid = p["game_id"]
+
+        # ← НОВОЕ: проверка «после 1-го периода 0:0»
+        if try_p1_zero_zero_signal(p, game, now_ts):
+            total_p1 += 1
 
         # ДРОП 1X2
         odds_1x2 = get_1x2_odds(game)
@@ -737,8 +935,11 @@ def monitor():
                 total_signals += 1
                 break
 
+    # ← НОВОЕ: проверяем результаты прогнозов P1 0:0
+    check_p1_zero_zero_results()
+
     print(f"✅ {total_our} наших, {total_signals} сигналов, "
-          f"{total_drops} дропов", flush=True)
+          f"{total_drops} дропов, {total_p1} P1-0:0", flush=True)
     sent_signals = {k: v for k, v in sent_signals.items() if now_ts - v["ts"] < 3600}
     sent_drops = {k: v for k, v in sent_drops.items() if now_ts - v < 3600}
 
@@ -751,6 +952,7 @@ def main():
     print(f"🎯 Стратегии: Атаки, Владение, Штрафы, Комбо", flush=True)
     print(f"📉 Дроп 1X2 (live): {DROP_PCT}% за {DROP_WINDOW}с", flush=True)
     print(f"🕐 Дроп 1X2 (прематч): {PREMATCH_DROP_PCT}% за {PREMATCH_DROP_WINDOW}с", flush=True)
+    print(f"🥅 P1 0:0 → ТБ {P1_ZERO_ZERO_TOTALS}", flush=True)
     print("=" * 60, flush=True)
 
     while True:
