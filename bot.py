@@ -644,6 +644,7 @@ def monitor_prematch():
     print(f"🕐 Прематч: {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')}", flush=True)
 
     games = get_prematch_games()
+    print(f"   🔍 Всего из фида: {len(games)}")
     if not games:
         print("   ⚠️ Прематч пуст", flush=True)
         return
