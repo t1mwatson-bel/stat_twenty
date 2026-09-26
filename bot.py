@@ -26,7 +26,22 @@ print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 # =====================================================================
 # ЛИГИ
 # =====================================================================
-LEAGUE_KEYWORDS = ["КХЛ", "ВХЛ", "МХЛ", "Аллсвенскан", "Экстралига", "Университетская"]
+LEAGUE_KEYWORDS = [
+    # Россия / СНГ
+    "КХЛ", "ВХЛ", "МХЛ",
+    "Беларусь", "Экстралига",
+    # Северная Америка
+    "НХЛ", "NHL", "АХЛ", "AHL",
+    # Европа
+    "Liiga", "Финляндия",
+    "DEL", "Германия",
+    "SHL", "Швеция", "Аллсвенскан",
+    "NL", "Швейцария",
+    "Чехия", "Университетская",
+    "Австрия", "ICEHL",
+    "Словакия", "Tipsport",
+    "Норвегия", "Дания", "Франция", "Великобритания",
+]
 
 # =====================================================================
 # RUSCORE
@@ -36,7 +51,7 @@ RUSCORE_APP_ID = "ruscore"
 RUSCORE_API_KEY = "yAUBmZp9XJgh3US6bN1GZKtAYsFRKET6"
 RUSCORE_SPORT = 5
 RUSCORE_TIMEOUT = 15
-RUSCORE_HISTORY_DAYS = 14
+RUSCORE_HISTORY_DAYS = 30
 RUSCORE_CACHE_SEC = 3600
 
 # =====================================================================
@@ -51,8 +66,8 @@ TOTAL_MARGIN     = 1.0
 SEND_BEFORE_MAX = 60
 SEND_BEFORE_MIN = 25
 
-CHECK_AFTER_HOURS  = 3
-MAX_WAIT_HOURS     = 6
+CHECK_AFTER_HOURS = 3
+MAX_WAIT_HOURS    = 6
 
 UPDATE_INTERVAL = 300
 SLEEP_START = 1
@@ -61,10 +76,10 @@ SLEEP_END   = 12
 # =====================================================================
 # ФАЙЛЫ
 # =====================================================================
-PREDICTIONS_FILE = "predictions.json"   # активные прогнозы
-STATS_FILE       = "stats.json"         # вечная база
-REPORT_FILE      = "report.txt"         # отчёт (обновляется)
-STATE_FILE       = "state.json"         # для /stats и offset
+PREDICTIONS_FILE = "predictions.json"
+STATS_FILE       = "stats.json"
+REPORT_FILE      = "report.txt"
+STATE_FILE       = "state.json"
 
 # =====================================================================
 # ЗАГОЛОВКИ
@@ -91,13 +106,23 @@ def load_json(path, default):
 
 def save_json(path, data):
     try:
+        # Бэкап перед перезаписью
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    old = f.read()
+                if old.strip() and old.strip() not in ("[]", "{}"):
+                    with open(path + ".bak", "w", encoding="utf-8") as f:
+                        f.write(old)
+            except Exception:
+                pass
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"⚠️ Не сохранил {path}: {e}", flush=True)
 
-predictions = load_json(PREDICTIONS_FILE, {})   # gid -> {...}
-stats       = load_json(STATS_FILE, [])         # список всех прогнозов
+predictions = load_json(PREDICTIONS_FILE, {})
+stats       = load_json(STATS_FILE, [])
 state       = load_json(STATE_FILE, {"last_update_id": 0})
 
 ruscore_history_cache = {"ts": 0, "events": []}
@@ -320,10 +345,6 @@ def analyze(team1_name, team2_name, history, h2h_index, name_index):
 
     if len(rows1) < 5 or len(rows2) < 5:
         return None
-        print(f"   🔍 {team1_name} vs {team2_name}", flush=True)
-    print(f"      id1={id1} real1={real1}", flush=True)
-    print(f"      id2={id2} real2={real2}", flush=True)
-    print(f"      rows1={len(rows1)} rows2={len(rows2)} h2h={len(rows_h2h)}", flush=True)
 
     def avg_total(rows):
         return sum(r["total"] for r in rows) / len(rows) if rows else 0
@@ -390,7 +411,7 @@ def decide_bet(analysis):
     return max(candidates, key=lambda x: x["confidence"])
 
 # =====================================================================
-# ФОРМАТЫ СООБЩЕНИЙ
+# ФОРМАТЫ
 # =====================================================================
 def format_prediction(p, analysis, bet):
     lines = [
@@ -470,7 +491,7 @@ def get_updates():
         return []
 
 # =====================================================================
-# КОМАНДА /stats
+# /stats
 # =====================================================================
 def build_stats_short():
     if not stats:
@@ -478,7 +499,6 @@ def build_stats_short():
 
     total = len(stats)
     wins = sum(1 for s in stats if s.get("outcome") == "win")
-    loses = total - wins
     winrate = wins / total * 100 if total else 0
 
     period_stats = [s for s in stats if s["bet_type"] == "period"]
@@ -490,17 +510,16 @@ def build_stats_short():
         w = sum(1 for s in arr if s.get("outcome") == "win")
         return f"{w}/{len(arr)} ({w/len(arr)*100:.0f}%)"
 
-    lines = [
+    return "\n".join([
         f"📊 <b>СТАТИСТИКА</b>",
         f"Всего прогнозов: <b>{total}</b>",
         f"✅ Зашло: <b>{wins}</b>",
-        f"❌ Не зашло: <b>{loses}</b>",
+        f"❌ Не зашло: <b>{total - wins}</b>",
         f"🔥 Winrate: <b>{winrate:.1f}%</b>",
         "",
         f"🏒 Гол в каждом периоде: {wr(period_stats)}",
         f"🎯 Тотал: {wr(total_stats)}",
-    ]
-    return "\n".join(lines)
+    ])
 
 # =====================================================================
 # ОТЧЁТ
@@ -522,7 +541,6 @@ def build_report():
     lines.append(f"Не зашло: {total - wins}")
     lines.append("")
 
-    # По типу
     for bt, name in [("period", "ГОЛ В КАЖДОМ ПЕРИОДЕ"), ("total", "ТОТАЛ")]:
         arr = [s for s in stats if s["bet_type"] == bt]
         if not arr:
@@ -531,7 +549,6 @@ def build_report():
         lines.append(f"{name}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
 
-    # По лигам
     lines.append("--- ПО ЛИГАМ ---")
     by_league = {}
     for s in stats:
@@ -541,10 +558,8 @@ def build_report():
         lines.append(f"  {league}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
 
-    # По уверенности
     lines.append("--- ПО УВЕРЕННОСТИ ---")
-    buckets = [(60, 70), (70, 80), (80, 90), (90, 101)]
-    for lo, hi in buckets:
+    for lo, hi in [(60, 70), (70, 80), (80, 90), (90, 101)]:
         arr = [s for s in stats if lo <= s.get("confidence", 0) < hi]
         if not arr:
             continue
@@ -552,7 +567,6 @@ def build_report():
         lines.append(f"  {lo}-{hi-1}%: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
 
-    # По линиям тотала
     lines.append("--- ПО ЛИНИЯМ ТОТАЛА ---")
     by_line = {}
     for s in stats:
@@ -562,7 +576,6 @@ def build_report():
         w = sum(1 for s in arr if s.get("outcome") == "win")
         lines.append(f"  ТБ {line}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
-
     lines.append("=" * 60)
     return "\n".join(lines)
 
@@ -624,10 +637,8 @@ def check_results():
     today = now.date()
     yesterday = today - timedelta(days=1)
 
-    # Берём события за сегодня и вчера (матч мог начаться вчера и закончиться сегодня)
     events = ruscore_get_events(today) + ruscore_get_events(yesterday)
 
-    # Индекс по (normalized_home|normalized_away|timestamp_of_start_minute)
     by_key = {}
     for event in events:
         home = event.get("home") or {}
@@ -650,7 +661,6 @@ def check_results():
                 start_dt = None
 
         if start_dt is None:
-            # мусор — удаляем
             predictions.pop(gid, None)
             continue
 
@@ -660,19 +670,15 @@ def check_results():
         if now < check_after:
             continue
 
-        # Ищем матч
         event = by_key.get(pred["lookup_key"])
 
         if event is None:
-            # Нет матча и время вышло — удаляем
             if now > max_wait:
                 predictions.pop(gid, None)
             continue
 
-        # Нужен финал
         if not ruscore_is_finished(event):
             if now > max_wait:
-                # Всё равно проверяем по последнему счёту
                 pass
             else:
                 continue
@@ -701,18 +707,15 @@ def check_results():
                     return "?"
                 return f"{p[0]+p[1]}"
             period_detail = f"{g(p1)} / {g(p2)} / {g(p3)}"
-
         elif bet_type == "total":
             won = total_goals > line
 
-        # Редактируем сообщение
         result_text = format_result_msg(
             pred["base_text"], final_score, total_goals,
             period_detail, won, bet_type, line
         )
         edit_telegram(pred["message_id"], result_text)
 
-        # Пишем в stats
         stats.append({
             "date": now.strftime("%Y-%m-%d %H:%M"),
             "gid": gid,
@@ -734,7 +737,6 @@ def check_results():
         })
         save_json(STATS_FILE, stats)
 
-        # Удаляем из активных
         predictions.pop(gid, None)
         checked += 1
 
@@ -752,7 +754,7 @@ def monitor():
     now = datetime.now(MOSCOW_TZ)
     print(f"🔄 {now.strftime('%H:%M:%S')}", flush=True)
 
-    # 1. Проверяем команды из телеги
+    # 1. Команды из телеги
     updates = get_updates()
     if updates:
         for u in updates:
@@ -763,7 +765,7 @@ def monitor():
                 send_telegram(build_stats_short())
         save_json(STATE_FILE, state)
 
-    # 2. Проверяем результаты старых прогнозов
+    # 2. Проверяем старые прогнозы
     check_results()
 
     # 3. Ищем новые матчи
@@ -791,7 +793,6 @@ def monitor():
                 if not bet:
                     continue
 
-                # Сохраняем
                 predictions[gid] = {
                     "gid": gid,
                     "league": m["league"],
@@ -819,9 +820,10 @@ def monitor():
                             else f"ТБ {bet['line']} ({bet['confidence']:.0f}%)")
                 print(f"   📝 {m['match']} | {bet_desc}", flush=True)
 
-            save_json(PREDICTIONS_FILE, predictions)
+            if new_preds:
+                save_json(PREDICTIONS_FILE, predictions)
 
-    # 4. Отправляем те, что попали в окно
+    # 4. Отправляем в окне
     now_ts = time.time()
     sent_now = 0
     for gid, p in list(predictions.items()):
@@ -835,7 +837,6 @@ def monitor():
                 print(f"   📤 {p['match']}", flush=True)
                 time.sleep(1)
         elif now_ts > p["send_max_ts"]:
-            # Опоздали — удаляем
             predictions.pop(gid, None)
 
     if sent_now:
@@ -848,18 +849,22 @@ def monitor():
 # =====================================================================
 def main():
     print("🚀 ХОККЕЙ ПРЕМАТЧ-БОТ ЗАПУЩЕН", flush=True)
-    print(f"🏒 Лиги: {', '.join(LEAGUE_KEYWORDS)}", flush=True)
-    print(f"📊 История: {HISTORY_COUNT} матчей + {H2H_COUNT} личных", flush=True)
+    print(f"🏒 Лиг: {len(LEAGUE_KEYWORDS)}", flush=True)
+    print(f"📊 История: {HISTORY_COUNT} матчей + {H2H_COUNT} личных ({RUSCORE_HISTORY_DAYS} дней)", flush=True)
     print(f"🎯 Порог 'гол в каждом периоде': {PERIOD_THRESHOLD*100:.0f}%", flush=True)
     print(f"⏰ Отправка: за {SEND_BEFORE_MIN}–{SEND_BEFORE_MAX} мин до старта", flush=True)
     print(f"🏁 Проверка: через {CHECK_AFTER_HOURS} ч после старта", flush=True)
     print("=" * 60, flush=True)
 
-    # Один раз сохраняем начальные файлы
-    save_json(PREDICTIONS_FILE, predictions)
-    save_json(STATS_FILE, stats)
-    save_json(STATE_FILE, state)
-    save_report()
+    # Не перезаписываем пустыми
+    if predictions:
+        save_json(PREDICTIONS_FILE, predictions)
+    if stats:
+        save_json(STATS_FILE, stats)
+    if state:
+        save_json(STATE_FILE, state)
+    if stats:
+        save_report()
 
     while True:
         try:
