@@ -320,6 +320,10 @@ def analyze(team1_name, team2_name, history, h2h_index, name_index):
 
     if len(rows1) < 5 or len(rows2) < 5:
         return None
+        print(f"   🔍 {team1_name} vs {team2_name}", flush=True)
+    print(f"      id1={id1} real1={real1}", flush=True)
+    print(f"      id2={id2} real2={real2}", flush=True)
+    print(f"      rows1={len(rows1)} rows2={len(rows2)} h2h={len(rows_h2h)}", flush=True)
 
     def avg_total(rows):
         return sum(r["total"] for r in rows) / len(rows) if rows else 0
