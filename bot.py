@@ -27,12 +27,9 @@ print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 # ЛИГИ
 # =====================================================================
 LEAGUE_KEYWORDS = [
-    # Россия / СНГ
     "КХЛ", "ВХЛ", "МХЛ",
     "Беларусь", "Экстралига",
-    # Северная Америка
     "НХЛ", "NHL", "АХЛ", "AHL",
-    # Европа
     "Liiga", "Финляндия",
     "DEL", "Германия",
     "SHL", "Швеция", "Аллсвенскан",
@@ -106,7 +103,6 @@ def load_json(path, default):
 
 def save_json(path, data):
     try:
-        # Бэкап перед перезаписью
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -133,6 +129,33 @@ ruscore_history_cache = {"ts": 0, "events": []}
 def is_active_time():
     h = datetime.now(MOSCOW_TZ).hour
     return not (SLEEP_START <= h < SLEEP_END)
+
+# =====================================================================
+# ХЕЛПЕРЫ ДЛЯ АЗИАТСКОГО ТОТАЛА
+# =====================================================================
+def asian_line(original_line):
+    """ТБ 4.5 → 4.0 (азиатский). ТБ 5.5 → 5.0."""
+    if original_line is None:
+        return None
+    return int(original_line - 0.5)
+
+def check_asian_over(total_goals, original_line):
+    """
+    Возвращает ('win' / 'lose' / 'refund') для азиатского ТБ.
+    Азиатский ТБ N (line=N) = половина на ТБ (N-0.5), половина на ТБ (N+0.5).
+    Проще: сравнить total_goals с asian_line (N).
+      total_goals > N  → win
+      total_goals == N → refund
+      total_goals < N  → lose
+    """
+    N = asian_line(original_line)
+    if N is None:
+        return None
+    if total_goals > N:
+        return "win"
+    if total_goals == N:
+        return "refund"
+    return "lose"
 
 # =====================================================================
 # RUSCORE API
@@ -428,28 +451,48 @@ def format_prediction(p, analysis, bet):
         lines.append(f"📊 За последние {HISTORY_COUNT} матчей + личные встречи:")
         lines.append(f"   • Вероятность гола во всех 3 периодах: <b>{analysis['period_pct']*100:.0f}%</b>")
     else:
-        lines.append(f"💡 <b>Ставка: ТБ {bet['line']}</b>")
+        al = asian_line(bet["line"])
+        lines.append(f"💡 <b>Ставка: ТБ {al} (азиатский)</b>")
         lines.append(f"🔥 Уверенность: <b>{bet['confidence']:.0f}%</b>")
         lines.append("")
         lines.append(f"📊 Средний тотал по последним матчам: <b>{analysis['expected_total']:.2f}</b>")
         lines.append(f"   • Запас над линией: <b>+{bet['margin']:.2f}</b>")
     return "\n".join(lines)
 
-def format_result_msg(base_text, final_score, total_goals, result_line, won, bet_type, line=None):
-    emoji = "✅" if won else "❌"
-    res = "ЗАШЛА" if won else "НЕ ЗАШЛА"
+def format_result_msg(base_text, final_score, total_goals, period_goals_arr, outcome, bet_type, line=None):
+    """
+    outcome: 'win' / 'lose' / 'refund'
+    """
+    if outcome == "win":
+        emoji = "✅"
+        res = "ЗАШЛА"
+    elif outcome == "refund":
+        emoji = "🔄"
+        res = "ВОЗВРАТ"
+    else:
+        emoji = "❌"
+        res = "НЕ ЗАШЛА"
 
     if bet_type == "period":
-        detail = f"Голы по периодам: {result_line}"
+        p1 = period_goals_arr[0] if len(period_goals_arr) > 0 else "?"
+        p2 = period_goals_arr[1] if len(period_goals_arr) > 1 else "?"
+        p3 = period_goals_arr[2] if len(period_goals_arr) > 2 else "?"
+        detail = f"⚽ Голы по периодам: <b>{p1} / {p2} / {p3}</b>"
+        tail = f"📈 Итог: {emoji} <b>{res}</b>"
     else:
-        detail = f"Всего голов: <b>{total_goals}</b>"
+        al = asian_line(line)
+        p1 = period_goals_arr[0] if len(period_goals_arr) > 0 else "?"
+        p2 = period_goals_arr[1] if len(period_goals_arr) > 1 else "?"
+        p3 = period_goals_arr[2] if len(period_goals_arr) > 2 else "?"
+        detail = f"⚽ Голы по периодам: <b>{p1} / {p2} / {p3}</b> (всего {total_goals})"
+        tail = f"📈 Итог: {emoji} <b>{res}</b> (азиатский ТБ {al})"
 
     return (
         base_text
         + f"\n\n━━━━━━━━━━━━━━━━━━\n"
         + f"🏁 Итоговый счёт: <b>{final_score}</b>\n"
         + f"{detail}\n"
-        + f"📈 Итог: {emoji} <b>{res}</b>"
+        + f"{tail}"
     )
 
 # =====================================================================
@@ -498,7 +541,9 @@ def build_stats_short():
         return "📊 Статистика пока пуста."
 
     total = len(stats)
-    wins = sum(1 for s in stats if s.get("outcome") == "win")
+    wins    = sum(1 for s in stats if s.get("outcome") == "win")
+    loses   = sum(1 for s in stats if s.get("outcome") == "lose")
+    refunds = sum(1 for s in stats if s.get("outcome") == "refund")
     winrate = wins / total * 100 if total else 0
 
     period_stats = [s for s in stats if s["bet_type"] == "period"]
@@ -508,13 +553,15 @@ def build_stats_short():
         if not arr:
             return "—"
         w = sum(1 for s in arr if s.get("outcome") == "win")
-        return f"{w}/{len(arr)} ({w/len(arr)*100:.0f}%)"
+        r = sum(1 for s in arr if s.get("outcome") == "refund")
+        return f"{w}/{len(arr)} (+{r} возвр.)"
 
     return "\n".join([
         f"📊 <b>СТАТИСТИКА</b>",
         f"Всего прогнозов: <b>{total}</b>",
         f"✅ Зашло: <b>{wins}</b>",
-        f"❌ Не зашло: <b>{total - wins}</b>",
+        f"🔄 Возврат: <b>{refunds}</b>",
+        f"❌ Не зашло: <b>{loses}</b>",
         f"🔥 Winrate: <b>{winrate:.1f}%</b>",
         "",
         f"🏒 Гол в каждом периоде: {wr(period_stats)}",
@@ -528,8 +575,10 @@ def build_report():
     if not stats:
         return "📊 Статистика пуста.\n"
 
-    total = len(stats)
-    wins = sum(1 for s in stats if s.get("outcome") == "win")
+    total   = len(stats)
+    wins    = sum(1 for s in stats if s.get("outcome") == "win")
+    loses   = sum(1 for s in stats if s.get("outcome") == "lose")
+    refunds = sum(1 for s in stats if s.get("outcome") == "refund")
     winrate = wins / total * 100 if total else 0
 
     lines = []
@@ -538,7 +587,8 @@ def build_report():
     lines.append("=" * 60)
     lines.append(f"Всего прогнозов: {total}")
     lines.append(f"Зашло: {wins} ({winrate:.1f}%)")
-    lines.append(f"Не зашло: {total - wins}")
+    lines.append(f"Возврат: {refunds}")
+    lines.append(f"Не зашло: {loses}")
     lines.append("")
 
     for bt, name in [("period", "ГОЛ В КАЖДОМ ПЕРИОДЕ"), ("total", "ТОТАЛ")]:
@@ -546,7 +596,8 @@ def build_report():
         if not arr:
             continue
         w = sum(1 for s in arr if s.get("outcome") == "win")
-        lines.append(f"{name}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
+        r = sum(1 for s in arr if s.get("outcome") == "refund")
+        lines.append(f"{name}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%), возврат {r}")
     lines.append("")
 
     lines.append("--- ПО ЛИГАМ ---")
@@ -571,10 +622,10 @@ def build_report():
     by_line = {}
     for s in stats:
         if s["bet_type"] == "total":
-            by_line.setdefault(s.get("line"), []).append(s)
+            by_line.setdefault(s.get("line_asian", s.get("line")), []).append(s)
     for line, arr in sorted(by_line.items(), key=lambda x: (x[0] or 0)):
         w = sum(1 for s in arr if s.get("outcome") == "win")
-        lines.append(f"  ТБ {line}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
+        lines.append(f"  ТБ {line} (азиатский): {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -691,32 +742,41 @@ def check_results():
         total_goals = hs + aws
         final_score = f"{hs}-{aws}"
 
+        # Голы по периодам (список из 3 значений)
+        def period_total(p):
+            if p is None:
+                return "?"
+            return p[0] + p[1]
+        period_arr = [
+            period_total(periods.get(1)),
+            period_total(periods.get(2)),
+            period_total(periods.get(3)),
+        ]
+
         bet_type = pred["bet_type"]
         line = pred.get("line")
-        won = False
-        period_detail = ""
+        outcome = "lose"
 
         if bet_type == "period":
             p1, p2, p3 = periods.get(1), periods.get(2), periods.get(3)
             ok = False
             if p1 and p2 and p3:
                 ok = (p1[0]+p1[1] > 0) and (p2[0]+p2[1] > 0) and (p3[0]+p3[1] > 0)
-            won = ok
-            def g(p):
-                if p is None:
-                    return "?"
-                return f"{p[0]+p[1]}"
-            period_detail = f"{g(p1)} / {g(p2)} / {g(p3)}"
+            outcome = "win" if ok else "lose"
+
         elif bet_type == "total":
-            won = total_goals > line
+            outcome = check_asian_over(total_goals, line)
+            if outcome is None:
+                outcome = "lose"
 
         result_text = format_result_msg(
             pred["base_text"], final_score, total_goals,
-            period_detail, won, bet_type, line
+            period_arr, outcome, bet_type, line
         )
         edit_telegram(pred["message_id"], result_text)
 
-        stats.append({
+        # stats
+        entry = {
             "date": now.strftime("%Y-%m-%d %H:%M"),
             "gid": gid,
             "league": pred["league"],
@@ -732,16 +792,21 @@ def check_results():
             "start_str": pred["start_str"],
             "final_score": final_score,
             "total_goals": total_goals,
-            "period_goals": period_detail,
-            "outcome": "win" if won else "lose",
-        })
+            "period_goals": period_arr,
+            "outcome": outcome,
+        }
+        if bet_type == "total":
+            entry["line_original"] = line
+            entry["line_asian"] = asian_line(line)
+
+        stats.append(entry)
         save_json(STATS_FILE, stats)
 
         predictions.pop(gid, None)
         checked += 1
 
-        emoji = "✅" if won else "❌"
-        print(f"   🏁 {pred['match']} | {final_score} | {emoji}", flush=True)
+        emoji = {"win": "✅", "lose": "❌", "refund": "🔄"}.get(outcome, "?")
+        print(f"   🏁 {pred['match']} | {final_score} | {emoji} ({outcome})", flush=True)
 
     if checked:
         save_json(PREDICTIONS_FILE, predictions)
@@ -754,7 +819,6 @@ def monitor():
     now = datetime.now(MOSCOW_TZ)
     print(f"🔄 {now.strftime('%H:%M:%S')}", flush=True)
 
-    # 1. Команды из телеги
     updates = get_updates()
     if updates:
         for u in updates:
@@ -765,10 +829,8 @@ def monitor():
                 send_telegram(build_stats_short())
         save_json(STATE_FILE, state)
 
-    # 2. Проверяем старые прогнозы
     check_results()
 
-    # 3. Ищем новые матчи
     matches = get_today_matches()
     print(f"   📋 Матчей в лигах: {len(matches)}", flush=True)
 
@@ -815,15 +877,15 @@ def monitor():
                 }
                 new_preds += 1
 
-                bet_desc = (f"Гол в каждом периоде {bet['confidence']:.0f}%"
-                            if bet["bet_type"] == "period"
-                            else f"ТБ {bet['line']} ({bet['confidence']:.0f}%)")
+                if bet["bet_type"] == "period":
+                    bet_desc = f"Гол в каждом периоде {bet['confidence']:.0f}%"
+                else:
+                    bet_desc = f"ТБ {asian_line(bet['line'])} азиатский ({bet['confidence']:.0f}%)"
                 print(f"   📝 {m['match']} | {bet_desc}", flush=True)
 
             if new_preds:
                 save_json(PREDICTIONS_FILE, predictions)
 
-    # 4. Отправляем в окне
     now_ts = time.time()
     sent_now = 0
     for gid, p in list(predictions.items()):
@@ -856,7 +918,6 @@ def main():
     print(f"🏁 Проверка: через {CHECK_AFTER_HOURS} ч после старта", flush=True)
     print("=" * 60, flush=True)
 
-    # Не перезаписываем пустыми
     if predictions:
         save_json(PREDICTIONS_FILE, predictions)
     if stats:
