@@ -1257,9 +1257,110 @@ def _daily_series(stats_web):
     return out
 
 
+INDEX_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Статистика хоккейного бота</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; color: #e6e6e6; padding: 20px; line-height: 1.5; }
+.container { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 20px; margin: 24px 0 12px; color: #b0b0b0; }
+.subtitle { color: #808080; font-size: 14px; margin-bottom: 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card { background: #1a1f26; border-radius: 12px; padding: 18px; border: 1px solid #2a3038; }
+.card .label { font-size: 13px; color: #808080; margin-bottom: 6px; }
+.card .value { font-size: 26px; font-weight: 700; }
+.card .value.green { color: #4ade80; } .card .value.red { color: #f87171; } .card .value.blue { color: #60a5fa; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.chart-box { background: #1a1f26; border-radius: 12px; padding: 18px; border: 1px solid #2a3038; }
+.chart-box h3 { font-size: 15px; margin-bottom: 12px; color: #b0b0b0; }
+table { width: 100%; border-collapse: collapse; background: #1a1f26; border-radius: 12px; overflow: hidden; border: 1px solid #2a3038; margin-bottom: 24px; }
+th, td { padding: 10px 12px; text-align: left; font-size: 14px; border-bottom: 1px solid #2a3038; }
+th { background: #232932; color: #b0b0b0; font-weight: 600; font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #1f252d; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.green { color: #4ade80; } .red { color: #f87171; } .gray { color: #808080; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.badge.win { background: #14351f; color: #4ade80; }
+.badge.lose { background: #3a1a1a; color: #f87171; }
+.badge.refund { background: #2a2a35; color: #a0a0b0; }
+.updated { font-size: 12px; color: #606060; margin-top: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🏒 Статистика хоккейного бота</h1>
+    <div class="subtitle">Флэт-ставка <span id="flat"></span>₽ на событие</div>
+    <div class="cards" id="cards"></div>
+    <div class="charts">
+        <div class="chart-box"><h3>💰 Профит по дням (накопительно)</h3><canvas id="chartDaily"></canvas></div>
+        <div class="chart-box"><h3>📊 Winrate по уверенности</h3><canvas id="chartConfidence"></canvas></div>
+    </div>
+    <h2>🏆 По лигам</h2>
+    <table id="tableLeagues"><thead><tr><th>Лига</th><th class="num">Ставок</th><th class="num">Зашло</th><th class="num">Winrate</th><th class="num">Профит</th><th class="num">ROI</th></tr></thead><tbody></tbody></table>
+    <h2>🎯 По типам ставок</h2>
+    <table id="tableBetTypes"><thead><tr><th>Тип</th><th class="num">Ставок</th><th class="num">Зашло</th><th class="num">Winrate</th></tr></thead><tbody></tbody></table>
+    <h2>📋 Последние 30 прогнозов</h2>
+    <table id="tableRecent"><thead><tr><th>Дата</th><th>Лига</th><th>Матч</th><th>Ставка</th><th class="num">Кэф</th><th class="num">Счёт</th><th class="num">Периоды</th><th>Итог</th></tr></thead><tbody></tbody></table>
+    <div class="updated" id="updated"></div>
+</div>
+<script>
+const fmt = (n) => new Intl.NumberFormat('ru-RU').format(Math.round(n));
+const pct = (n) => (n > 0 ? '+' : '') + n.toFixed(1) + '%';
+let chartDaily = null, chartConfidence = null;
+async function load() {
+    const r = await fetch('/api/stats');
+    const data = await r.json();
+    document.getElementById('flat').textContent = fmt(data.config.flat_bet);
+    const m = data.metrics;
+    const cards = [
+        { label: 'Всего ставок', value: m.total, cls: '' },
+        { label: 'Зашло', value: m.wins, cls: 'green' },
+        { label: 'Возврат', value: m.refunds, cls: '' },
+        { label: 'Не зашло', value: m.loses, cls: 'red' },
+        { label: 'Winrate', value: m.winrate + '%', cls: 'blue' },
+        { label: 'ROI', value: pct(m.roi), cls: m.roi >= 0 ? 'green' : 'red' },
+        { label: 'Профит', value: fmt(m.profit) + '₽', cls: m.profit >= 0 ? 'green' : 'red' },
+        { label: 'Банк', value: fmt(m.bank) + '₽', cls: m.bank >= data.config.start_bank ? 'green' : 'red' },
+    ];
+    document.getElementById('cards').innerHTML = cards.map(c => `<div class="card"><div class="label">${c.label}</div><div class="value ${c.cls}">${c.value}</div></div>`).join('');
+    const dailyLabels = data.daily.map(d => d.date.slice(5));
+    const dailyData = data.daily.map(d => d.cumulative);
+    if (chartDaily) chartDaily.destroy();
+    chartDaily = new Chart(document.getElementById('chartDaily'), { type: 'line', data: { labels: dailyLabels, datasets: [{ label: 'Профит, ₽', data: dailyData, borderColor: '#4ade80', backgroundColor: 'rgba(74, 222, 128, 0.1)', fill: true, tension: 0.3, pointRadius: 3 }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#2a3038' }, ticks: { color: '#808080' } }, y: { grid: { color: '#2a3038' }, ticks: { color: '#808080' } } } } });
+    const confLabels = data.by_confidence.map(c => c.range);
+    const confData = data.by_confidence.map(c => c.winrate);
+    if (chartConfidence) chartConfidence.destroy();
+    chartConfidence = new Chart(document.getElementById('chartConfidence'), { type: 'bar', data: { labels: confLabels, datasets: [{ label: 'Winrate, %', data: confData, backgroundColor: '#60a5fa', borderRadius: 6 }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#2a3038' }, ticks: { color: '#808080' } }, y: { grid: { color: '#2a3038' }, ticks: { color: '#808080' }, max: 100 } } } });
+    document.querySelector('#tableLeagues tbody').innerHTML = data.by_league.map(l => `<tr><td>${l.league}</td><td class="num">${l.total}</td><td class="num">${l.wins}</td><td class="num">${l.winrate}%</td><td class="num ${l.profit >= 0 ? 'green' : 'red'}">${fmt(l.profit)}₽</td><td class="num ${l.roi >= 0 ? 'green' : 'red'}">${pct(l.roi)}</td></tr>`).join('') || '<tr><td colspan="6" class="gray">Нет данных</td></tr>';
+    document.querySelector('#tableBetTypes tbody').innerHTML = data.by_bet_type.map(b => `<tr><td>${b.name}</td><td class="num">${b.total}</td><td class="num">${b.wins}</td><td class="num">${b.winrate}%</td></tr>`).join('') || '<tr><td colspan="4" class="gray">Нет данных</td></tr>';
+    document.querySelector('#tableRecent tbody').innerHTML = data.recent.map(s => {
+        const badge = s.outcome === 'win' ? 'win' : s.outcome === 'lose' ? 'lose' : 'refund';
+        const label = s.outcome === 'win' ? '✅ WIN' : s.outcome === 'lose' ? '❌ LOSE' : '🔄 REFUND';
+        let betDesc = s.bet_type === 'total' ? `ТБ ${s.line_asian || s.line} (азиат)` : 'Гол в каждом периоде';
+        const odds = s.odds ? Number(s.odds).toFixed(2) : '—';
+        const pg = s.period_goals || [];
+        const pgStr = pg.length === 3 ? `${pg[0]} / ${pg[1]} / ${pg[2]}` : '—';
+        return `<tr><td class="gray">${s.date || ''}</td><td>${s.league || ''}</td><td>${s.match || ''}</td><td>${betDesc}</td><td class="num gray">${odds}</td><td class="num">${s.final_score || ''}</td><td class="num gray">${pgStr}</td><td><span class="badge ${badge}">${label}</span></td></tr>`;
+    }).join('') || '<tr><td colspan="8" class="gray">Нет данных</td></tr>';
+    document.getElementById('updated').textContent = 'Обновлено: ' + new Date().toLocaleString('ru-RU');
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>"""
+
+
 @web_app.route("/")
 def web_index():
-    return render_template("index.html")
+    return INDEX_HTML
 
 
 @web_app.route("/api/stats")
