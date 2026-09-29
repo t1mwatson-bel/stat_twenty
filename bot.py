@@ -22,8 +22,12 @@ if not BOT_TOKEN or not CHAT_ID:
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# === Сайт статистики (ссылка в прогнозах) ===
+STATS_SITE_URL = os.getenv("STATS_SITE_URL") or "https://bot-1787342419-7555-timwatgrz.bothost.tech"
+
 print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
 print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
+print(f"✅ Статистика: {STATS_SITE_URL}", flush=True)
 
 # =====================================================================
 # ЛИГИ
@@ -633,6 +637,11 @@ def format_prediction(p, analysis, bet):
         lines.append("")
         lines.append(f"📊 Средний тотал по последним матчам: <b>{analysis['expected_total']:.2f}</b>")
         lines.append(f"   • Запас над линией: <b>+{bet['margin']:.2f}</b>")
+
+    # Ссылка на сайт статистики
+    lines.append("")
+    lines.append(f'📊 <a href="{STATS_SITE_URL}">Статистика бота</a>')
+
     return "\n".join(lines)
 
 
