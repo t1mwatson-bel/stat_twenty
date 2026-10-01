@@ -22,7 +22,6 @@ if not BOT_TOKEN or not CHAT_ID:
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# === Сайт статистики (ссылка в прогнозах) ===
 STATS_SITE_URL = os.getenv("STATS_SITE_URL") or "https://bot-1787342419-7555-timwatgrz.bothost.tech"
 
 print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
@@ -82,7 +81,7 @@ WIN_CACHE_SEC = 240
 HISTORY_COUNT    = 10
 H2H_COUNT        = 10
 PERIOD_THRESHOLD = 0.70
-TOTAL_LINES      = [4.5, 5.5]
+TOTAL_LINES      = [4.5, 5.5, 6.5]
 TOTAL_MARGIN     = 1.0
 
 SEND_BEFORE_MAX = 60
@@ -142,6 +141,7 @@ def save_json(path, data):
     except Exception as e:
         print(f"⚠️ Не сохранил {path}: {e}", flush=True)
 
+# ✅ ВАЖНО: stats.json и state.json загружаются — НЕ обнуляются
 predictions = load_json(PREDICTIONS_FILE, {})
 stats       = load_json(STATS_FILE, [])
 state       = load_json(STATE_FILE, {"last_update_id": 0})
@@ -199,21 +199,14 @@ def has_nhl_activity(now):
     return False
 
 # =====================================================================
-# ХЕЛПЕРЫ ДЛЯ АЗИАТСКОГО ТОТАЛА
+# ПРОВЕРКА ТОТАЛА (обычный, без азиатского)
 # =====================================================================
-def asian_line(original_line):
-    if original_line is None:
+def check_total(total_goals, line):
+    """Обычный тотал (4.5, 5.5, 6.5). Без возврата."""
+    if line is None:
         return None
-    return int(original_line - 0.5)
-
-def check_asian_over(total_goals, original_line):
-    N = asian_line(original_line)
-    if N is None:
-        return None
-    if total_goals > N:
+    if total_goals > line:
         return "win"
-    if total_goals == N:
-        return "refund"
     return "lose"
 
 # =====================================================================
@@ -279,12 +272,6 @@ def ruscore_is_finished(event):
                                     "заверш", "окончен", "закончен"))
 
 def ruscore_get_score(event):
-    """
-    Возвращает (overall, periods):
-      overall = (home, away) — итоговый счёт (с учётом OT/буллитов)
-      periods = {1: (h, a), 2: (h, a), 3: (h, a)} — счёт по периодам
-    В JSON ruscore НЕТ поля period — считаем по порядку (period_idx).
-    """
     scores = event.get("score") or []
     overall = None
     periods = {}
@@ -305,7 +292,6 @@ def ruscore_get_score(event):
                 periods[period_idx] = (int(item.get("home", 0)), int(item.get("away", 0)))
             except Exception:
                 pass
-        # overtime / penalties — игнорируем
     return overall, periods
 
 def ruscore_get_datetime(event):
@@ -433,7 +419,6 @@ def win_get_odds_for_bet(match_team1, match_team2, bet_type, line=None):
         return win_extract_total(game, line)
 
     if bet_type == "period":
-        # Реального кэфа нет, сайт возьмёт оценочный
         return None
 
     return None
@@ -593,6 +578,7 @@ def decide_bet(analysis):
 
     expected = analysis["expected_total"]
     line_chosen = None
+    # TOTAL_LINES = [4.5, 5.5, 6.5] — только половинные
     for line in sorted(TOTAL_LINES, reverse=True):
         if expected - line >= TOTAL_MARGIN:
             line_chosen = line
@@ -631,14 +617,13 @@ def format_prediction(p, analysis, bet):
         lines.append(f"📊 За последние {HISTORY_COUNT} матчей + личные встречи:")
         lines.append(f"   • Вероятность гола во всех 3 периодах: <b>{analysis['period_pct']*100:.0f}%</b>")
     else:
-        al = asian_line(bet["line"])
-        lines.append(f"💡 <b>Ставка: ТБ {al} (азиатский)</b>")
+        # ✅ Убрал "азиатский" — показываем реальную линию
+        lines.append(f"💡 <b>Ставка: ТБ {bet['line']}</b>")
         lines.append(f"🔥 Уверенность: <b>{bet['confidence']:.0f}%</b>")
         lines.append("")
         lines.append(f"📊 Средний тотал по последним матчам: <b>{analysis['expected_total']:.2f}</b>")
         lines.append(f"   • Запас над линией: <b>+{bet['margin']:.2f}</b>")
 
-    # Ссылка на сайт статистики
     lines.append("")
     lines.append(f'📊 <a href="{STATS_SITE_URL}">Статистика бота</a>')
 
@@ -681,9 +666,9 @@ def format_result_msg(base_text, final_score, total_goals, period_goals_arr, out
         detail = f"⚽ <b>Голы по периодам:</b>\n{periods_line}"
         tail = f"📈 Итог: {emoji} <b>{res}</b>"
     else:
-        al = asian_line(line)
+        # ✅ Убрал "азиатский" — показываем реальную линию
         detail = f"⚽ <b>Голы по периодам:</b>\n{periods_line}\n   Всего голов: <b>{total_goals}</b>"
-        tail = f"📈 Итог: {emoji} <b>{res}</b> (азиатский ТБ {al})"
+        tail = f"📈 Итог: {emoji} <b>{res}</b> (ТБ {line})"
 
     return (
         base_text
@@ -820,10 +805,10 @@ def build_report():
     by_line = {}
     for s in stats:
         if s["bet_type"] == "total":
-            by_line.setdefault(s.get("line_asian", s.get("line")), []).append(s)
+            by_line.setdefault(s.get("line"), []).append(s)
     for line, arr in sorted(by_line.items(), key=lambda x: (x[0] or 0)):
         w = sum(1 for s in arr if s.get("outcome") == "win")
-        lines.append(f"  ТБ {line} (азиатский): {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
+        lines.append(f"  ТБ {line}: {w}/{len(arr)} ({w/len(arr)*100:.0f}%)")
     lines.append("")
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -964,7 +949,8 @@ def check_results():
             outcome = "win" if ok else "lose"
 
         elif bet_type == "total":
-            outcome = check_asian_over(total_goals, line)
+            # ✅ Обычный тотал (4.5, 5.5, 6.5)
+            outcome = check_total(total_goals, line)
             if outcome is None:
                 outcome = "lose"
 
@@ -994,9 +980,7 @@ def check_results():
             "outcome": outcome,
             "odds": pred.get("odds"),
         }
-        if bet_type == "total":
-            entry["line_original"] = line
-            entry["line_asian"] = asian_line(line)
+        # ✅ Убрал line_asian — только реальная line
 
         stats.append(entry)
         save_json(STATS_FILE, stats)
@@ -1089,7 +1073,7 @@ def monitor():
                 if bet["bet_type"] == "period":
                     bet_desc = f"Гол в каждом периоде {bet['confidence']:.0f}%"
                 else:
-                    bet_desc = f"ТБ {asian_line(bet['line'])} азиатский ({bet['confidence']:.0f}%)"
+                    bet_desc = f"ТБ {bet['line']} ({bet['confidence']:.0f}%)"
                 odds_str = f" | кэф {odds}" if odds else ""
                 print(f"   📝 {m['match']} | {bet_desc}{odds_str}", flush=True)
 
@@ -1212,7 +1196,8 @@ def _by_bet_type(stats_web):
     for bt, arr in result.items():
         total = len(arr)
         wins = sum(1 for s in arr if s.get("outcome") == "win")
-        name = "Гол в каждом периоде" if bt == "period" else "Тотал (азиат)"
+        # ✅ "Тотал" без "азиат"
+        name = "Гол в каждом периоде" if bt == "period" else "Тотал"
         out.append({
             "bet_type": bt,
             "name": name,
@@ -1352,7 +1337,8 @@ async function load() {
     document.querySelector('#tableRecent tbody').innerHTML = data.recent.map(s => {
         const badge = s.outcome === 'win' ? 'win' : s.outcome === 'lose' ? 'lose' : 'refund';
         const label = s.outcome === 'win' ? '✅ WIN' : s.outcome === 'lose' ? '❌ LOSE' : '🔄 REFUND';
-        let betDesc = s.bet_type === 'total' ? `ТБ ${s.line_asian || s.line} (азиат)` : 'Гол в каждом периоде';
+        // ✅ ТБ реальная линия, без "азиат"
+        let betDesc = s.bet_type === 'total' ? `ТБ ${s.line}` : 'Гол в каждом периоде';
         const odds = s.odds ? Number(s.odds).toFixed(2) : '—';
         const pg = s.period_goals || [];
         const pgStr = pg.length === 3 ? `${pg[0]} / ${pg[1]} / ${pg[2]}` : '—';
@@ -1402,9 +1388,9 @@ def main():
     print(f"🏁 Проверка: через {CHECK_AFTER_HOURS} ч после старта", flush=True)
     print(f"🌙 Ночью: просыпается под NHL", flush=True)
     print(f"💰 Кэфы: с 1win", flush=True)
+    print(f"📈 Тоталы: {TOTAL_LINES}", flush=True)
     print("=" * 60, flush=True)
 
-    # Запускаем веб-панель в отдельном потоке
     try:
         threading.Thread(target=run_web_panel, daemon=True).start()
         print(f"🌐 Веб-панель: http://0.0.0.0:{os.getenv('PORT', 3000)}", flush=True)
