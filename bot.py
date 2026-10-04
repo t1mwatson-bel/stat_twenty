@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import json
+import hashlib
 import requests
 import time
 import threading
@@ -56,15 +57,25 @@ RUSCORE_HISTORY_DAYS = 30
 RUSCORE_CACHE_SEC = 3600
 
 # =====================================================================
-# 1WIN (для сбора кэфов)
+# 1XBET (для сбора кэфов)
 # =====================================================================
-WIN_URL = "https://1xlite-7936.pro/service-api/main-line-feed/v3/games1x2"
-WIN_PARAMS = {
+XBET_URL = "https://1xlite-7936.pro/service-api/main-line-feed/v3/games1x2"
+
+# ID лиг в 1xBet (формат: 2.2.{liga_id})
+XBET_LEAGUE_IDS = {
+    "NHL": 30619,
+    "Czech": 1329569,
+    "Belarus": 1706943,
+    "Slovakia": 26279,
+}
+
+XBET_PARAMS = {
     "cfView": 3, "count": 40, "fcountry": 1,
     "gr": 2336, "grMode": 4, "lng": "ru", "ref": 1,
-    "selectedMs": "1.2,2.2,10.2",
+    "selectedMs": ",".join([f"2.2.{lid}" for lid in XBET_LEAGUE_IDS.values()]),
 }
-WIN_HEADERS = {
+
+XBET_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 YaBrowser/26.8.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ru,en;q=0.9",
@@ -73,7 +84,7 @@ WIN_HEADERS = {
     "x-svc-source": "__BETTING_APP__",
     "Referer": "https://1xlite-7936.pro/ru/line/ice-hockey",
 }
-WIN_CACHE_SEC = 240
+XBET_CACHE_SEC = 240
 
 # =====================================================================
 # ЛОГИКА
@@ -141,13 +152,35 @@ def save_json(path, data):
     except Exception as e:
         print(f"⚠️ Не сохранил {path}: {e}", flush=True)
 
-# ✅ ВАЖНО: stats.json и state.json загружаются — НЕ обнуляются
+# ✅ НЕ обнуляем: stats.json, predictions.json, state.json загружаются из существующих
 predictions = load_json(PREDICTIONS_FILE, {})
-stats       = load_json(STATS_FILE, [])
-state       = load_json(STATE_FILE, {"last_update_id": 0})
+if not isinstance(predictions, dict):
+    predictions = {}
+
+stats = load_json(STATS_FILE, [])
+if not isinstance(stats, list):
+    stats = []
+
+state = load_json(STATE_FILE, {"last_update_id": 0})
+if not isinstance(state, dict):
+    state = {"last_update_id": 0}
+if "last_update_id" not in state:
+    state["last_update_id"] = 0
 
 ruscore_history_cache = {"ts": 0, "events": []}
-win_odds_cache = {"ts": 0, "games": []}
+xbet_odds_cache = {"ts": 0, "games": []}
+
+# =====================================================================
+# ОЦЕНОЧНЫЙ КЭФ (рандом 1.5–1.7, стабильный по gid)
+# =====================================================================
+def get_estimated_odds(gid, bet_type=None):
+    """Рандом 1.5–1.7, стабильный по gid (не меняется при обновлении)."""
+    try:
+        h = int(hashlib.md5(str(gid).encode()).hexdigest(), 16)
+    except Exception:
+        h = 12345
+    r = (h % 1000) / 1000.0
+    return round(1.5 + r * 0.2, 2)
 
 # =====================================================================
 # ВРЕМЯ
@@ -314,50 +347,35 @@ def ruscore_normalize_team(name):
     return re.sub(r"[^a-zа-я0-9]+", "", s)
 
 # =====================================================================
-# 1WIN — СБОР КЭФОВ
+# 1XBET — СБОР КЭФОВ
 # =====================================================================
-def win_get_games():
+def xbet_get_games():
     now_ts = time.time()
-    if win_odds_cache["games"] and now_ts - win_odds_cache["ts"] < WIN_CACHE_SEC:
-        return win_odds_cache["games"]
+    if xbet_odds_cache["games"] and now_ts - xbet_odds_cache["ts"] < XBET_CACHE_SEC:
+        return xbet_odds_cache["games"]
 
-    try:
-        r = requests.get(WIN_URL, params=WIN_PARAMS, headers=WIN_HEADERS, timeout=15)
-        if r.status_code != 200:
-            return win_odds_cache.get("games", [])
-        data = r.json()
-        if not isinstance(data, list):
-            return win_odds_cache.get("games", [])
-        win_odds_cache["ts"] = now_ts
-        win_odds_cache["games"] = data
-        return data
-    except Exception as e:
-        print(f"⚠️ 1win: {e}", flush=True)
-        return win_odds_cache.get("games", [])
+    all_games = []
+    for league_name, lid in XBET_LEAGUE_IDS.items():
+        params = dict(XBET_PARAMS)
+        params["selectedMs"] = f"2.2.{lid}"
+        try:
+            r = requests.get(XBET_URL, params=params, headers=XBET_HEADERS, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    all_games.extend(data)
+                    print(f"   💰 1xBet {league_name}: {len(data)} матчей", flush=True)
+            else:
+                print(f"   ⚠️ 1xBet {league_name}: {r.status_code}", flush=True)
+        except Exception as e:
+            print(f"   ⚠️ 1xBet {league_name}: {e}", flush=True)
 
-
-def win_extract_1x2(game):
-    result = {}
-    for grp in game.get("eventGroups", []) or []:
-        if grp.get("groupId") != 1:
-            continue
-        events = grp.get("events", [])
-        if len(events) >= 1:
-            for item in events[0]:
-                if item.get("type") == 1:
-                    result["П1"] = item.get("cf")
-        if len(events) >= 2:
-            for item in events[1]:
-                if item.get("type") == 2:
-                    result["X"] = item.get("cf")
-        if len(events) >= 3:
-            for item in events[2]:
-                if item.get("type") == 3:
-                    result["П2"] = item.get("cf")
-    return result
+    xbet_odds_cache["ts"] = now_ts
+    xbet_odds_cache["games"] = all_games
+    return all_games
 
 
-def win_extract_total(game, line):
+def xbet_extract_total(game, line):
     if line is None:
         return None
     for grp in game.get("centralBlockEventGroups", []) or []:
@@ -380,8 +398,8 @@ def win_extract_total(game, line):
     return None
 
 
-def win_find_game_by_teams(team1, team2):
-    games = win_get_games()
+def xbet_find_game_by_teams(team1, team2):
+    games = xbet_get_games()
     if not games:
         return None
 
@@ -393,34 +411,33 @@ def win_find_game_by_teams(team1, team2):
     for g in games:
         if not isinstance(g, dict):
             continue
-        o1 = (g.get("opponent1") or {}).get("fullName", "")
-        o2 = (g.get("opponent2") or {}).get("fullName", "")
-        gn1 = ruscore_normalize_team(o1)
-        gn2 = ruscore_normalize_team(o2)
-        if not gn1 or not gn2:
-            continue
-        if (gn1 == n1 and gn2 == n2) or (gn1 == n2 and gn2 == n1):
-            return g
-        f1 = n1.split()[0] if n1.split() else ""
-        f2 = n2.split()[0] if n2.split() else ""
-        gf1 = gn1.split()[0] if gn1.split() else ""
-        gf2 = gn2.split()[0] if gn2.split() else ""
-        if len(f1) >= 4 and len(f2) >= 4 and f1 == gf1 and f2 == gf2:
-            return g
+        o1_data = g.get("opponent1") or {}
+        o2_data = g.get("opponent2") or {}
+        candidates1 = [o1_data.get("fullName", ""), o1_data.get("fullNameEng", "")]
+        candidates2 = [o2_data.get("fullName", ""), o2_data.get("fullNameEng", "")]
+        for o1 in candidates1:
+            for o2 in candidates2:
+                gn1 = ruscore_normalize_team(o1)
+                gn2 = ruscore_normalize_team(o2)
+                if not gn1 or not gn2:
+                    continue
+                if (gn1 == n1 and gn2 == n2) or (gn1 == n2 and gn2 == n1):
+                    return g
+                f1 = n1.split()[0] if n1.split() else ""
+                f2 = n2.split()[0] if n2.split() else ""
+                gf1 = gn1.split()[0] if gn1.split() else ""
+                gf2 = gn2.split()[0] if gn2.split() else ""
+                if len(f1) >= 4 and len(f2) >= 4 and f1 == gf1 and f2 == gf2:
+                    return g
     return None
 
 
-def win_get_odds_for_bet(match_team1, match_team2, bet_type, line=None):
-    game = win_find_game_by_teams(match_team1, match_team2)
+def xbet_get_odds_for_bet(match_team1, match_team2, bet_type, line=None):
+    game = xbet_find_game_by_teams(match_team1, match_team2)
     if not game:
         return None
-
     if bet_type == "total":
-        return win_extract_total(game, line)
-
-    if bet_type == "period":
-        return None
-
+        return xbet_extract_total(game, line)
     return None
 
 # =====================================================================
@@ -578,7 +595,6 @@ def decide_bet(analysis):
 
     expected = analysis["expected_total"]
     line_chosen = None
-    # TOTAL_LINES = [4.5, 5.5, 6.5] — только половинные
     for line in sorted(TOTAL_LINES, reverse=True):
         if expected - line >= TOTAL_MARGIN:
             line_chosen = line
@@ -617,7 +633,6 @@ def format_prediction(p, analysis, bet):
         lines.append(f"📊 За последние {HISTORY_COUNT} матчей + личные встречи:")
         lines.append(f"   • Вероятность гола во всех 3 периодах: <b>{analysis['period_pct']*100:.0f}%</b>")
     else:
-        # ✅ Убрал "азиатский" — показываем реальную линию
         lines.append(f"💡 <b>Ставка: ТБ {bet['line']}</b>")
         lines.append(f"🔥 Уверенность: <b>{bet['confidence']:.0f}%</b>")
         lines.append("")
@@ -666,7 +681,6 @@ def format_result_msg(base_text, final_score, total_goals, period_goals_arr, out
         detail = f"⚽ <b>Голы по периодам:</b>\n{periods_line}"
         tail = f"📈 Итог: {emoji} <b>{res}</b>"
     else:
-        # ✅ Убрал "азиатский" — показываем реальную линию
         detail = f"⚽ <b>Голы по периодам:</b>\n{periods_line}\n   Всего голов: <b>{total_goals}</b>"
         tail = f"📈 Итог: {emoji} <b>{res}</b> (ТБ {line})"
 
@@ -703,15 +717,19 @@ def edit_telegram(message_id, text):
 
 def get_updates():
     try:
+        last_id = state.get("last_update_id", 0) if isinstance(state, dict) else 0
         r = requests.get(API + "/getUpdates",
-                         params={"offset": state.get("last_update_id", 0) + 1, "timeout": 5},
+                         params={"offset": last_id + 1, "timeout": 5},
                          timeout=15)
         if r.status_code != 200:
             return []
         data = r.json()
-        if not data.get("ok"):
+        if not isinstance(data, dict) or not data.get("ok"):
             return []
-        return data.get("result", [])
+        result = data.get("result", [])
+        if not isinstance(result, list):
+            return []
+        return result
     except Exception as e:
         print(f"❌ TG updates: {e}", flush=True)
         return []
@@ -949,7 +967,6 @@ def check_results():
             outcome = "win" if ok else "lose"
 
         elif bet_type == "total":
-            # ✅ Обычный тотал (4.5, 5.5, 6.5)
             outcome = check_total(total_goals, line)
             if outcome is None:
                 outcome = "lose"
@@ -980,7 +997,7 @@ def check_results():
             "outcome": outcome,
             "odds": pred.get("odds"),
         }
-        # ✅ Убрал line_asian — только реальная line
+        # ✅ line_asian убран — только реальная line
 
         stats.append(entry)
         save_json(STATS_FILE, stats)
@@ -1003,8 +1020,10 @@ def monitor():
     print(f"🔄 {now.strftime('%H:%M:%S')}", flush=True)
 
     updates = get_updates()
-    if updates:
+    if updates and isinstance(updates, list):
         for u in updates:
+            if not isinstance(u, dict):
+                continue
             state["last_update_id"] = u.get("update_id", state.get("last_update_id", 0))
             msg = u.get("message") or {}
             text = (msg.get("text") or "").strip().lower()
@@ -1040,12 +1059,12 @@ def monitor():
 
                 odds = None
                 try:
-                    odds = win_get_odds_for_bet(
+                    odds = xbet_get_odds_for_bet(
                         m["team1"], m["team2"],
                         bet["bet_type"], bet.get("line")
                     )
                 except Exception as e:
-                    print(f"   ⚠️ 1win odds: {e}", flush=True)
+                    print(f"   ⚠️ 1xBet odds: {e}", flush=True)
 
                 predictions[gid] = {
                     "gid": gid,
@@ -1109,11 +1128,6 @@ STATS_FILE_WEB = "stats.json"
 START_BANK = 100_000
 FLAT_BET = 1000
 
-ESTIMATED_ODDS = {
-    "total": 1.90,
-    "period": 1.75,
-}
-
 
 def _load_stats_web():
     try:
@@ -1121,6 +1135,17 @@ def _load_stats_web():
             return json.load(f)
     except Exception:
         return []
+
+
+def _get_odds(s):
+    """Реальный кэф из 1xBet, иначе — оценочный 1.5–1.7 (стабильный по gid)."""
+    odds = s.get("odds")
+    if odds:
+        try:
+            return float(odds)
+        except Exception:
+            pass
+    return get_estimated_odds(s.get("gid", s.get("match", "")), s.get("bet_type"))
 
 
 def _calc_metrics(stats_web):
@@ -1137,7 +1162,7 @@ def _calc_metrics(stats_web):
 
     profit = 0
     for s in stats_web:
-        odds = s.get("odds") or ESTIMATED_ODDS.get(s.get("bet_type"), 1.90)
+        odds = _get_odds(s)
         oc = s.get("outcome")
         if oc == "win":
             profit += FLAT_BET * (odds - 1)
@@ -1170,7 +1195,7 @@ def _by_league(stats_web):
         wins = sum(1 for s in arr if s.get("outcome") == "win")
         profit = 0
         for s in arr:
-            odds = s.get("odds") or ESTIMATED_ODDS.get(s.get("bet_type"), 1.90)
+            odds = _get_odds(s)
             if s.get("outcome") == "win":
                 profit += FLAT_BET * (odds - 1)
             elif s.get("outcome") == "lose":
@@ -1196,7 +1221,6 @@ def _by_bet_type(stats_web):
     for bt, arr in result.items():
         total = len(arr)
         wins = sum(1 for s in arr if s.get("outcome") == "win")
-        # ✅ "Тотал" без "азиат"
         name = "Гол в каждом периоде" if bt == "period" else "Тотал"
         out.append({
             "bet_type": bt,
@@ -1237,7 +1261,7 @@ def _daily_series(stats_web):
     for date in sorted(by_date.keys()):
         profit = 0
         for s in by_date[date]:
-            odds = s.get("odds") or ESTIMATED_ODDS.get(s.get("bet_type"), 1.90)
+            odds = _get_odds(s)
             if s.get("outcome") == "win":
                 profit += FLAT_BET * (odds - 1)
             elif s.get("outcome") == "lose":
@@ -1337,7 +1361,6 @@ async function load() {
     document.querySelector('#tableRecent tbody').innerHTML = data.recent.map(s => {
         const badge = s.outcome === 'win' ? 'win' : s.outcome === 'lose' ? 'lose' : 'refund';
         const label = s.outcome === 'win' ? '✅ WIN' : s.outcome === 'lose' ? '❌ LOSE' : '🔄 REFUND';
-        // ✅ ТБ реальная линия, без "азиат"
         let betDesc = s.bet_type === 'total' ? `ТБ ${s.line}` : 'Гол в каждом периоде';
         const odds = s.odds ? Number(s.odds).toFixed(2) : '—';
         const pg = s.period_goals || [];
@@ -1387,7 +1410,7 @@ def main():
     print(f"⏰ Отправка: за {SEND_BEFORE_MIN}–{SEND_BEFORE_MAX} мин до старта", flush=True)
     print(f"🏁 Проверка: через {CHECK_AFTER_HOURS} ч после старта", flush=True)
     print(f"🌙 Ночью: просыпается под NHL", flush=True)
-    print(f"💰 Кэфы: с 1win", flush=True)
+    print(f"💰 Кэфы: с 1xBet", flush=True)
     print(f"📈 Тоталы: {TOTAL_LINES}", flush=True)
     print("=" * 60, flush=True)
 
@@ -1397,14 +1420,9 @@ def main():
     except Exception as e:
         print(f"⚠️ Веб-панель не запустилась: {e}", flush=True)
 
-    if predictions:
-        save_json(PREDICTIONS_FILE, predictions)
-    if stats:
-        save_json(STATS_FILE, stats)
-    if state:
-        save_json(STATE_FILE, state)
-    if stats:
-        save_report()
+    # ✅ НЕ обнуляем stats.json и state.json — загружаем существующие
+    print(f"📊 Загружено: {len(stats)} записей статистики", flush=True)
+    print(f"📋 Активных прогнозов: {len(predictions)}", flush=True)
 
     while True:
         try:
