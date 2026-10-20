@@ -46,7 +46,7 @@ RUSCORE_CACHE_SEC = 3600
 # =====================================================================
 # 1XBET (для сбора кэфов)
 # =====================================================================
-XBET_URL = "https://1xlite-7936.pro/service-api/main-line-feed/v3/games1x2"
+XBET_URL = "https://1xlite-8150.pro/service-api/main-line-feed/v3/games1x2"
 
 # ID лиг в 1xBet (формат: 2.2.{liga_id})
 XBET_LEAGUE_IDS = {
