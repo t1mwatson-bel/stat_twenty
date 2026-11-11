@@ -1,115 +1,113 @@
-# -*- coding: utf-8 -*-
-"""Настройки хоккейного бота OLD."""
 import os
+import sys
 import pytz
 
-BOT_TOKEN = os.getenv('BOT_TOKEN') or os.getenv('BOT_TOKEN_PROGNOZ')
-CHAT_ID = os.getenv('CHAT_ID_HOCKEY') or os.getenv('CHAT_ID_FOOTBALL') or os.getenv('CHAT_ID')
-if not BOT_TOKEN or not CHAT_ID:
-    raise RuntimeError("Задайте BOT_TOKEN (или BOT_TOKEN_PROGNOZ) и CHAT_ID_HOCKEY (или CHAT_ID)")
-
-
-MOSCOW_TZ = pytz.timezone('Europe/Moscow')
-API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-STATS_SITE_URL = os.getenv("STATS_SITE_URL") or "https://bot-1787342419-7555-timwatgrz.bothost.tech"
-
-print(f"✅ Статистика: {STATS_SITE_URL}", flush=True)
 
 # =====================================================================
-# ЛИГИ
+# ENV
 # =====================================================================
-LEAGUE_KEYWORDS = [
-    "Беларусь", "Экстралига",
-    "НХЛ", "NHL", "АХЛ", "AHL",
-    "Liiga", "Финляндия",
-    "DEL", "Германия",
-    "SHL", "Швеция", "Аллсвенскан",
-    "NL", "Швейцария",
-    "Чехия", "Университетская",
-    "Австрия", "ICEHL",
-    "Словакия", "Tipsport",
-    "Норвегия", "Дания", "Франция", "Великобритания",
-]
 
-# =====================================================================
-# RUSCORE
-# =====================================================================
-RUSCORE_URL = "https://api-statistics.ruscore.ru/v1/events"
-RUSCORE_APP_ID = "ruscore"
-RUSCORE_API_KEY = os.getenv("RUSCORE_API_KEY", "")
-RUSCORE_SPORT = 5
-RUSCORE_TIMEOUT = 15
-RUSCORE_HISTORY_DAYS = 30
-RUSCORE_CACHE_SEC = 3600
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    BOT_TOKEN = os.getenv("BOT_TOKEN_PROGNOZ")
 
-# =====================================================================
-# 1XBET (для сбора кэфов)
-# =====================================================================
-XBET_URL = "https://1xlite-8150.pro/service-api/main-line-feed/v3/games1x2"
+CHANNEL_PROGNOZ = os.getenv("CHAT_ID_21")
+if not CHANNEL_PROGNOZ:
+    CHANNEL_PROGNOZ = os.getenv("CHANNEL_PROGNOZ")
 
-# ID лиг в 1xBet (формат: 2.2.{liga_id})
-XBET_LEAGUE_IDS = {
-    "NHL": 30619,
-    "Czech": 1329569,
-    "Belarus": 1706943,
-    "Slovakia": 26279,
-}
+CHANNEL_STATS = os.getenv("CHANNEL_STATS")
 
-XBET_PARAMS = {
-    "cfView": 3, "count": 40, "fcountry": 1,
-    "gr": 2336, "grMode": 4, "lng": "ru", "ref": 1,
-    "selectedMs": ",".join([f"2.2.{lid}" for lid in XBET_LEAGUE_IDS.values()]),
-}
 
-XBET_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 YaBrowser/26.8.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "ru,en;q=0.9",
-    "x-app-n": "__BETTING_APP__",
-    "x-requested-with": "XMLHttpRequest",
-    "x-svc-source": "__BETTING_APP__",
-    "Referer": "https://1xlite-7936.pro/ru/line/ice-hockey",
-}
-XBET_CACHE_SEC = 240
+def validate_env():
+    if not BOT_TOKEN:
+        print("❌ BOT_TOKEN не задан", flush=True)
+        sys.exit(1)
+    if not CHANNEL_PROGNOZ:
+        print("❌ CHANNEL_PROGNOZ не задан", flush=True)
+        sys.exit(1)
+    if not CHANNEL_STATS:
+        print("❌ CHANNEL_STATS не задан", flush=True)
+        sys.exit(1)
+
 
 # =====================================================================
-# ЛОГИКА
+# TIME
 # =====================================================================
-HISTORY_COUNT    = 10
-H2H_COUNT        = 10
-PERIOD_THRESHOLD = 0.70
-TOTAL_LINES      = [4.5, 5.5, 6.5]
-TOTAL_MARGIN     = 1.0
 
-SEND_BEFORE_MAX = 60
-SEND_BEFORE_MIN = 25
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
-CHECK_AFTER_HOURS = 3
-MAX_WAIT_HOURS    = 6
-
-UPDATE_INTERVAL = 300
-SLEEP_START = 1
-SLEEP_END   = 12
 
 # =====================================================================
-# ФАЙЛЫ
+# FILES
 # =====================================================================
-PREDICTIONS_FILE = "predictions.json"
-STATS_FILE       = "stats.json"
-REPORT_FILE      = "report.txt"
-STATE_FILE       = "state.json"
+
+PREDICTIONS_FILE = "twentyone_predictions.json"
+OFFSET_FILE = "telegram_offset.txt"
+STATS_HTML_FILE = "stats.html"
+BANK_FILE = "bank_state.json"
+
 
 # =====================================================================
-# ЗАГОЛОВКИ
+# BRANDING
 # =====================================================================
-RUSCORE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 YaBrowser/26.8.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Origin": "https://ruscore.ru",
-    "Referer": "https://ruscore.ru/",
-}
 
-print("✅ Настройки загружены", flush=True)
+LOGO_URL = (
+    "https://raw.githubusercontent.com/t1mwatson-bel/bac/refs/heads/main/"
+    "ChatGPT%20Image%205%20окт.%202026%20г.%2C%2022_04_47.png"
+)
 
+BOT_LINK = "https://t.me/+sNplytDID-NjYmEy"
+
+BRAND_NAME = "OLD_GROUP"
+
+
+# =====================================================================
+# POLLING
+# =====================================================================
+
+POLL_INTERVAL = 2.0
+
+FINALIZE_WAIT_SECONDS = 30
+
+GAME_CYCLE = 720
+
+
+# =====================================================================
+# BANK / BETS
+# =====================================================================
+
+START_BALANCE = 20000
+
+DOGON_MULT = 2.7
+
+WIN_COEF = 1.6
+
+DOGON_GAMES = 3
+
+LOW_BALANCE_THRESHOLD = 5000
+
+
+# =====================================================================
+# SLEEP
+# =====================================================================
+
+SLEEP_HOUR = 23
+SLEEP_MINUTE = 59
+
+WAKE_HOUR = 9
+WAKE_MINUTE = 0
+
+
+# =====================================================================
+# NIGHT CLEANUP
+# =====================================================================
+
+CLEANUP_HOUR = 3
+CLEANUP_MINUTE = 0
+
+
+# =====================================================================
+# ФЛАГИ АЛГОРИТМОВ
+# =====================================================================
+ENABLE_LAST_10 = True
+# ENABLE_FULL_V1 — удалён, алгоритм выпилен полностью
